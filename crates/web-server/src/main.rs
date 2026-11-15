@@ -33,13 +33,14 @@ use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use nodus_ui::session_style::SessionStyle;
 use nodus_web::shared::router::Route;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::document::Assets;
 use crate::mastodon::Client;
-use crate::pages::read_page;
+use crate::pages::read_page_with_style;
 use crate::session::{COOKIE, Session, Sessions};
 
 /// How many statuses the server paints. One page, the same size the client asks for: the
@@ -76,10 +77,17 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
         return Html(document::landing(&app.bundle())).into_response();
     };
     let staff = resolve_staff(&app, &session).await;
+    let style = resolve_style(&app, &session).await;
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
         Err(message) => {
-            return Html(document::error(&app.bundle(), staff, &message)).into_response();
+            return Html(document::error_with_style(
+                &app.bundle(),
+                staff,
+                &message,
+                Some(&style),
+            ))
+            .into_response();
         }
     };
     let (which, title, path) = if local {
@@ -88,7 +96,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
         ("federated", "Federated", "/home/federated")
     };
     match client.feed(local, PAGE).await {
-        Ok((statuses, cursor)) => Html(document::feed(
+        Ok((statuses, cursor)) => Html(document::feed_with_style(
             &app.bundle(),
             &session.acct,
             staff,
@@ -97,9 +105,16 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
             path,
             &statuses,
             cursor.as_deref(),
+            Some(&style),
         ))
         .into_response(),
-        Err(message) => Html(document::error(&app.bundle(), staff, &message)).into_response(),
+        Err(message) => Html(document::error_with_style(
+            &app.bundle(),
+            staff,
+            &message,
+            Some(&style),
+        ))
+        .into_response(),
     }
 }
 
@@ -142,6 +157,7 @@ fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/session", get(whoami).post(sign_in).delete(sign_out))
+        .route("/api/session/style", post(update_session_style))
         .route("/public-api/status/{host}/{id}", get(public_api::status))
         .route(
             "/public-api/status/{host}/{id}/context",
@@ -229,12 +245,14 @@ async fn sign_in(State(app): State<Arc<App>>, Json(body): Json<Credentials>) -> 
     match client.whoami().await {
         Ok(account) => {
             let admin = client.is_staff().await;
+            let style = client.client_metadata_style().await.ok();
             let id = app.sessions.insert(Session {
                 host: client.host().to_owned(),
                 token: body.token,
                 account_id: account.id.clone(),
                 acct: account.acct.clone(),
                 admin: Some(admin),
+                style,
             });
             let mut response = Json(json!({
                 "acct": account.acct,
@@ -268,6 +286,21 @@ async fn whoami(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         Some(session) => Json(session.view()).into_response(),
         None => StatusCode::UNAUTHORIZED.into_response(),
     }
+}
+
+/// Syncs updated `SessionStyle` from the browser client into SSR session state & per-account cache.
+async fn update_session_style(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    Json(style): Json<SessionStyle>,
+) -> Response {
+    let Some(session) = session_of(&app, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let clean = style.sanitized();
+    app.sessions
+        .set_style(&session.host, &session.account_id, clean.clone());
+    (StatusCode::OK, Json(clean)).into_response()
 }
 
 /// The front door. A signed-in visitor is sent to the painted home page; a stranger gets
@@ -361,6 +394,28 @@ async fn resolve_staff(app: &App, session: &Session) -> bool {
     answer
 }
 
+/// Resolves the active account's `SessionStyle`, fetching fine-grained metadata once when uncached.
+async fn resolve_style(app: &App, session: &Session) -> SessionStyle {
+    if let Some(style) = session.style.as_ref() {
+        return style.clone();
+    }
+    if let Some(cached) = app
+        .sessions
+        .cached_style(&session.host, &session.account_id)
+    {
+        app.sessions
+            .set_style(&session.host, &session.account_id, cached.clone());
+        return cached;
+    }
+    let fetched = match Client::new(&session.host, &session.token) {
+        Ok(client) => client.client_metadata_style().await.unwrap_or_default(),
+        Err(_) => SessionStyle::default(),
+    };
+    app.sessions
+        .set_style(&session.host, &session.account_id, fetched.clone());
+    fetched
+}
+
 async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Response {
     let path = uri.path();
     if std::path::Path::new(path)
@@ -392,9 +447,21 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
     // wasm runs, so the answer has to come from the session that was established at
     // sign-in (`Session::admin`).
     let staff = resolve_staff(&app, &session).await;
+    let style = resolve_style(&app, &session).await;
     let assets = app.bundle();
     let painted = match Client::new(&session.host, &session.token) {
-        Ok(client) => read_page(&client, &assets, &session.acct, staff, path, uri.query()).await,
+        Ok(client) => {
+            read_page_with_style(
+                &client,
+                &assets,
+                &session.acct,
+                staff,
+                path,
+                uri.query(),
+                Some(&style),
+            )
+            .await
+        }
         Err(message) => {
             tracing::warn!(%message, "session could not be used; painting the skeleton");
             None
@@ -402,7 +469,14 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
     };
     match painted {
         Some(html) => Html(html).into_response(),
-        None => Html(document::shell(&assets, Some(&session.acct), staff, path)).into_response(),
+        None => Html(document::shell_with_style(
+            &assets,
+            Some(&session.acct),
+            staff,
+            path,
+            Some(&style),
+        ))
+        .into_response(),
     }
 }
 
@@ -415,22 +489,36 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         return Html(document::landing(&app.bundle())).into_response();
     };
     let staff = resolve_staff(&app, &session).await;
+    let style = resolve_style(&app, &session).await;
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
         Err(message) => {
-            return Html(document::error(&app.bundle(), staff, &message)).into_response();
+            return Html(document::error_with_style(
+                &app.bundle(),
+                staff,
+                &message,
+                Some(&style),
+            ))
+            .into_response();
         }
     };
     match client.home(PAGE).await {
-        Ok((statuses, cursor)) => Html(document::home(
+        Ok((statuses, cursor)) => Html(document::home_with_style(
             &app.bundle(),
             &session.acct,
             staff,
             &statuses,
             cursor.as_deref(),
+            Some(&style),
         ))
         .into_response(),
-        Err(message) => Html(document::error(&app.bundle(), staff, &message)).into_response(),
+        Err(message) => Html(document::error_with_style(
+            &app.bundle(),
+            staff,
+            &message,
+            Some(&style),
+        ))
+        .into_response(),
     }
 }
 
@@ -450,6 +538,7 @@ mod tests {
             account_id: "1".to_owned(),
             acct: "mod@example.com".to_owned(),
             admin: Some(true),
+            style: Some(SessionStyle::default()),
         });
         let user_id = sessions.insert(Session {
             host: host.to_owned(),
@@ -457,6 +546,7 @@ mod tests {
             account_id: "2".to_owned(),
             acct: "user@example.com".to_owned(),
             admin: Some(false),
+            style: Some(SessionStyle::default()),
         });
         let app = Arc::new(App {
             sessions,
@@ -782,6 +872,7 @@ mod tests {
             account_id: "42".to_owned(),
             acct: "alice@mastodon.social".to_owned(),
             admin: Some(false),
+            style: Some(SessionStyle::default()),
         });
         let client = reqwest::Client::new();
         for path in [
@@ -797,5 +888,134 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "path={path}");
         }
+    }
+
+    #[tokio::test]
+    async fn session_style_sync_requires_auth_sanitizes_and_isolates_multi_account_ssr() {
+        use nodus_ui::session_style::{BannerRegion, ImageSlot, NavPlacement, SplitDirection};
+
+        let (base, app) = spawn_test_server_with_app().await;
+        let client = reqwest::Client::new();
+
+        // Unauthenticated style sync must be rejected.
+        let unauth = client
+            .post(format!("{base}/api/session/style"))
+            .json(&SessionStyle::default())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+        // Two distinct accounts on one host plus a same-id account on a second host.
+        let alice_id = app.sessions.insert(Session {
+            host: "alpha.example".to_owned(),
+            token: "tok-a".to_owned(),
+            account_id: "1".to_owned(),
+            acct: "alice@alpha.example".to_owned(),
+            admin: Some(false),
+            style: Some(SessionStyle::default()),
+        });
+        let mut bob_style = SessionStyle {
+            top: BannerRegion {
+                split: SplitDirection::Vertical,
+                slots: vec![
+                    ImageSlot::new("https://cdn.example/bob-top.png", Some("Bob"), None).unwrap(),
+                ],
+            },
+            ..SessionStyle::default()
+        };
+        bob_style.nav.move_item_to("lists", NavPlacement::Right);
+        let bob_id = app.sessions.insert(Session {
+            host: "alpha.example".to_owned(),
+            token: "tok-b".to_owned(),
+            account_id: "2".to_owned(),
+            acct: "bob@alpha.example".to_owned(),
+            admin: Some(false),
+            style: Some(bob_style),
+        });
+        let carol_id = app.sessions.insert(Session {
+            host: "beta.example".to_owned(),
+            token: "tok-c".to_owned(),
+            account_id: "1".to_owned(),
+            acct: "carol@beta.example".to_owned(),
+            admin: Some(false),
+            style: Some(SessionStyle::default()),
+        });
+
+        // Update Alice via POST /api/session/style with mixed valid and XSS image URLs.
+        let payload = serde_json::json!({
+            "top": {
+                "split": "horizontal",
+                "slots": [
+                    { "url": "https://cdn.example/alice-1.png", "alt": "</script><img src=x>" },
+                    { "url": "javascript:alert(1)" },
+                    { "url": "https://cdn.example/alice-2.png" }
+                ]
+            },
+            "left": {
+                "split": "vertical",
+                "slots": [{ "url": "https://cdn.example/alice-left.png" }]
+            },
+            "right": {
+                "split": "horizontal",
+                "slots": [{ "url": "https://cdn.example/alice-right.png" }]
+            }
+        });
+        let resp = client
+            .post(format!("{base}/api/session/style"))
+            .header("cookie", format!("{COOKIE}={alice_id}"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let returned: SessionStyle = resp.json().await.unwrap();
+        assert_eq!(returned.top.slots.len(), 2);
+        assert_eq!(returned.top.slots[0].url, "https://cdn.example/alice-1.png");
+
+        // Next SSR render for Alice draws her banners + escapes the JSON island, without leaking to Bob or Carol.
+        let alice_html = client
+            .get(format!("{base}/settings/account"))
+            .header("cookie", format!("{COOKIE}={alice_id}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(alice_html.contains("https://cdn.example/alice-1.png"));
+        assert!(alice_html.contains("https://cdn.example/alice-2.png"));
+        assert!(alice_html.contains("https://cdn.example/alice-left.png"));
+        assert!(alice_html.contains("https://cdn.example/alice-right.png"));
+        assert!(alice_html.contains("id=\"nodus-session-style\""));
+        assert!(!alice_html.contains("javascript:alert(1)"));
+        assert!(!alice_html.contains("</script><img"));
+        assert!(!alice_html.contains("bob-top.png"));
+
+        // Bob on the same host retains Bob's distinct styling.
+        let bob_html = client
+            .get(format!("{base}/settings/styling"))
+            .header("cookie", format!("{COOKIE}={bob_id}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(bob_html.contains("https://cdn.example/bob-top.png"));
+        assert!(!bob_html.contains("alice-1.png"));
+
+        // Carol with the same account_id "1" on another host remains isolated.
+        let carol_html = client
+            .get(format!("{base}/settings/account"))
+            .header("cookie", format!("{COOKIE}={carol_id}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(!carol_html.contains("alice-1.png"));
+        assert!(!carol_html.contains("bob-top.png"));
     }
 }

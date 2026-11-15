@@ -53,6 +53,7 @@ mod posts;
 mod runtime;
 pub mod seed;
 pub mod session;
+pub mod style;
 pub mod timeline;
 
 // Re-exported so every call site keeps saying `bridge::<verb>`: the split into
@@ -152,9 +153,13 @@ pub fn init() {
         let _ = install(&Instance { base }, "");
     }
 
+    // Same-origin shell may carry an SSR session style island; adopt or restore cache first.
+    style::install();
+
     // Reading, validating and re-installing the stored record is the session
     // module's job; `init` only asks for it once the unauthenticated SDK exists.
     session::restore_saved();
+    style::adopt_ssr_style_for_active();
 
     // The server-painted page was read before this SDK existed (the mount replaces the
     // node the island lives in), so it waited; adopt it now that there is a store.
@@ -444,6 +449,7 @@ pub fn switch(key: &str) -> Result<(), String> {
     feed_ui().error.set(None);
     posts_ui().error.set(None);
     session::activate(&meta.host, &meta.token, &meta.id, &meta.acct);
+    style::on_account_activated(&meta.host, &meta.id);
     revision().update(|generation| *generation += 1);
     Ok(())
 }
@@ -462,6 +468,7 @@ pub fn forget(key: &str) {
                 REGISTRY.with_borrow_mut(AccountRegistry::clear_token);
                 SDK.with_borrow_mut(|slot| *slot = None);
                 INSTANCE.with_borrow_mut(|slot| *slot = None);
+                style::on_signed_out();
                 revision().update(|generation| *generation += 1);
             }
         }

@@ -443,6 +443,11 @@ pub trait Runtime: Send + Sync + 'static {
         None
     }
 
+    /// Custom visual framing and navigation layout for the active session.
+    fn session_style(&self) -> nodus_ui::session_style::SessionStyle {
+        nodus_ui::session_style::SessionStyle::default()
+    }
+
     /// A route body only the browser can build: the editor, the staff probe.
     fn body(&self, _route: &Route) -> Option<ChildrenFn> {
         None

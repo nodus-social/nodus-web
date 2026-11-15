@@ -54,6 +54,7 @@ pub(crate) fn App() -> impl IntoView {
             path=Signal::derive(move || router::route().get().path())
             extra=extra_doors()
             on_home=Callback::new(|()| router::navigate(Route::Home))
+            style=crate::state::bridge::style::active_style_signal()
             inner=std::sync::Arc::new(move || {
                         // The callback comes first, before the signed-in gate: the
                         // instance redirects here while the app is still signed out, and

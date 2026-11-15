@@ -10,6 +10,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_pages::pages::settings::account::{AccountItem, AccountsCard as SharedAccountsCard};
 
+use crate::state::alive::Alive;
 use crate::state::bridge;
 
 #[component]
@@ -17,6 +18,13 @@ pub fn AccountsCard() -> impl IntoView {
     let (tick, set_tick) = signal(0u32);
     let (busy, set_busy) = signal(false);
     let (error, set_error) = signal(None::<String>);
+
+    let alive = Alive::new();
+    spawn_local(async move {
+        if bridge::style::prefetch_account_thumbnails().await {
+            alive.if_alive(|| set_tick.update(|generation| *generation += 1));
+        }
+    });
 
     let accounts = Signal::derive(move || {
         tick.get();
@@ -27,6 +35,7 @@ pub fn AccountsCard() -> impl IntoView {
                 let key = account.key();
                 AccountItem {
                     current: current.as_deref() == Some(key.as_str()),
+                    thumbnail_url: bridge::style::cached_thumbnail(&account.host, &account.id),
                     key,
                     label: format!("@{}", account.acct),
                     host: account.host.clone(),

@@ -66,6 +66,7 @@ fn adopt(stored: &StoredSession) {
         acct: stored.acct.clone(),
         scopes: scopes(),
     });
+    super::style::on_account_activated(&stored.host, &stored.account_id);
 }
 
 /// Signs in with a pasted token and loads the first page of the feed.
@@ -110,6 +111,7 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
     // Tell the SSR host, so its documents can be painted for this account. Failure is
     // not an error the reader needs: the client works without a server session.
     announce_to_server(host, token);
+    super::style::on_account_activated(host, &session.account_id);
 
     ui.refreshing.set(true);
     load_first_page(&sdk, ui).await;
@@ -295,6 +297,7 @@ fn restore(stored: StoredSession) {
                     // Always save/register so PENDING moves into LIVE even when
                     // `account_id` and `acct` match the stored record.
                     save_session(&stored.host, &stored.token, &session);
+                    super::style::on_account_activated(&stored.host, &session.account_id);
                     load_first_page(&sdk, ui).await;
                 } else {
                     super::register_background(

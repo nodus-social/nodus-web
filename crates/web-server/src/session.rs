@@ -14,7 +14,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use nodus_ui::session_style::SessionStyle;
+use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::{Deserialize, Serialize};
+
+fn cache_key(host: &str, account_id: &str) -> AccountKey {
+    (host.to_owned(), account_id.to_owned())
+}
 
 /// The cookie name. `HttpOnly` because no script needs it, `SameSite=Lax` because a
 /// cross-site `POST` must not be able to act as the reader, `Secure` because the SSR host
@@ -35,6 +41,9 @@ pub struct Session {
     /// would be paid by every reader. A role granted later shows up on the next sign-in.
     #[serde(default)]
     pub admin: Option<bool>,
+    /// Per-account session styling and navigation layout, cached at sign-in or via sync.
+    #[serde(default)]
+    pub style: Option<SessionStyle>,
 }
 
 /// What the browser is told about its own session. Note the absence of the token.
@@ -61,6 +70,7 @@ impl Session {
 pub struct Sessions {
     path: Option<PathBuf>,
     inner: Mutex<HashMap<String, Session>>,
+    styles: Mutex<AccountCache<SessionStyle>>,
 }
 
 impl Sessions {
@@ -82,9 +92,19 @@ impl Sessions {
                 },
             )
             .unwrap_or_default();
+        let mut styles = AccountCache::new();
+        for session in inner.values() {
+            if let Some(style) = session.style.as_ref() {
+                styles.insert(
+                    cache_key(&session.host, &session.account_id),
+                    style.clone().sanitized(),
+                );
+            }
+        }
         Self {
             path,
             inner: Mutex::new(inner),
+            styles: Mutex::new(styles),
         }
     }
 
@@ -94,9 +114,21 @@ impl Sessions {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn style_guard(&self) -> MutexGuard<'_, AccountCache<SessionStyle>> {
+        self.styles.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Stores a proven token and answers the id to put in the cookie.
-    pub fn insert(&self, session: Session) -> String {
+    pub fn insert(&self, mut session: Session) -> String {
         let id = uuid::Uuid::new_v4().to_string();
+        let key = cache_key(&session.host, &session.account_id);
+        if let Some(style) = session.style.as_ref() {
+            let clean = style.clone().sanitized();
+            self.style_guard().insert(key, clean.clone());
+            session.style = Some(clean);
+        } else if let Some(cached) = self.style_guard().get(&key).cloned() {
+            session.style = Some(cached);
+        }
         self.guard().insert(id.clone(), session);
         self.persist();
         id
@@ -109,6 +141,28 @@ impl Sessions {
 
     pub fn remove(&self, id: &str) {
         self.guard().remove(id);
+        self.persist();
+    }
+
+    /// Cached per-account session styling keyed by `(host, account_id)`.
+    #[must_use]
+    pub fn cached_style(&self, host: &str, account_id: &str) -> Option<SessionStyle> {
+        self.style_guard()
+            .get(&cache_key(host, account_id))
+            .cloned()
+    }
+
+    /// Records sanitized session styling for `(host, account_id)` across the account cache
+    /// and all matching active sessions.
+    pub fn set_style(&self, host: &str, account_id: &str, style: SessionStyle) {
+        let clean = style.sanitized();
+        self.style_guard()
+            .insert(cache_key(host, account_id), clean.clone());
+        for session in self.guard().values_mut() {
+            if session.host == host && session.account_id == account_id {
+                session.style = Some(clean.clone());
+            }
+        }
         self.persist();
     }
 

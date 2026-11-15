@@ -9,6 +9,9 @@ pub mod blurhash;
 pub mod components;
 pub mod html;
 pub mod mfm;
+pub mod session_style;
+
+pub use session_style::*;
 
 pub use components::anchor::{Anchor, Relative};
 pub use components::chrome;
