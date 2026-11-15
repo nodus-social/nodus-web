@@ -90,6 +90,17 @@ impl Route {
         format!("{BASE}{path}")
     }
 
+    /// Parses an internal link `href` into its [`Route`] and canonical URL with query/fragment
+    /// preserved, so navigating to `/search?q=%23rust` keeps `?q=%23rust` in the address bar.
+    #[must_use]
+    pub fn parse_href(href: &str) -> (Self, String) {
+        let split_at = href.find(['?', '#']).unwrap_or(href.len());
+        let (path, suffix) = href.split_at(split_at);
+        let route = Self::from_path(path);
+        let url = format!("{}{suffix}", route.path());
+        (route, url)
+    }
+
     /// The route below the mount point.
     fn suffix(&self) -> String {
         match self {
@@ -239,3 +250,85 @@ pub const BASE: &str = match option_env!("NODUS_BASE") {
     Some(base) => base,
     None => "",
 };
+
+/// Reads one query parameter from `search` (with or without a leading `?`), skipping
+/// valueless flags and percent-decoding UTF-8 and `+` spaces.
+#[must_use]
+pub fn parse_query_param(search: &str, name: &str) -> Option<String> {
+    let pairs = search.strip_prefix('?').unwrap_or(search);
+    if pairs.is_empty() {
+        return None;
+    }
+    for pair in pairs.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == name {
+            return Some(decode_query(value));
+        }
+    }
+    None
+}
+
+/// Decodes percent-encoded UTF-8 sequences and `+` spaces in a query-string value.
+#[must_use]
+pub fn decode_query(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+                if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                    decoded.push(byte);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Route, decode_query, parse_query_param};
+
+    #[test]
+    fn parse_href_preserves_query_and_fragment() {
+        let (route, url) = Route::parse_href("/search?q=%23rust");
+        assert_eq!(route, Route::Search);
+        assert_eq!(url, format!("{}/search?q=%23rust", super::BASE));
+
+        let (route, url) = Route::parse_href("/search?q=%40alice%40example.org#top");
+        assert_eq!(route, Route::Search);
+        assert_eq!(
+            url,
+            format!("{}/search?q=%40alice%40example.org#top", super::BASE)
+        );
+    }
+
+    #[test]
+    fn query_param_decodes_hashtags_mentions_utf8_and_skips_flags() {
+        assert_eq!(
+            parse_query_param("?flag&q=%23rust+%E2%9C%A8", "q").as_deref(),
+            Some("#rust ✨")
+        );
+        assert_eq!(
+            parse_query_param("?q=%40alice%40example.org", "q").as_deref(),
+            Some("@alice@example.org")
+        );
+        assert_eq!(decode_query("hello+world%21"), "hello world!");
+    }
+}

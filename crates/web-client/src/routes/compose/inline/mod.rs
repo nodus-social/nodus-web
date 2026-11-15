@@ -553,7 +553,7 @@ impl Signals {
         };
         spawn_local(async move {
             if let Some(at) = at {
-                let outcome = actions::schedule(&snapshot.parts[0].text, chosen, &at)
+                let outcome = actions::schedule(&snapshot.parts[0], &at)
                     .await
                     .map(|()| format!("Scheduled: {}", Notice::of(&snapshot.custom)));
                 snapshot.finish_scheduled(outcome).await;

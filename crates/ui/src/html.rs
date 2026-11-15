@@ -505,6 +505,26 @@ pub fn sanitize_search_results(results: &mut SearchResults) {
     }
 }
 
+/// Percent-encodes a query-string value so `#` and `@` stay part of the parameter rather than
+/// turning into fragments or delimiters.
+#[must_use]
+pub fn encode_query(text: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(text.len() + 4);
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

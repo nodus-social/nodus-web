@@ -261,8 +261,15 @@ fn Calendar(
                 <span>"F"</span><span>"S"</span><span>"S"</span>
             </div>
             <div class="grid grid-cols-7 gap-1">
-                <For each=move || cells.get() key=|cell| cell.unwrap_or(0) let:cell>
-                    {match cell {
+                <For
+                    each=move || cells.get().into_iter().enumerate()
+                    key=|&(index, cell)| match cell {
+                        Some(day) => i32::try_from(day).unwrap_or(0),
+                        None => -(i32::try_from(index).unwrap_or(0) + 1),
+                    }
+                    let:entry
+                >
+                    {match entry.1 {
                         Some(day) => view! {
                             <button
                                 type="button"
@@ -286,10 +293,77 @@ fn Calendar(
     }
 }
 
+/// Leading blank cells before day 1 in a Monday-first calendar grid (`0..=6`),
+/// given a 0-based Sunday-first weekday (`Date::get_day()`).
+#[must_use]
+pub fn leading_blank_days(sunday_first_weekday: u32) -> usize {
+    usize::try_from((sunday_first_weekday + 6) % 7).unwrap_or(0)
+}
+
+/// Parses `"YYYY-MM-DD"` into `(year, zero_based_month, day)` for local-date construction,
+/// avoiding UTC midnight shifts when formatting local weekdays.
+#[must_use]
+pub fn parse_ymd(value: &str) -> Option<(u32, i32, i32)> {
+    let mut parts = value.split('-');
+    let year = parts.next()?.parse::<u32>().ok()?;
+    let month = parts.next()?.parse::<i32>().ok()?;
+    let day = parts.next()?.parse::<i32>().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some((year, month - 1, day))
+}
+
 /// `YYYY-MM-DD` and `HH`/`mm` out of `YYYY-MM-DDTHH:mm`.
 #[must_use]
 pub fn split(at: &str) -> (String, String, String) {
     let (day_value, clock) = at.split_once('T').unwrap_or((at, "09:00"));
     let (hour, minute) = clock.split_once(':').unwrap_or(("09", "00"));
     (day_value.to_owned(), hour.to_owned(), minute.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _, Signal};
+
+    use super::{Calendar, CalendarProps, leading_blank_days, parse_ymd};
+
+    #[test]
+    fn monday_first_leading_blanks_map_every_weekday_correctly() {
+        // Sunday (0) -> 6 blanks (last column)
+        assert_eq!(leading_blank_days(0), 6);
+        // Monday (1) -> 0 blanks (first column)
+        assert_eq!(leading_blank_days(1), 0);
+        // Tuesday (2) -> 1 blank
+        assert_eq!(leading_blank_days(2), 1);
+        // Saturday (6) -> 5 blanks
+        assert_eq!(leading_blank_days(6), 5);
+    }
+
+    #[test]
+    fn parse_ymd_extracts_local_date_parts() {
+        assert_eq!(parse_ymd("2026-11-16"), Some((2026, 10, 16)));
+        assert_eq!(parse_ymd("2026-01-01"), Some((2026, 0, 1)));
+        assert_eq!(parse_ymd("2026-13-01"), None);
+        assert_eq!(parse_ymd("2026-11-00"), None);
+        assert_eq!(parse_ymd("not-a-date"), None);
+    }
+
+    #[test]
+    fn calendar_renders_multiple_leading_blanks_without_key_collision() {
+        let html = Owner::new().with(|| {
+            Calendar(CalendarProps {
+                cells: Signal::derive(|| vec![None, None, None, Some(1), Some(2)]),
+                month_label: Signal::derive(|| "January 2026".to_owned()),
+                selected: Signal::derive(String::new),
+                on_prev_month: None,
+                on_next_month: None,
+                on_day: None,
+            })
+            .to_html()
+        });
+        assert_eq!(html.matches("<span></span>").count(), 3, "{html}");
+        assert!(html.contains(">1</button>"), "{html}");
+        assert!(html.contains(">2</button>"), "{html}");
+    }
 }

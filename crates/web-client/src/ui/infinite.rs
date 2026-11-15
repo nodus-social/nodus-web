@@ -55,11 +55,14 @@ pub fn Infinite(
                 return;
             };
             observer.observe(&element);
-            callback.forget();
+            let held = StoredValue::new_local(Some(callback));
             let cleanup_live = Arc::clone(&live);
             on_cleanup(move || {
                 cleanup_live.store(false, Ordering::Relaxed);
                 observer.disconnect();
+                held.update_value(|slot| {
+                    slot.take();
+                });
             });
         });
     }

@@ -19,37 +19,47 @@ use wasm_bindgen::closure::Closure;
 #[derive(Debug, Clone)]
 struct Handle(js_sys::Object);
 
+type LoadClosures = (Closure<dyn FnMut()>, Closure<dyn FnMut()>);
+
+type EditorClosures = (
+    Closure<dyn FnMut(String)>,
+    Closure<dyn FnMut()>,
+    Closure<dyn FnMut(String, js_sys::Array, f64, f64, u32)>,
+);
+
 thread_local! {
     /// The mounted editor, so a button outside the editor (the emoji picker) can insert
     /// into it. One composer is on screen at a time by design; the last mount wins.
     static ACTIVE: std::cell::RefCell<Option<Handle>> = const { std::cell::RefCell::new(None) };
 
-    /// Scripts already injected, so two composers share one download.
-    static SCRIPTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// In-flight or settled script promises keyed by URL, so concurrent mounts share one fetch
+    /// and wait for `<script onload>` rather than resolving before the bundle has executed.
+    static SCRIPTS: std::cell::RefCell<std::collections::HashMap<String, js_sys::Promise>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Loads `url` once and resolves when the global it defines exists.
 fn load_script(url: &str, global: &str) -> js_sys::Promise {
-    let already = SCRIPTS.with(|seen| seen.borrow().contains(&url.to_owned()));
     let window = web_sys::window().expect("a browser window");
     let loaded =
         js_sys::Reflect::get(&window, &global.into()).is_ok_and(|value| !value.is_undefined());
-
-    if already || loaded {
+    if loaded {
         return js_sys::Promise::resolve(&wasm_bindgen::JsValue::TRUE);
     }
-    SCRIPTS.with(|seen| seen.borrow_mut().push(url.to_owned()));
+    if let Some(in_flight) = SCRIPTS.with(|seen| seen.borrow().get(url).cloned()) {
+        return in_flight;
+    }
 
     let document = window.document().expect("a document");
     let script = document.create_element("script").expect("a script element");
     script.set_attribute("src", url).ok();
     script.set_attribute("defer", "defer").ok();
-    let head = document.head().expect("a head");
-    let _ = head.append_child(&script);
+    let html_script: web_sys::HtmlElement = script.clone().unchecked_into();
+    let mut closures: Option<LoadClosures> = None;
 
     // Wait for the load event rather than resolving at once: the file is a bundle, and a
     // composer that mounts before it parses would call a function that does not exist yet.
-    js_sys::Promise::new(&mut |resolve, reject| {
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let resolve = resolve.clone();
         let reject = reject.clone();
         let on_load = Closure::once(move || {
@@ -61,12 +71,37 @@ fn load_script(url: &str, global: &str) -> js_sys::Promise {
                 &wasm_bindgen::JsValue::from_str("the editor script failed to load"),
             );
         });
-        let script: web_sys::HtmlElement = script.clone().unchecked_into();
-        script.set_onload(Some(on_load.as_ref().unchecked_ref()));
-        script.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        on_load.forget();
-        on_error.forget();
-    })
+        html_script.set_onload(Some(on_load.as_ref().unchecked_ref()));
+        html_script.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        closures = Some((on_load, on_error));
+    });
+    SCRIPTS.with(|seen| seen.borrow_mut().insert(url.to_owned(), promise.clone()));
+    let head = document.head().expect("a head");
+    let _ = head.append_child(&script);
+
+    // Drop the load/error closures cleanly after the promise settles (never synchronously
+    // inside their own JS trampoline), and evict failed URLs so a later retry can refetch.
+    let settled = promise.clone();
+    let url_owned = url.to_owned();
+    leptos::task::spawn_local(async move {
+        if wasm_bindgen_futures::JsFuture::from(settled).await.is_err() {
+            SCRIPTS.with(|seen| {
+                seen.borrow_mut().remove(&url_owned);
+            });
+        }
+        html_script.set_onload(None);
+        html_script.set_onerror(None);
+        drop(closures);
+    });
+    promise
+}
+
+fn destroy_element(element: &web_sys::Element) {
+    if let Ok(value) = js_sys::Reflect::get(element, &"__nodusDestroy".into())
+        && let Ok(destroy) = value.dyn_into::<js_sys::Function>()
+    {
+        let _ = destroy.call0(element);
+    }
 }
 
 fn global(path: &str) -> Option<js_sys::Object> {
@@ -118,11 +153,13 @@ pub fn RichEditor(
     query: RwSignal<Option<EmojiQuery>>,
 ) -> impl IntoView {
     let element = NodeRef::<leptos::html::Div>::new();
+    let alive = StoredValue::new(true);
     let mounted = StoredValue::new(false);
     // What the editor last told us, so an external `text` change can be told apart from the
     // echo of the writer's own keystroke. Writing that echo back would reset the caret.
     let from_editor = StoredValue::new(String::new());
-    let handle = StoredValue::new(None::<Handle>);
+    let handle = StoredValue::new_local(None::<Handle>);
+    let closures = StoredValue::new_local(None::<EditorClosures>);
     let hint = StoredValue::new(placeholder);
 
     // Mount once, when the element exists — and keep trying until it does.
@@ -132,10 +169,13 @@ pub fn RichEditor(
     // the editor never mounted (the buttons around it worked, which is exactly what "the
     // ProseMirror does not work" looked like). A bounded frame loop is the honest fix.
     let boot = std::rc::Rc::new(move || -> bool {
+        if !alive.get_value() {
+            return true;
+        }
         if mounted.get_value() {
             return true;
         }
-        let Some(node) = element.get() else {
+        let Some(node) = element.get_untracked() else {
             return false;
         };
         // The app mounts into a detached tree and swaps it in (`mount_app`), so a component
@@ -187,15 +227,16 @@ pub fn RichEditor(
         };
         ACTIVE.with(|active| *active.borrow_mut() = Some(Handle(mounted_handle.clone())));
         handle.set_value(Some(Handle(mounted_handle)));
-        // ProseMirror keeps these for the document's lifetime, so they outlive this frame.
-        on_text.forget();
-        on_submit.forget();
-        on_query.forget();
+        closures.set_value(Some((on_text, on_submit, on_query)));
         mounted.set_value(true);
         true
     });
 
-    let mount_button = when_ready(std::rc::Rc::clone(&boot), handle);
+    let mount_button = when_ready(std::rc::Rc::clone(&boot), handle, alive);
+
+    on_cleanup(move || {
+        unmount_editor(alive, handle, element, closures);
+    });
 
     // External changes (an edit loaded, a form reset) replace the document; the writer's
     // own keystrokes arrive here too and are filtered by comparing with what we were told.
@@ -237,6 +278,34 @@ pub fn RichEditor(
             }
         ></div>
     }
+}
+
+fn unmount_editor(
+    alive: StoredValue<bool>,
+    handle: StoredValue<Option<Handle>, LocalStorage>,
+    element: NodeRef<leptos::html::Div>,
+    closures: StoredValue<Option<EditorClosures>, LocalStorage>,
+) {
+    alive.set_value(false);
+    if let Some(editor) = handle.try_update_value(Option::take).flatten() {
+        ACTIVE.with(|active| {
+            let mut active = active.borrow_mut();
+            if active
+                .as_ref()
+                .is_some_and(|current| js_sys::Object::is(&current.0, &editor.0))
+            {
+                *active = None;
+            }
+        });
+        let _ = call_method(&editor.0, "destroy", &[]);
+    }
+    if let Some(node) = element.get_untracked() {
+        let target: web_sys::Element = node.unchecked_into();
+        destroy_element(&target);
+    }
+    closures.update_value(|slot| {
+        slot.take();
+    });
 }
 
 /// The catalogue as the shape the bundle expects: `[{ shortcode, url }]`.
@@ -308,7 +377,8 @@ async fn next_frame() {
 )]
 fn when_ready(
     boot: std::rc::Rc<impl Fn() -> bool + 'static>,
-    handle: StoredValue<Option<Handle>>,
+    handle: StoredValue<Option<Handle>, LocalStorage>,
+    alive: StoredValue<bool>,
 ) -> impl Fn(web_sys::MouseEvent) + 'static {
     let on_press = {
         let boot = boot.clone();
@@ -320,22 +390,27 @@ fn when_ready(
     let load_and_mount = {
         let boot = boot.clone();
         move || {
-            if handle.get_value().is_some() {
+            if !alive.get_value() || handle.get_value().is_some() {
                 return;
             }
             let promise = load_script("/vendor/editor.js", "nodusEditor");
             let boot = std::rc::Rc::clone(&boot);
             leptos::task::spawn_local(async move {
                 let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                if !alive.get_value() {
+                    return;
+                }
                 // The node can still be outside the document on the frame the bundle
                 // arrives (`mount_app` swaps a detached tree in), so this waits for it.
                 for _ in 0..120 {
-                    if boot() {
+                    if !alive.get_value() || boot() {
                         return;
                     }
                     next_frame().await;
                 }
-                web_sys::console::warn_1(&"nodus: the editor element never appeared".into());
+                if alive.get_value() {
+                    web_sys::console::warn_1(&"nodus: the editor element never appeared".into());
+                }
             });
         }
     };
@@ -356,17 +431,35 @@ pub fn EmojiPanel(
     catalogue: ReadSignal<Vec<CustomEmoji>>,
 ) -> impl IntoView {
     let host = NodeRef::<leptos::html::Div>::new();
+    let alive = StoredValue::new(true);
     let mounted = StoredValue::new(false);
+    let session = StoredValue::new(0u64);
+    let pick_closure = StoredValue::new_local(None::<Closure<dyn FnMut(String)>>);
+
+    let teardown = move || {
+        session.update_value(|n| *n += 1);
+        if let Some(node) = host.get_untracked() {
+            let target: &web_sys::Element = node.as_ref();
+            destroy_element(target);
+            node.set_inner_html("");
+        }
+        pick_closure.update_value(|slot| {
+            slot.take();
+        });
+        mounted.set_value(false);
+    };
+
+    on_cleanup(move || {
+        alive.set_value(false);
+        teardown();
+    });
 
     Effect::new(move |_| {
         if !open.get() {
             // Closing throws the element away: the picker keeps a sizable DOM and its
             // database is cached by the browser, so rebuilding is cheaper than carrying it.
             if mounted.get_value() {
-                if let Some(node) = host.get() {
-                    node.set_inner_html("");
-                }
-                mounted.set_value(false);
+                teardown();
             }
             return;
         }
@@ -377,6 +470,8 @@ pub fn EmojiPanel(
             return;
         };
         mounted.set_value(true);
+        let current_session = session.get_value().wrapping_add(1);
+        session.set_value(current_session);
 
         let target: web_sys::Element = node.unchecked_into();
         let catalogue = catalogue.get_untracked();
@@ -385,21 +480,30 @@ pub fn EmojiPanel(
             // A unicode emoji is text; a `:shortcode:` becomes an atom inside the editor.
             insert_active(&text);
         });
+        pick_closure.set_value(Some(on_pick));
 
         let promise = load_script("/vendor/picker.js", "nodusPicker");
         leptos::task::spawn_local(async move {
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            if !alive.get_value() || !mounted.get_value() || session.get_value() != current_session
+            {
+                return;
+            }
             let Some(picker) = global("nodusPicker") else {
                 web_sys::console::error_1(&"nodus: the picker bundle did not load".into());
                 return;
             };
-            let callback: &js_sys::Function = on_pick.as_ref().unchecked_ref();
-            let _ = call_method(
-                &picker,
-                "create",
-                &[target.into(), catalogue_js(&catalogue), callback.into()],
-            );
-            on_pick.forget();
+            pick_closure.try_with_value(|slot| {
+                let Some(on_pick) = slot.as_ref() else {
+                    return;
+                };
+                let callback: &js_sys::Function = on_pick.as_ref().unchecked_ref();
+                let _ = call_method(
+                    &picker,
+                    "create",
+                    &[target.into(), catalogue_js(&catalogue), callback.into()],
+                );
+            });
         });
     });
 

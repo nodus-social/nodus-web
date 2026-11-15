@@ -332,7 +332,9 @@ pub async fn update_media(id: &str, description: &str) -> Result<MediaAttachment
 
 /// Rewrites a status the signed-in account wrote.
 pub async fn edit(id: &str, status: &NewStatus) -> Result<Status, String> {
-    call(transport()?.edit_status(id, &status.draft())).await
+    let edited = call(transport()?.edit_status(id, &status.draft())).await?;
+    super::timeline::upsert(vec![edited.clone()]);
+    Ok(edited)
 }
 
 /// Reads one attachment's server-side processing state.
@@ -528,23 +530,8 @@ pub async fn mute_conversation(id: &str, muted: bool) -> Result<Conversation, St
 }
 
 /// Queues a draft for `at`, in RFC 3339.
-pub async fn schedule(
-    text: &str,
-    visibility: nodus_client_core::model::Visibility,
-    at: &str,
-) -> Result<(), String> {
-    let draft = Draft {
-        text: text.to_owned(),
-        visibility,
-        in_reply_to_id: None,
-        idempotency_key: Some(format!("nodus-{}", js_sys::Date::now())),
-        media_ids: Vec::new(),
-        spoiler_text: String::new(),
-        sensitive: false,
-        poll: None,
-        language: None,
-    };
-    call(transport()?.schedule(&draft, at))
+pub async fn schedule(status: &NewStatus, at: &str) -> Result<(), String> {
+    call(transport()?.schedule(&status.draft(), at))
         .await
         .map(|_queued| ())
 }
