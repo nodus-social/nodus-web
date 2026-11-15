@@ -10,7 +10,9 @@ use nodus_client_core::model::InstanceInfo;
 use nodus_state::page::{PageEntry, PageItems, PageKind};
 use nodus_web::shared::router::Route;
 
-use crate::pages::settings::account::{AccountItem, AccountsCard, ModerationLinks, SessionCard};
+use crate::pages::settings::account::{
+    AccountItem, AccountsCard, ModerationLinks, SessionCard, SessionStyleCard,
+};
 use crate::pages::settings::feeds::{FeedItem, FeedsCard};
 use crate::pages::settings::form::ProfileFields;
 use crate::pages::settings::instance_card::InstanceCard;
@@ -18,6 +20,7 @@ use crate::pages::settings::lists::{FeaturedTagsCard, FilterItem, FiltersCard, T
 use crate::pages::settings::nav::SettingsSection;
 use crate::pages::settings::page::SettingsPage;
 use crate::pages::settings::profile::{ClockCard, ClockStyle, SensitiveCard};
+use crate::pages::settings::styling::StylingPage;
 use crate::pages::settings::sync::SyncRows;
 use crate::route::Runtime;
 
@@ -70,14 +73,19 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
     let acct = Signal::derive(move || {
         current.with_value(|current| current.as_ref().map(|s| s.acct.clone()).unwrap_or_default())
     });
+    let current_style = StoredValue::new(runtime.session_style());
+    let active_thumbnail =
+        current_style.with_value(|style| style.thumbnail_url().map(str::to_owned));
     let accounts = Signal::derive(move || {
         current
             .with_value(|current| {
+                let thumb = active_thumbnail.clone();
                 current.as_ref().map(|session| AccountItem {
                     key: session.account_id.clone(),
                     label: session.acct.clone(),
                     host: session.host.clone(),
                     current: true,
+                    thumbnail_url: thumb,
                 })
             })
             .into_iter()
@@ -97,6 +105,11 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
         navigator.navigate(Route::Settings(next.slug().to_owned()).path());
     }));
 
+    let navigator_edit = Arc::clone(&runtime);
+    let on_edit_style = Some(Callback::new(move |()| {
+        navigator_edit.navigate(Route::Settings(SettingsSection::Styling.slug().to_owned()).path());
+    }));
+
     if let Some(body) = runtime.settings_body(section) {
         return view! {
             <SettingsPage section=Signal::derive(move || section) on_navigate=on_navigate>
@@ -106,12 +119,16 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
         .into_any();
     }
 
+    let style_signal = Signal::derive(move || current_style.get_value());
+    let editable_style = RwSignal::new(current_style.get_value());
+
     view! {
         <SettingsPage section=Signal::derive(move || section) on_navigate=on_navigate>
             {move || match section {
                 SettingsSection::Account => view! {
                     <div class="flex flex-col gap-4">
                         <SessionCard host=host acct=acct on_sign_out=None/>
+                        <SessionStyleCard style=style_signal on_edit=on_edit_style/>
                         <AccountsCard accounts=accounts busy=idle error=no_error on_switch=None on_sign_out=None/>
                         <ModerationLinks on_mutes=None on_blocks=None/>
                         <ClockCard
@@ -139,6 +156,14 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                         />
                         <SensitiveCard automatic=Signal::derive(|| false) on_toggle=None/>
                     </div>
+                }.into_any(),
+                SettingsSection::Styling => view! {
+                    <StylingPage
+                        style=editable_style
+                        saving=idle
+                        message=no_error
+                        error=no_error
+                    />
                 }.into_any(),
                 SettingsSection::Nodus => {
                     let empty_add = empty_add.get_value();

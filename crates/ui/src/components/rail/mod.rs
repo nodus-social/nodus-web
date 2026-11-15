@@ -8,6 +8,11 @@ use leptos::prelude::*;
 use std::sync::Arc;
 
 use super::icons::Icon;
+use crate::html::safe_url;
+use crate::session_style::{
+    BannerRegion, BannerRegionKind, NavItemConfig, NavLayout, NavPlacement, SessionStyle,
+    SplitDirection,
+};
 /// The drawing for a destination, by name.
 ///
 /// The label is the key rather than a field on `Destination`, because the label is what a
@@ -146,6 +151,94 @@ pub fn rail() -> Vec<Group> {
     ]
 }
 
+/// Render the slots of one `BannerRegion` (single image or side-by-side / stacked splits).
+#[component]
+pub fn SessionBanner(
+    #[prop(into)] region: Signal<BannerRegion>,
+    kind: BannerRegionKind,
+) -> impl IntoView {
+    let data_kind = match kind {
+        BannerRegionKind::Top => "top",
+        BannerRegionKind::Left => "left",
+        BannerRegionKind::Right => "right",
+    };
+    let outer_class = match kind {
+        BannerRegionKind::Top => "mx-auto w-full max-w-6xl px-2 pt-3",
+        BannerRegionKind::Left | BannerRegionKind::Right => "w-full",
+    };
+    let img_class = match kind {
+        BannerRegionKind::Top => "h-28 w-full min-w-0 flex-1 rounded-box object-cover sm:h-36",
+        BannerRegionKind::Left | BannerRegionKind::Right => {
+            "h-36 w-full min-w-0 flex-1 rounded-box object-cover"
+        }
+    };
+
+    view! {
+        {move || {
+            let current = region.get();
+            let valid_slots: Vec<_> = current
+                .slots
+                .into_iter()
+                .filter(|slot| safe_url(&slot.url))
+                .collect();
+            if valid_slots.is_empty() {
+                return ().into_any();
+            }
+            let layout_class = match current.split {
+                SplitDirection::Horizontal => "flex flex-col gap-2 sm:flex-row",
+                SplitDirection::Vertical => "flex flex-col gap-2",
+            };
+            view! {
+                <div class=outer_class data-session-banner=data_kind>
+                    <div class=format!(
+                        "{layout_class} overflow-hidden rounded-box bg-base-100 p-1 shadow-sm"
+                    )>
+                        {valid_slots
+                            .into_iter()
+                            .map(|slot| {
+                                view! {
+                                    <img
+                                        src=slot.url
+                                        alt=slot.alt.unwrap_or_default()
+                                        class=img_class
+                                        loading="lazy"
+                                    />
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                </div>
+            }
+                .into_any()
+        }}
+    }
+}
+
+fn render_nav_items(items: Vec<NavItemConfig>, active: Signal<String>) -> impl IntoView {
+    items
+        .into_iter()
+        .map(|item| {
+            let icon = item.icon();
+            let href = item.path;
+            let pinned = item.pinned;
+            let href_for_active = href.clone();
+            view! {
+                <li>
+                    <a
+                        class="flex w-full items-center gap-2 font-medium"
+                        class:menu-active=move || within(&href_for_active, &active.get())
+                        href=href
+                    >
+                        <Icon icon=icon/>
+                        <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                        {pinned.then(|| view! { <span class="badge badge-xs badge-primary">"Pin"</span> })}
+                    </a>
+                </li>
+            }
+        })
+        .collect_view()
+}
+
 /// The rail.
 ///
 /// The icon box is drawn at the icon's size rather than as an SVG: `view` deliberately has
@@ -158,41 +251,126 @@ pub fn Rail(
     active: Signal<String>,
     /// Doors that only some readers have: the moderation and administration ones.
     extra: Option<ExtraDoors>,
+    /// Per-account session style controlling left-rail images and navigation layout.
+    #[prop(optional)]
+    style: Option<Signal<SessionStyle>>,
 ) -> impl IntoView {
+    let left_region = Signal::derive(move || style.map(|s| s.get().left).unwrap_or_default());
+    let default_nav = NavLayout::default();
+
     view! {
-        <nav class="hidden shrink-0 xl:block xl:w-44">
-            <ul class="menu w-full flex-row flex-wrap gap-1 rounded-box bg-base-100 p-2 shadow-sm xl:flex-col xl:flex-nowrap">
-                {rail()
-                    .into_iter()
-                    .map(|group| {
+        <aside class="hidden shrink-0 xl:flex xl:w-44 xl:flex-col xl:gap-3">
+            <nav aria-label="Primary navigation">
+                {move || {
+                    let nav = style.map(|s| s.get().nav).unwrap_or_default();
+                    let extra_doors = extra.as_ref().map(|doors| doors());
+                    if nav == default_nav {
                         view! {
-                            <li class="menu-title hidden xl:block">{group.title}</li>
-                            {group
-                                .destinations
-                                .iter()
-                                .map(|destination| {
-                                    let href = destination.href;
-                                    view! {
-                                        <li>
-                                            <a
-                                                class="flex w-full items-center gap-2 font-medium"
-                                                class:menu-active=move || within(href, &active.get())
-                                                href=href
-                                                title=destination.hint
-                                            >
-                                                <Icon icon=icon_of(destination.label)/>
-                                                <span class="truncate">{destination.label}</span>
-                                            </a>
-                                        </li>
-                                    }
-                                })
-                                .collect_view()}
+                            <ul class="menu w-full flex-row flex-wrap gap-1 rounded-box bg-base-100 p-2 shadow-sm xl:flex-col xl:flex-nowrap">
+                                {rail()
+                                    .into_iter()
+                                    .map(|group| {
+                                        view! {
+                                            <li class="menu-title hidden xl:block">{group.title}</li>
+                                            {group
+                                                .destinations
+                                                .iter()
+                                                .map(|destination| {
+                                                    let href = destination.href;
+                                                    view! {
+                                                        <li>
+                                                            <a
+                                                                class="flex w-full items-center gap-2 font-medium"
+                                                                class:menu-active=move || within(href, &active.get())
+                                                                href=href
+                                                                title=destination.hint
+                                                            >
+                                                                <Icon icon=icon_of(destination.label)/>
+                                                                <span class="truncate">{destination.label}</span>
+                                                            </a>
+                                                        </li>
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        }
+                                    })
+                                    .collect_view()}
+                                {extra_doors}
+                            </ul>
                         }
-                    })
-                    .collect_view()}
-                {move || extra.as_ref().map(|doors| doors())}
-            </ul>
-        </nav>
+                            .into_any()
+                    } else {
+                        let left_items: Vec<NavItemConfig> =
+                            nav.items_in(NavPlacement::Left).into_iter().cloned().collect();
+                        let submenu_items: Vec<NavItemConfig> =
+                            nav.items_in(NavPlacement::Submenu).into_iter().cloned().collect();
+                        let submenu_title = nav.submenu_title().to_owned();
+                        view! {
+                            <div class="flex flex-col gap-2">
+                                <ul class="menu w-full flex-col gap-1 rounded-box bg-base-100 p-2 shadow-sm">
+                                    {render_nav_items(left_items, active)}
+                                    {extra_doors}
+                                </ul>
+                                {(!submenu_items.is_empty()).then(|| {
+                                    view! {
+                                        <details class="rounded-box bg-base-100 p-2 shadow-sm" data-session-submenu="">
+                                            <summary class="cursor-pointer select-none px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-70">
+                                                {submenu_title}
+                                            </summary>
+                                            <ul class="menu mt-1 w-full flex-col gap-1 p-0">
+                                                {render_nav_items(submenu_items, active)}
+                                            </ul>
+                                        </details>
+                                    }
+                                })}
+                            </div>
+                        }
+                            .into_any()
+                    }
+                }}
+            </nav>
+            <SessionBanner region=left_region kind=BannerRegionKind::Left/>
+        </aside>
+    }
+}
+
+/// Optional right-hand session rail rendering items moved to `Right` and right session images.
+#[component]
+pub fn RightRail(
+    #[prop(into)] active: Signal<String>,
+    #[prop(into)] style: Signal<SessionStyle>,
+) -> impl IntoView {
+    let right_region = Signal::derive(move || style.get().right);
+    view! {
+        {move || {
+            let current = style.get();
+            let right_items: Vec<NavItemConfig> = current
+                .nav
+                .items_in(NavPlacement::Right)
+                .into_iter()
+                .cloned()
+                .collect();
+            let has_nav = !right_items.is_empty();
+            let has_banner = current.right.slots.iter().any(|slot| safe_url(&slot.url));
+            if !has_nav && !has_banner {
+                return ().into_any();
+            }
+            view! {
+                <aside class="hidden shrink-0 xl:flex xl:w-52 xl:flex-col xl:gap-3" data-session-right="">
+                    {has_nav.then(|| {
+                        view! {
+                            <nav aria-label="Right rail navigation">
+                                <ul class="menu w-full flex-col gap-1 rounded-box bg-base-100 p-2 shadow-sm">
+                                    {render_nav_items(right_items, active)}
+                                </ul>
+                            </nav>
+                        }
+                    })}
+                    <SessionBanner region=right_region kind=BannerRegionKind::Right/>
+                </aside>
+            }
+                .into_any()
+        }}
     }
 }
 

@@ -89,6 +89,9 @@ impl Screen {
         if path.starts_with("/saved/") {
             return Self::named("/saved", ScreenKind::Saved { bookmarks: false });
         }
+        if path.starts_with("/settings/") {
+            return Self::named("/settings", ScreenKind::Settings);
+        }
         None
     }
 

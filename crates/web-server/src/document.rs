@@ -169,7 +169,13 @@ mod imperative {
     }
 }
 
-fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
+fn chrome_with_style(
+    signed_in: bool,
+    staff: bool,
+    path: &str,
+    inner: &str,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+) -> String {
     use leptos::prelude::{IntoAny, Owner, Signal};
 
     // The frame, the rail and the icons come from `nodus-view`, the same components the
@@ -177,6 +183,7 @@ fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
     let path = path.to_owned();
     let door_path = path.clone();
     let inner = inner.to_owned();
+    let style_prop = style.cloned().map(Signal::stored);
     Owner::new().with(|| {
         let body = inner.clone();
         nodus_ui::Frame(nodus_ui::FrameProps {
@@ -189,12 +196,17 @@ fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
                 leptos::html::div().inner_html(body.clone()).into_any()
             }),
             on_home: None,
+            style: style_prop,
             extra: (signed_in && staff).then(move || {
                 std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
             }),
         })
         .to_html()
     })
+}
+
+fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
+    chrome_with_style(signed_in, staff, path, inner, None)
 }
 
 /// The composer and the timeline tabs, drawn by the crate the client draws with.
@@ -216,8 +228,8 @@ fn timeline_header(active: &str) -> String {
     })
 }
 
-/// The screen heading, drawn by the crate the client draws with.
 /// The signed-in home page, painted.
+#[cfg(test)]
 pub fn home(
     assets: &Assets,
     acct: &str,
@@ -225,8 +237,20 @@ pub fn home(
     statuses: &[Status],
     cursor: Option<&str>,
 ) -> String {
-    feed(
-        assets, acct, staff, "home", "Home", "/home", statuses, cursor,
+    home_with_style(assets, acct, staff, statuses, cursor, None)
+}
+
+/// The signed-in home page, painted with the active account's `SessionStyle`.
+pub fn home_with_style(
+    assets: &Assets,
+    acct: &str,
+    staff: bool,
+    statuses: &[Status],
+    cursor: Option<&str>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+) -> String {
+    feed_with_style(
+        assets, acct, staff, "home", "Home", "/home", statuses, cursor, style,
     )
 }
 
@@ -234,6 +258,7 @@ pub fn home(
 ///
 /// `which` is the client's own name for the timeline, so the island it adopts is the page
 /// the reader is looking at rather than the home one.
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "renders a feed document from request, session, and fetched timeline data"
@@ -247,6 +272,27 @@ pub fn feed(
     path: &str,
     statuses: &[Status],
     cursor: Option<&str>,
+) -> String {
+    feed_with_style(
+        assets, acct, staff, which, title, path, statuses, cursor, None,
+    )
+}
+
+/// A timeline page painted with the active account's `SessionStyle`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "renders a feed document from request, session, fetched timeline data, and style"
+)]
+pub fn feed_with_style(
+    assets: &Assets,
+    acct: &str,
+    staff: bool,
+    which: &str,
+    title: &str,
+    path: &str,
+    statuses: &[Status],
+    cursor: Option<&str>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
     let statuses: Vec<Status> = statuses
         .iter()
@@ -287,23 +333,25 @@ pub fn feed(
         })
         .to_html()
     });
-    page(
+    page_with_style(
         assets,
         &format!("{title} · {acct}"),
-        &chrome(true, staff, path, &body),
+        &chrome_with_style(true, staff, path, &body, style),
         Some(&island),
+        style,
         false,
     )
 }
 
-/// A thread: what came before, the status itself, then the replies.
+/// A thread rendered with the active account's `SessionStyle`.
 #[must_use]
-pub fn thread_page(
+pub fn thread_page_with_style(
     assets: &Assets,
     acct: &str,
     staff: bool,
     status: &Status,
     context: &Context,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
     let paint = |status: &Status| -> Status {
         let mut painted = status.clone();
@@ -314,7 +362,14 @@ pub fn thread_page(
         ancestors: context.ancestors.iter().map(&paint).collect(),
         descendants: context.descendants.iter().map(&paint).collect(),
     };
-    crate::pages::render_thread(assets, acct, staff, &paint(status), &painted_context)
+    crate::pages::render_thread_with_style(
+        assets,
+        acct,
+        staff,
+        &paint(status),
+        &painted_context,
+        style,
+    )
 }
 
 /// Paints a page that is already a rendered component tree.
@@ -322,6 +377,7 @@ pub fn thread_page(
 /// The client's screens and the server's screens are the same components; this is the seam
 /// where the server's answer becomes a document. `title` is the browser tab's name, `inner`
 /// the component's HTML, and the envelope is [`page`] either way.
+#[cfg(test)]
 pub fn page_of(
     assets: &Assets,
     acct: &str,
@@ -331,11 +387,30 @@ pub fn page_of(
     inner: &str,
     island: Option<String>,
 ) -> String {
-    page(
+    page_of_with_style(assets, acct, staff, path, title, inner, island, None)
+}
+
+/// Paints a page component tree alongside the active account's `SessionStyle`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "document envelope takes asset manifest, session state, route metadata, and style"
+)]
+pub fn page_of_with_style(
+    assets: &Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    title: &str,
+    inner: &str,
+    island: Option<String>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+) -> String {
+    page_with_style(
         assets,
         &format!("{title} · {acct}"),
-        &chrome(true, staff, path, inner),
+        &chrome_with_style(true, staff, path, inner, style),
         island.as_deref(),
+        style,
         false,
     )
 }
@@ -378,6 +453,16 @@ pub fn landing(assets: &Assets) -> String {
 /// Painting the chrome is still worth it — the reader sees the application, not a blank
 /// document, while two megabytes of wasm arrive.
 pub fn shell(assets: &Assets, acct: Option<&str>, staff: bool, path: &str) -> String {
+    shell_with_style(assets, acct, staff, path, None)
+}
+
+pub fn shell_with_style(
+    assets: &Assets,
+    acct: Option<&str>,
+    staff: bool,
+    path: &str,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+) -> String {
     use leptos::prelude::*;
 
     if acct.is_none() {
@@ -409,27 +494,49 @@ pub fn shell(assets: &Assets, acct: Option<&str>, staff: bool, path: &str) -> St
         );
     }
 
-    crate::pages::render_unclaimed(assets, acct.unwrap_or_default(), staff, path)
+    crate::pages::render_unclaimed_with_style(assets, acct.unwrap_or_default(), staff, path, style)
 }
 
+#[cfg(test)]
 pub fn error(assets: &Assets, staff: bool, message: &str) -> String {
+    error_with_style(assets, staff, message, None)
+}
+
+pub fn error_with_style(
+    assets: &Assets,
+    staff: bool,
+    message: &str,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+) -> String {
     let inner = Owner::new().with(|| {
         nodus_pages::pages::shell::TimelineError(nodus_pages::pages::shell::TimelineErrorProps {
             message: message.to_owned(),
         })
         .to_html()
     });
-    page(
+    page_with_style(
         assets,
         "Timeline unavailable",
-        &chrome(true, staff, "/home", &inner),
+        &chrome_with_style(true, staff, "/home", &inner, style),
         None,
+        style,
         false,
     )
 }
 
 /// The shell both pages share: the app's stylesheet, its bundle, and the island.
 fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex: bool) -> String {
+    page_with_style(assets, title, body, island, None, noindex)
+}
+
+fn page_with_style(
+    assets: &Assets,
+    title: &str,
+    body: &str,
+    island: Option<&str>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+    noindex: bool,
+) -> String {
     let stylesheet = match (&assets.stylesheet_css, &assets.stylesheet) {
         (Some(css), _) => format!("<style>{}</style>", css.replace("</style", "<\\/style")),
         (None, Some(href)) => format!("<link rel=\"stylesheet\" href=\"{}\">", escape(href)),
@@ -440,6 +547,14 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
             format!(
                 "<script id=\"nodus-page\" type=\"application/json\">{}</script>",
                 json.replace("</", "<\\/")
+            )
+        })
+        .unwrap_or_default();
+    let style_island = style
+        .map(|s| {
+            format!(
+                "<script id=\"nodus-session-style\" type=\"application/json\">{}</script>",
+                s.to_safe_json_island()
             )
         })
         .unwrap_or_default();
@@ -464,6 +579,7 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
            <body class=\"min-h-screen bg-base-200\">\
              <div id=\"app\">{body}</div>\
              {island}\
+             {style_island}\
            </body>\
          </html>",
         title = escape(title),

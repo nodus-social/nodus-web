@@ -4,6 +4,8 @@
 //! (`Link: rel="next"`) and the payload shapes are the ones the browser app already uses.
 //! A second hand-written HTTP layer would be a second place to be wrong about Mastodon.
 
+use std::collections::BTreeMap;
+
 use nodus_client_core::LocalId;
 use nodus_client_core::actions::{
     Browse, RegistrationActions, ScheduleActions, Search as SearchApi,
@@ -15,6 +17,8 @@ use nodus_client_core::model::{
 use nodus_client_core::{Instance, InstanceApi};
 use nodus_client_sdk::reads::{Headless, Reads};
 use nodus_mastodon::HttpInstance;
+use nodus_ui::session_style::{STYLE_KEYS, SessionStyle};
+use serde::Deserialize;
 
 /// A signed-in instance, ready to ask.
 #[derive(Debug, Clone)]
@@ -203,5 +207,89 @@ impl Client {
             .search(query, false)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// Fetch Nodus session styling & nav layout from `nodus-backend` fine-grained client metadata.
+    pub async fn client_metadata_style(&self) -> Result<SessionStyle, String> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            #[serde(default)]
+            metadata: BTreeMap<String, serde_json::Value>,
+        }
+
+        let mut url = self
+            .instance
+            .url("/api/v1/nodus/account/metadata")
+            .map_err(|error| error.to_string())?;
+        url.query_pairs_mut()
+            .append_pair("keys", &STYLE_KEYS.join(","));
+        let req = self.instance.get(url);
+        let envelope: Envelope = self
+            .instance
+            .fetch(req)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(SessionStyle::from_metadata_map(&envelope.metadata))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(base_url: &str, token: &str) -> Self {
+        let instance = Instance::parse(base_url).unwrap();
+        let host = crate::validate::normalized_host(&instance.base);
+        Self {
+            instance: HttpInstance::with_client(
+                &instance,
+                token.to_owned(),
+                reqwest::Client::new(),
+            ),
+            host,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, extract::Query, routing::get};
+    use nodus_ui::session_style::{KEY_NAV_LAYOUT, KEY_TOP_BANNER, NavPlacement, SplitDirection};
+
+    #[tokio::test]
+    async fn client_metadata_style_requests_fine_grained_keys_and_sanitizes() {
+        let app = Router::new().route(
+            "/api/v1/nodus/account/metadata",
+            get(|Query(params): Query<BTreeMap<String, String>>| async move {
+                let keys = params.get("keys").cloned().unwrap_or_default();
+                assert!(keys.contains(KEY_TOP_BANNER));
+                assert!(keys.contains(KEY_NAV_LAYOUT));
+                Json(serde_json::json!({
+                    "metadata": {
+                        "nodus-top-banner": {
+                            "split": "vertical",
+                            "slots": [
+                                { "url": "https://cdn.example/banner.png", "alt": "Banner" },
+                                { "url": "javascript:alert(1)" }
+                            ]
+                        },
+                        "nodus-nav-layout": {
+                            "items": [
+                                { "id": "lists", "label": "Lists", "path": "/lists", "pinned": true, "placement": "right" }
+                            ]
+                        }
+                    }
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = Client::for_test(&format!("http://{addr}"), "test-token");
+        let style = client.client_metadata_style().await.unwrap();
+        assert_eq!(style.top.split, SplitDirection::Vertical);
+        assert_eq!(style.top.slots.len(), 1);
+        assert_eq!(style.top.slots[0].url, "https://cdn.example/banner.png");
+        assert_eq!(style.nav.items_in(NavPlacement::Right).len(), 1);
     }
 }

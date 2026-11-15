@@ -10,8 +10,10 @@ use leptos::prelude::*;
 use nodus_client_core::model::{Account, Context, List, Relationship, Status};
 use nodus_route::route::{Runtime, SessionView, TimelineKind, TimelineReply};
 use nodus_state::page::{PageEntry, PageKind};
+use nodus_ui::session_style::SessionStyle;
 
 /// One prefetched timeline page.
+#[derive(Default)]
 pub struct StaticRuntime {
     statuses: Vec<Status>,
     cursor: Option<String>,
@@ -24,29 +26,22 @@ pub struct StaticRuntime {
     profile_statuses: Option<(Vec<Status>, Option<String>)>,
     lists: Option<Vec<List>>,
     session: Option<SessionView>,
+    style: SessionStyle,
 }
 
 impl StaticRuntime {
-    /// A runtime with the signed-in reader and no prefetched reads.
+    /// A runtime with the signed-in reader, active session style, and no prefetched reads.
     #[must_use]
-    pub fn signed_in(acct: &str) -> Arc<dyn Runtime> {
+    pub fn signed_in_with_style(acct: &str, style: SessionStyle) -> Arc<dyn Runtime> {
         let host = acct.rsplit_once('@').map_or("", |(_, host)| host);
         Arc::new(Self {
-            statuses: Vec::new(),
-            cursor: None,
-            pages: HashMap::new(),
-            query: HashMap::new(),
-            statuses_by_id: HashMap::new(),
-            contexts: HashMap::new(),
-            accounts: HashMap::new(),
-            relationships: HashMap::new(),
-            profile_statuses: None,
-            lists: None,
             session: Some(SessionView {
                 host: host.to_owned(),
                 account_id: String::new(),
                 acct: acct.to_owned(),
             }),
+            style,
+            ..Self::default()
         })
     }
 
@@ -56,15 +51,7 @@ impl StaticRuntime {
         Arc::new(Self {
             statuses,
             cursor,
-            pages: HashMap::new(),
-            query: HashMap::new(),
-            statuses_by_id: HashMap::new(),
-            contexts: HashMap::new(),
-            accounts: HashMap::new(),
-            relationships: HashMap::new(),
-            profile_statuses: None,
-            lists: None,
-            session: None,
+            ..Self::default()
         })
     }
 
@@ -83,6 +70,7 @@ impl StaticRuntime {
             profile_statuses: None,
             lists: None,
             session: None,
+            style: SessionStyle::default(),
         })
     }
 
@@ -93,17 +81,9 @@ impl StaticRuntime {
         query: impl IntoIterator<Item = (String, String)>,
     ) -> Arc<dyn Runtime> {
         Arc::new(Self {
-            statuses: Vec::new(),
-            cursor: None,
             pages: pages.into_iter().collect(),
             query: query.into_iter().collect(),
-            statuses_by_id: HashMap::new(),
-            contexts: HashMap::new(),
-            accounts: HashMap::new(),
-            relationships: HashMap::new(),
-            profile_statuses: None,
-            lists: None,
-            session: None,
+            ..Self::default()
         })
     }
 
@@ -112,17 +92,9 @@ impl StaticRuntime {
     pub fn thread(status: Status, context: Context) -> Arc<dyn Runtime> {
         let id = status.id.clone();
         Arc::new(Self {
-            statuses: Vec::new(),
-            cursor: None,
-            pages: HashMap::new(),
-            query: HashMap::new(),
             statuses_by_id: HashMap::from([(id.clone(), status)]),
             contexts: HashMap::from([(id, context)]),
-            accounts: HashMap::new(),
-            relationships: HashMap::new(),
-            profile_statuses: None,
-            lists: None,
-            session: None,
+            ..Self::default()
         })
     }
 
@@ -135,20 +107,13 @@ impl StaticRuntime {
         cursor: Option<String>,
     ) -> Arc<dyn Runtime> {
         Arc::new(Self {
-            statuses: Vec::new(),
-            cursor: None,
-            pages: HashMap::new(),
-            query: HashMap::new(),
-            statuses_by_id: HashMap::new(),
-            contexts: HashMap::new(),
             relationships: relationship
                 .map(|relationship| (relationship.id.0.clone(), relationship))
                 .into_iter()
                 .collect(),
             accounts: HashMap::from([(account.id.clone(), account)]),
             profile_statuses: Some((statuses, cursor)),
-            lists: None,
-            session: None,
+            ..Self::default()
         })
     }
 
@@ -156,17 +121,8 @@ impl StaticRuntime {
     #[must_use]
     pub fn lists(lists: Vec<List>) -> Arc<dyn Runtime> {
         Arc::new(Self {
-            statuses: Vec::new(),
-            cursor: None,
-            pages: HashMap::new(),
-            query: HashMap::new(),
-            statuses_by_id: HashMap::new(),
-            contexts: HashMap::new(),
-            accounts: HashMap::new(),
-            relationships: HashMap::new(),
-            profile_statuses: None,
             lists: Some(lists),
-            session: None,
+            ..Self::default()
         })
     }
 }
@@ -207,6 +163,10 @@ impl Runtime for StaticRuntime {
 
     fn session(&self) -> Option<SessionView> {
         self.session.clone()
+    }
+
+    fn session_style(&self) -> SessionStyle {
+        self.style.clone()
     }
 
     fn page(&self, kind: &PageKind) -> Option<PageEntry> {

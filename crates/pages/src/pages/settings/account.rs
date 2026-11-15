@@ -6,6 +6,9 @@
 
 use leptos::prelude::*;
 
+use nodus_ui::html::safe_url;
+use nodus_ui::session_style::{NavPlacement, SessionStyle};
+
 use crate::components::panel::Panel;
 
 /// One identity the browser can switch to.
@@ -15,6 +18,7 @@ pub struct AccountItem {
     pub label: String,
     pub host: String,
     pub current: bool,
+    pub thumbnail_url: Option<String>,
 }
 
 /// Who this browser is signed in as, and the way out.
@@ -92,15 +96,47 @@ pub fn AccountsCard(
                                 }
                                     .into_any()
                             };
+                            let thumb = account
+                                .thumbnail_url
+                                .as_deref()
+                                .filter(|url| safe_url(url))
+                                .map(str::to_owned);
+                            let fallback_initial = account
+                                .label
+                                .chars()
+                                .find(|ch| ch.is_alphanumeric())
+                                .map_or('@', |ch| ch.to_ascii_uppercase())
+                                .to_string();
+                            let alt_text = format!("{} session thumbnail", account.label);
                             view! {
                                 <li class="flex items-center justify-between gap-3 rounded-box bg-base-200 px-3 py-2">
-                                    <div class="flex min-w-0 flex-col">
-                                        <span class="truncate text-sm font-medium">
-                                            {account.label}
-                                        </span>
-                                        <span class="truncate text-xs opacity-60">
-                                            {account.host}
-                                        </span>
+                                    <div class="flex min-w-0 items-center gap-3">
+                                        {if let Some(url) = thumb {
+                                            view! {
+                                                <img
+                                                    src=url
+                                                    alt=alt_text
+                                                    class="h-9 w-9 shrink-0 rounded-box object-cover"
+                                                    data-account-thumbnail=""
+                                                />
+                                            }
+                                                .into_any()
+                                        } else {
+                                            view! {
+                                                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-box bg-base-300 text-xs font-semibold opacity-70">
+                                                    {fallback_initial}
+                                                </div>
+                                            }
+                                                .into_any()
+                                        }}
+                                        <div class="flex min-w-0 flex-col">
+                                            <span class="truncate text-sm font-medium">
+                                                {account.label}
+                                            </span>
+                                            <span class="truncate text-xs opacity-60">
+                                                {account.host}
+                                            </span>
+                                        </div>
                                     </div>
                                     {badge}
                                 </li>
@@ -126,6 +162,81 @@ pub fn AccountsCard(
             >
                 "Sign out of this account"
             </button>
+        </Panel>
+    }
+}
+
+/// Active account session styling summary with an Edit shortcut to `/settings/styling`.
+#[component]
+pub fn SessionStyleCard(
+    #[prop(into)] style: Signal<SessionStyle>,
+    #[prop(optional_no_strip)] on_edit: Option<Callback<()>>,
+) -> impl IntoView {
+    view! {
+        <Panel title="Session style">
+            <p class="text-sm opacity-70">
+                "Custom top, left, and right session images and navigation arrangement for this account."
+            </p>
+            {move || {
+                let current = style.get();
+                let thumb = current.thumbnail_url().map(str::to_owned);
+                let top_count = current.top.slots.len();
+                let left_count = current.left.slots.len();
+                let right_count = current.right.slots.len();
+                let right_nav_count = current.nav.items_in(NavPlacement::Right).len();
+                let submenu_count = current.nav.items_in(NavPlacement::Submenu).len();
+                view! {
+                    <div class="flex flex-wrap items-center gap-3 rounded-box bg-base-200 p-3">
+                        {if let Some(url) = thumb {
+                            view! {
+                                <img
+                                    src=url
+                                    alt="Active session style thumbnail"
+                                    class="h-12 w-20 rounded-box object-cover"
+                                />
+                            }
+                                .into_any()
+                        } else {
+                            view! {
+                                <div class="flex h-12 w-20 items-center justify-center rounded-box bg-base-300 text-xs opacity-60">
+                                    "Default"
+                                </div>
+                            }
+                                .into_any()
+                        }}
+                        <div class="flex min-w-0 flex-1 flex-wrap gap-2 text-xs">
+                            <span class="badge badge-ghost badge-sm">
+                                {format!("Top: {top_count}")}
+                            </span>
+                            <span class="badge badge-ghost badge-sm">
+                                {format!("Left: {left_count}")}
+                            </span>
+                            <span class="badge badge-ghost badge-sm">
+                                {format!("Right: {right_count}")}
+                            </span>
+                            <span class="badge badge-ghost badge-sm">
+                                {format!("Right nav: {right_nav_count}")}
+                            </span>
+                            <span class="badge badge-ghost badge-sm">
+                                {format!("Submenu: {submenu_count}")}
+                            </span>
+                        </div>
+                        <a
+                            class="btn btn-primary btn-sm"
+                            href="/settings/styling"
+                            data-edit-session-style=""
+                            on:click=move |event| {
+                                if let Some(on_edit) = on_edit {
+                                    event.prevent_default();
+                                    on_edit.run(());
+                                }
+                            }
+                        >
+                            "Edit"
+                        </a>
+                    </div>
+                }
+            }}
         </Panel>
     }
 }
@@ -168,5 +279,61 @@ pub fn ModerationLinks(
                 </a>
             </div>
         </Panel>
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use nodus_ui::session_style::ImageSlot;
+
+    #[test]
+    fn accounts_card_displays_safe_session_thumbnails_and_drops_unsafe_ones() {
+        let accounts = Signal::stored(vec![
+            AccountItem {
+                key: String::from("a1"),
+                label: String::from("@alice"),
+                host: String::from("social.example"),
+                current: true,
+                thumbnail_url: Some(String::from("https://cdn.example/alice-banner.png")),
+            },
+            AccountItem {
+                key: String::from("b2"),
+                label: String::from("@bob"),
+                host: String::from("other.example"),
+                current: false,
+                thumbnail_url: Some(String::from("javascript:alert(1)")),
+            },
+        ]);
+        let no_error = Signal::stored(None::<String>);
+        let html = view! {
+            <AccountsCard
+                accounts=accounts
+                busy=false
+                error=no_error
+            />
+        }
+        .to_html();
+
+        assert!(html.contains("https://cdn.example/alice-banner.png"));
+        assert!(html.contains("data-account-thumbnail"));
+        assert!(!html.contains("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn session_style_card_renders_edit_link_to_styling_page() {
+        let mut style = SessionStyle::default();
+        style
+            .top
+            .slots
+            .push(ImageSlot::new("https://cdn.example/top-thumb.png", None, None).unwrap());
+        let html = view! {
+            <SessionStyleCard style=style/>
+        }
+        .to_html();
+
+        assert!(html.contains(r#"href="/settings/styling""#));
+        assert!(html.contains("Edit"));
+        assert!(html.contains("https://cdn.example/top-thumb.png"));
     }
 }

@@ -7,15 +7,17 @@ use leptos::prelude::*;
 pub enum SettingsSection {
     Account,
     Profile,
+    Styling,
     Nodus,
     Filters,
     Instance,
 }
 
 impl SettingsSection {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Account,
         Self::Profile,
+        Self::Styling,
         Self::Nodus,
         Self::Filters,
         Self::Instance,
@@ -25,6 +27,7 @@ impl SettingsSection {
         match self {
             Self::Account => "account",
             Self::Profile => "profile",
+            Self::Styling => "styling",
             Self::Nodus => "nodus",
             Self::Filters => "filters",
             Self::Instance => "instance",
@@ -35,6 +38,7 @@ impl SettingsSection {
         match self {
             Self::Account => "Account",
             Self::Profile => "Profile",
+            Self::Styling => "Styling",
             Self::Nodus => "Nodus",
             Self::Filters => "Filters",
             Self::Instance => "Instance",
@@ -45,6 +49,9 @@ impl SettingsSection {
         match self {
             Self::Account => "Who you are signed in as, and the other accounts this browser holds.",
             Self::Profile => "Your display name, bio, clock and media choices.",
+            Self::Styling => {
+                "Per-account top, left, and right images, split banners, and custom navigation layout."
+            }
             Self::Nodus => "Timelines, background sync and featured tags.",
             Self::Filters => "Phrases that hide a post or put it behind a warning.",
             Self::Instance => "What this server says about itself.",

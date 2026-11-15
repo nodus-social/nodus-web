@@ -8,6 +8,7 @@ use leptos::prelude::Owner;
 use std::sync::Arc;
 
 use nodus_state::page::{PageEntry, PageItems, PageKind};
+use nodus_ui::session_style::SessionStyle;
 use nodus_web::shared::router::Route;
 use nodus_web::shared::screens::{Screen, ScreenKind};
 
@@ -41,7 +42,7 @@ fn painted<V: leptos::IntoView>(view: impl FnOnce() -> V) -> String {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "one route renderer needs the request facts and the fetched page"
+    reason = "one route renderer needs the request facts, fetched page, and session style"
 )]
 fn render_route(
     assets: &document::Assets,
@@ -53,6 +54,7 @@ fn render_route(
     kind: PageKind,
     entry: PageEntry,
     island: serde_json::Value,
+    style: Option<&SessionStyle>,
 ) -> String {
     let runtime = StaticRuntime::pages([(kind, entry)]);
     let inner = painted(|| {
@@ -64,7 +66,7 @@ fn render_route(
             banner: None,
         })
     });
-    document::page_of(
+    document::page_of_with_style(
         assets,
         acct,
         staff,
@@ -72,15 +74,28 @@ fn render_route(
         title,
         &inner,
         Some(island.to_string()),
+        style,
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_thread(
     assets: &document::Assets,
     acct: &str,
     staff: bool,
     status: &nodus_client_core::model::Status,
     context: &nodus_client_core::model::Context,
+) -> String {
+    render_thread_with_style(assets, acct, staff, status, context, None)
+}
+
+pub(crate) fn render_thread_with_style(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    status: &nodus_client_core::model::Status,
+    context: &nodus_client_core::model::Context,
+    style: Option<&SessionStyle>,
 ) -> String {
     let mut status = status.clone();
     nodus_ui::html::sanitize_status(&mut status);
@@ -110,7 +125,7 @@ pub(crate) fn render_thread(
         "status": status,
         "context": context,
     });
-    document::page_of(
+    document::page_of_with_style(
         assets,
         acct,
         staff,
@@ -118,9 +133,11 @@ pub(crate) fn render_thread(
         "Thread",
         &inner,
         Some(island.to_string()),
+        style,
     )
 }
 
+#[allow(dead_code)]
 pub(crate) async fn read_page(
     client: &Client,
     assets: &document::Assets,
@@ -129,8 +146,20 @@ pub(crate) async fn read_page(
     path: &str,
     query: Option<&str>,
 ) -> Option<String> {
+    read_page_with_style(client, assets, acct, staff, path, query, None).await
+}
+
+pub(crate) async fn read_page_with_style(
+    client: &Client,
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    query: Option<&str>,
+    style: Option<&SessionStyle>,
+) -> Option<String> {
     let Some(screen) = Screen::of_path(path) else {
-        return read_entity(client, assets, acct, staff, path).await;
+        return read_entity(client, assets, acct, staff, path, style).await;
     };
 
     let page = match screen.kind {
@@ -139,18 +168,36 @@ pub(crate) async fn read_page(
             .notifications(PAGE)
             .await
             .map(|(items, cursor)| {
-                render_notifications(assets, acct, staff, path, screen.title, items, cursor)
+                render_notifications_with_style(
+                    assets,
+                    acct,
+                    staff,
+                    path,
+                    screen.title,
+                    items,
+                    cursor,
+                    style,
+                )
             })
             .ok(),
         ScreenKind::Messages => client
             .conversations(PAGE)
             .await
             .map(|(items, cursor)| {
-                render_conversations(assets, acct, staff, path, screen.title, items, cursor)
+                render_conversations_with_style(
+                    assets,
+                    acct,
+                    staff,
+                    path,
+                    screen.title,
+                    items,
+                    cursor,
+                    style,
+                )
             })
             .ok(),
         ScreenKind::Saved { bookmarks } => {
-            read_saved(client, assets, acct, staff, path, bookmarks).await
+            read_saved(client, assets, acct, staff, path, bookmarks, style).await
         }
         ScreenKind::Lists => client
             .lists()
@@ -166,7 +213,7 @@ pub(crate) async fn read_page(
                         banner: None,
                     })
                 });
-                document::page_of(
+                document::page_of_with_style(
                     assets,
                     acct,
                     staff,
@@ -177,6 +224,7 @@ pub(crate) async fn read_page(
                         serde_json::json!({ "kind": "lists", "items": items, "cursor": null })
                             .to_string(),
                     ),
+                    style,
                 )
             })
             .ok(),
@@ -198,6 +246,7 @@ pub(crate) async fn read_page(
                         fetched_at: None,
                     },
                     serde_json::json!({ "kind": "scheduled", "items": items, "cursor": null }),
+                    style,
                 )
             })
             .ok(),
@@ -222,20 +271,25 @@ pub(crate) async fn read_page(
                         fetched_at: None,
                     },
                     serde_json::json!({ "kind": "directory", "items": items, "cursor": null }),
+                    style,
                 )
             })
             .ok(),
-        ScreenKind::Search => read_search(client, assets, acct, staff, path, query).await,
+        ScreenKind::Search => read_search(client, assets, acct, staff, path, query, style).await,
+        ScreenKind::Settings => Some(render_unclaimed_with_style(
+            assets, acct, staff, path, style,
+        )),
         _ => None,
     };
     if page.is_some() {
         return page;
     }
-    read_entity(client, assets, acct, staff, path).await
+    read_entity(client, assets, acct, staff, path, style).await
 }
 
 /// Before the routes with a name in them: one account, or one thread.
 /// A profile page, painted by the shared renderer.
+#[cfg(test)]
 #[must_use]
 pub fn render_account(
     assets: &document::Assets,
@@ -244,6 +298,19 @@ pub fn render_account(
     account: &nodus_client_core::model::Account,
     statuses: &[nodus_client_core::model::Status],
     cursor: Option<&str>,
+) -> String {
+    render_account_with_style(assets, acct, staff, account, statuses, cursor, None)
+}
+
+#[must_use]
+pub fn render_account_with_style(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    account: &nodus_client_core::model::Account,
+    statuses: &[nodus_client_core::model::Status],
+    cursor: Option<&str>,
+    style: Option<&SessionStyle>,
 ) -> String {
     let mut account = account.clone();
     nodus_ui::html::sanitize_account(&mut account);
@@ -278,7 +345,7 @@ pub fn render_account(
         "statuses": statuses,
         "cursor": cursor,
     });
-    document::page_of(
+    document::page_of_with_style(
         assets,
         acct,
         staff,
@@ -286,10 +353,28 @@ pub fn render_account(
         &title,
         &painted,
         Some(island.to_string()),
+        style,
     )
 }
 
+#[cfg(test)]
 fn render_notifications(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    title: &str,
+    items: Vec<nodus_client_core::model::Notification>,
+    cursor: Option<String>,
+) -> String {
+    render_notifications_with_style(assets, acct, staff, path, title, items, cursor, None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "matches render_route signature with SSR style context"
+)]
+fn render_notifications_with_style(
     assets: &document::Assets,
     acct: &str,
     staff: bool,
@@ -297,6 +382,7 @@ fn render_notifications(
     title: &str,
     mut items: Vec<nodus_client_core::model::Notification>,
     cursor: Option<String>,
+    style: Option<&SessionStyle>,
 ) -> String {
     for item in &mut items {
         nodus_ui::html::sanitize_notification(item);
@@ -320,10 +406,28 @@ fn render_notifications(
             fetched_at: None,
         },
         island,
+        style,
     )
 }
 
+#[cfg(test)]
 fn render_conversations(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    title: &str,
+    items: Vec<nodus_client_core::model::Conversation>,
+    cursor: Option<String>,
+) -> String {
+    render_conversations_with_style(assets, acct, staff, path, title, items, cursor, None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "matches render_route signature with SSR style context"
+)]
+fn render_conversations_with_style(
     assets: &document::Assets,
     acct: &str,
     staff: bool,
@@ -331,6 +435,7 @@ fn render_conversations(
     title: &str,
     mut items: Vec<nodus_client_core::model::Conversation>,
     cursor: Option<String>,
+    style: Option<&SessionStyle>,
 ) -> String {
     for item in &mut items {
         nodus_ui::html::sanitize_conversation(item);
@@ -354,6 +459,7 @@ fn render_conversations(
             fetched_at: None,
         },
         island,
+        style,
     )
 }
 
@@ -363,18 +469,20 @@ pub(crate) async fn read_entity(
     acct: &str,
     staff: bool,
     path: &str,
+    style: Option<&SessionStyle>,
 ) -> Option<String> {
     if let Some(id) = path.strip_prefix("/accounts/") {
         if !id.is_empty() && !id.contains('/') {
             let account = client.account(id).await.ok()?;
             let (statuses, cursor) = client.account_statuses(id, PAGE).await.ok()?;
-            return Some(render_account(
+            return Some(render_account_with_style(
                 assets,
                 acct,
                 staff,
                 &account,
                 &statuses,
                 cursor.as_deref(),
+                style,
             ));
         }
         return None;
@@ -385,8 +493,8 @@ pub(crate) async fn read_entity(
     }
     let status = client.status(id).await.ok()?;
     let context = client.context(id).await.ok()?;
-    Some(document::thread_page(
-        assets, acct, staff, &status, &context,
+    Some(document::thread_page_with_style(
+        assets, acct, staff, &status, &context, style,
     ))
 }
 
@@ -398,6 +506,7 @@ pub(crate) async fn read_saved(
     staff: bool,
     path: &str,
     bookmarks: bool,
+    style: Option<&SessionStyle>,
 ) -> Option<String> {
     use nodus_pages::pages::saved::shelf::Shelf;
 
@@ -433,6 +542,7 @@ pub(crate) async fn read_saved(
             "items": statuses,
             "cursor": cursor,
         }),
+        style,
     ))
 }
 
@@ -444,6 +554,7 @@ pub(crate) async fn read_search(
     staff: bool,
     path: &str,
     query: Option<&str>,
+    style: Option<&SessionStyle>,
 ) -> Option<String> {
     let query = query
         .and_then(|query| {
@@ -485,7 +596,7 @@ pub(crate) async fn read_search(
         "cursor": null,
     })
     .to_string();
-    Some(document::page_of(
+    Some(document::page_of_with_style(
         assets,
         acct,
         staff,
@@ -493,6 +604,7 @@ pub(crate) async fn read_search(
         "Search",
         &inner,
         Some(island),
+        style,
     ))
 }
 
@@ -598,21 +710,43 @@ pub fn render_public_account(
 
 /// The last route seam: any path the data readers did not claim is drawn by the same
 /// `RouteView` the browser will mount, with no prefetched answers.
+#[allow(dead_code)]
 pub fn render_unclaimed(assets: &document::Assets, acct: &str, staff: bool, path: &str) -> String {
+    render_unclaimed_with_style(assets, acct, staff, path, None)
+}
+
+/// Same as `render_unclaimed`, framing the screen with the active account's `SessionStyle`.
+pub fn render_unclaimed_with_style(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    style: Option<&SessionStyle>,
+) -> String {
     let route = Route::from_path(path);
     let title = Screen::of_path(path)
         .map(|screen| screen.title.to_owned())
         .unwrap_or_else(|| "Nodus".to_owned());
+    let resolved_style = style.cloned().unwrap_or_default();
     let inner = painted(|| {
         nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
-            runtime: StaticRuntime::signed_in(acct),
+            runtime: StaticRuntime::signed_in_with_style(acct, resolved_style),
             route,
             card: card(),
             header: None,
             banner: None,
         })
     });
-    document::page_of(assets, acct, staff, path, title.as_str(), &inner, None)
+    document::page_of_with_style(
+        assets,
+        acct,
+        staff,
+        path,
+        title.as_str(),
+        &inner,
+        None,
+        style,
+    )
 }
 
 #[cfg(test)]
