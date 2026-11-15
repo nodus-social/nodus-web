@@ -1,39 +1,47 @@
 //! What a status body becomes before it is painted.
 //!
-//! The instance hands over HTML with mentions and hashtags already resolved, and custom emoji
-//! as `<img class="emoji" alt=":code:">`. Two things still have to happen before it may be
-//! embedded: the markup is sanitized ([`crate::html::body`]) and any remaining `:code:` that
-//! the status itself declares is replaced. Both paints end up with the same string, which is
-//! why this is one function rather than a line at each call site.
-
-use crate::document::escape;
+//! Sanitisation and custom-emoji expansion live in [`nodus_ui::html::prepared`] so the
+//! server paint and the browser mount share the exact same allowlist and text-node emoji
+//! traversal.
 
 /// Sanitises a status body and paints the emoji the status itself declares.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "shared StatusBody now runs nodus_ui::html::prepared directly"
+    )
+)]
 pub fn prepared(content: &str, emojis: &[nodus_client_core::model::CustomEmoji]) -> String {
-    with_emojis(crate::html::body(content), emojis)
+    nodus_ui::html::prepared(content, emojis)
 }
 
-fn with_emojis(html: String, emojis: &[nodus_client_core::model::CustomEmoji]) -> String {
-    if emojis.is_empty() {
-        return html;
-    }
-    let mut painted = html;
-    for emoji in emojis {
-        let source = if emoji.url.is_empty() {
-            emoji.static_url.as_deref().unwrap_or_default()
-        } else {
-            emoji.url.as_str()
+#[cfg(test)]
+mod tests {
+    use nodus_client_core::model::CustomEmoji;
+
+    use super::prepared;
+
+    #[test]
+    fn prepared_does_not_break_out_of_href_attributes() {
+        let emoji = CustomEmoji {
+            shortcode: "wave".to_owned(),
+            url: "https://cdn.test/wave.png".to_owned(),
+            static_url: None,
         };
-        if source.is_empty() {
-            continue;
-        }
-        let token = format!(":{}:", emoji.shortcode);
-        let replacement = format!(
-            "<img class=\"emoji inline-block h-[1.2em] w-auto align-[-0.2em]\" alt=\"{token}\" title=\"{token}\" loading=\"lazy\" decoding=\"async\" src=\"{source}\">",
-            token = escape(&token),
-            source = escape(source)
+        let html = prepared(
+            "<p><a href=\"https://example.com/:wave:\">hi :wave:</a></p><img src=x onerror=alert(1)>",
+            &[emoji],
         );
-        painted = painted.replace(&token, &replacement);
+        assert!(
+            html.contains("href=\"https://example.com/:wave:\""),
+            "{html}"
+        );
+        assert!(!html.contains("onerror"), "{html}");
+        assert_eq!(
+            html.matches("src=\"https://cdn.test/wave.png\"").count(),
+            1,
+            "{html}"
+        );
     }
-    painted
 }

@@ -104,6 +104,10 @@ fn MediaTile(
     let listens = kind == MediaKind::Audio;
     let id = StoredValue::new(media.id.clone());
     let (url, _) = signal(media.url.clone().unwrap_or_default());
+    let safe_href = move || {
+        let href = url.get();
+        crate::html::safe_url(&href).then_some(href)
+    };
     let (preview, _) = signal(media.preview_url.clone().unwrap_or_default());
     let (source, set_source) = signal(media.preview_url.clone().unwrap_or_default());
     let (description, _) = signal(media.description.clone().unwrap_or_default());
@@ -221,7 +225,7 @@ fn MediaTile(
                     <span>{move || description.get()}</span>
                     <a
                         class="link link-hover"
-                        href=move || url.get()
+                        href=safe_href
                         target="_blank"
                         rel="nofollow noopener noreferrer"
                     >
@@ -282,7 +286,7 @@ fn MediaTile(
             <Show when=move || !is_image && !plays && !listens && interactive>
                 <a
                     class="btn btn-ghost btn-sm w-full"
-                    href=move || url.get()
+                    href=safe_href
                     target="_blank"
                     rel="nofollow noopener noreferrer"
                     referrerpolicy="no-referrer"

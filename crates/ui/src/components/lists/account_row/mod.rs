@@ -2,8 +2,8 @@
 //!
 //! The people lists, the mute and block lists and the search results all show the same row:
 //! the avatar, the name, the handle, and the one line the account wrote about itself. The
-//! bio is HTML from the instance and arrives already sanitised, so it is injected with
-//! `inner_html` under the same rule status bodies follow.
+//! bio is HTML from the instance and is sanitised through [`crate::html::body`] before it is
+//! injected with `inner_html`, under the same rule status bodies follow.
 //!
 //! The list-specific verb — unmute, unblock, follow — is not part of the row: which verb
 //! applies depends on the list being read, so a screen that has one passes it in the `after`
@@ -50,6 +50,8 @@ pub fn AccountRow(
     // The id is read by two handlers, so it lives in a stored value: a `String` captured by
     // value would make the first handler `FnOnce`, and a stored value is `Copy`.
     let target = StoredValue::new(id);
+
+    let note = crate::html::body(&note);
 
     view! {
         <li class="card border border-base-300 bg-base-100 shadow-sm">
@@ -119,5 +121,47 @@ fn open_account(
         #[cfg(target_arch = "wasm32")]
         event.prevent_default();
         on_open.run(id.get_value());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _};
+    use nodus_client_core::model::Account;
+
+    use super::{AccountRow, AccountRowProps};
+
+    #[test]
+    fn account_row_sanitizes_note_xss() {
+        let account = Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: String::new(),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+        };
+        let rendered = Owner::new().with(|| {
+            AccountRow(AccountRowProps {
+                account,
+                note: "<p>hello</p><img src=x onerror=\"alert(1)\"><script>steal()</script>"
+                    .to_owned(),
+                on_open: None,
+                after: None,
+            })
+            .to_html()
+        });
+        assert!(!rendered.contains("onerror"), "{rendered}");
+        assert!(!rendered.contains("<script"), "{rendered}");
+        assert!(rendered.contains("<p>hello</p>"), "{rendered}");
     }
 }

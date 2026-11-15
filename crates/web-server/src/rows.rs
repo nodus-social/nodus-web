@@ -36,11 +36,9 @@ fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {
     let mut painted = status.clone();
     // A boost renders the boosted post under the booster's name, exactly as the client
     // does: the line above the card comes from the wrapper and everything below it from
-    // `reblog`.
-    match painted.reblog.as_deref_mut() {
-        Some(inner) => inner.content = crate::content::prepared(&inner.content, &inner.emojis),
-        None => painted.content = crate::content::prepared(&painted.content, &painted.emojis),
-    }
+    // `reblog`. `StatusBody` runs `nodus_ui::html::prepared`, and sanitising the cloned
+    // status here keeps `StatusHeader` and nested models clean too.
+    nodus_ui::html::sanitize_status(&mut painted);
     let inner = painted.reblog.as_deref().map_or(&painted, |inner| inner);
     let age = nodus_ui::relative_age(&inner.created_at, now_millis());
 

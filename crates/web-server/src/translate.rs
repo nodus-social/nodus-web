@@ -12,8 +12,9 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use nodus_ui::html;
+
 use crate::App;
-use crate::html;
 
 #[derive(Debug, Deserialize)]
 pub struct TranslateRequest {
@@ -227,5 +228,14 @@ mod tests {
     #[test]
     fn plain_text_becomes_paragraphs_without_markup() {
         assert_eq!(plain_html("one\ntwo < 3"), "<p>one<br>two &lt; 3</p>");
+    }
+
+    #[test]
+    fn translated_html_is_sanitized_with_shared_allowlist() {
+        let translated = "<p>bonjour</p><img src=x onerror=\"alert(1)\"><script>steal()</script>";
+        let sanitized = super::html::body(translated);
+        assert!(sanitized.contains("<p>bonjour</p>"), "{sanitized}");
+        assert!(!sanitized.contains("onerror"), "{sanitized}");
+        assert!(!sanitized.contains("<script"), "{sanitized}");
     }
 }

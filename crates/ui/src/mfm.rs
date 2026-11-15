@@ -11,7 +11,7 @@ use nodus_client_core::model::CustomEmoji;
 /// Renders MFM to HTML, substituting the status's custom emoji.
 #[must_use]
 pub fn render(source: &str, emojis: &[CustomEmoji]) -> String {
-    paint_emojis(inline(source), emojis)
+    crate::html::with_emojis(&inline(source), emojis)
 }
 
 fn inline(source: &str) -> String {
@@ -135,39 +135,7 @@ fn safe_color(value: &str) -> bool {
 }
 
 fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(character),
-        }
-    }
-    out
-}
-
-fn paint_emojis(mut html: String, emojis: &[CustomEmoji]) -> String {
-    for emoji in emojis {
-        let source = if emoji.url.is_empty() {
-            emoji.static_url.as_deref().unwrap_or_default()
-        } else {
-            emoji.url.as_str()
-        };
-        if source.is_empty() {
-            continue;
-        }
-        let token = format!(":{}:", emoji.shortcode);
-        let source = escape(source);
-        let replacement = format!(
-            "<img class=\"emoji inline-block h-[1.2em] w-auto align-[-0.2em]\" alt=\"{token}\" title=\"{token}\" loading=\"lazy\" decoding=\"async\" src=\"{source}\">",
-            token = escape(&token),
-        );
-        html = html.replace(&token, &replacement);
-    }
-    html
+    crate::html::escape(text)
 }
 
 #[cfg(test)]
@@ -217,6 +185,53 @@ mod tests {
             html.matches("src=\"https://cdn.test/wave.png\"").count(),
             1,
             "html was {html}"
+        );
+    }
+
+    #[test]
+    fn custom_emoji_rejects_unsafe_url() {
+        let emoji = CustomEmoji {
+            shortcode: "evil".to_owned(),
+            url: "javascript:alert(1)".to_owned(),
+            static_url: None,
+        };
+        let html = render("hi :evil:", &[emoji]);
+        assert!(!html.contains("<img"), "html was {html}");
+        assert!(!html.contains("javascript:"), "html was {html}");
+    }
+
+    #[test]
+    fn custom_emoji_does_not_chain_replace_across_urls() {
+        let emojis = [
+            CustomEmoji {
+                shortcode: "a".to_owned(),
+                url: "https://cdn.test/:b:.png".to_owned(),
+                static_url: None,
+            },
+            CustomEmoji {
+                shortcode: "b".to_owned(),
+                url: "https://evil.test/b.png".to_owned(),
+                static_url: None,
+            },
+        ];
+        let html = render(":a:", &emojis);
+        assert!(html.contains("src=\"https://cdn.test/:b:.png\""), "{html}");
+        assert!(!html.contains("evil.test"), "{html}");
+    }
+
+    #[test]
+    fn custom_emoji_does_not_expand_inside_attributes() {
+        let emoji = CustomEmoji {
+            shortcode: "red".to_owned(),
+            url: "https://cdn.test/red.png".to_owned(),
+            static_url: None,
+        };
+        let html = render("$[fg.red :red:]", &[emoji]);
+        assert!(html.contains("style=\"color:red\""), "{html}");
+        assert_eq!(
+            html.matches("src=\"https://cdn.test/red.png\"").count(),
+            1,
+            "{html}"
         );
     }
 }

