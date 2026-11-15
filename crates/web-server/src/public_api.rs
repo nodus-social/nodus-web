@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::validate::{host_valid, id_valid, public_http_client};
 use crate::{App, session_of};
 
 fn local_host() -> Option<String> {
@@ -116,16 +117,17 @@ fn hydrated_status(post: &Value, account: &Value) -> Value {
     })
 }
 
-fn host_valid(host: &str) -> bool {
-    !host.is_empty()
-        && host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
-        && host.contains('.')
+fn external_client() -> Result<reqwest::Client, reqwest::Error> {
+    public_http_client(std::time::Duration::from_secs(12))
+}
+
+fn valid_target(host: &str, id: &str) -> bool {
+    host_valid(host) && id_valid(id)
 }
 
 async fn json(url: &str, token: Option<&str>) -> Option<Value> {
-    let mut request = reqwest::Client::new().get(url);
+    let client = external_client().ok()?;
+    let mut request = client.get(url);
     if let Some(token) = token {
         request = request.bearer_auth(token);
     }
@@ -137,21 +139,27 @@ async fn json(url: &str, token: Option<&str>) -> Option<Value> {
 }
 
 async fn relay(url: String, token: Option<&str>) -> Response {
-    let mut request = reqwest::Client::new().get(&url);
+    let client = match external_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+        }
+    };
+    let mut request = client.get(&url);
     if let Some(token) = token {
         request = request.bearer_auth(token);
     }
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
-            return (axum::http::StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
         }
     };
     let status = response.status();
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            return (axum::http::StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
         }
     };
     (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
@@ -169,20 +177,22 @@ async fn account_target(
         && local_host().as_deref() == Some(host)
         && let Some(local) = json(&format!("https://{host}/api/v1/accounts/{id}"), None).await
         && let Some(acct) = local.get("acct").and_then(Value::as_str)
-        && acct.contains('@')
-        && let Some(origin) = acct.rsplit('@').next()
-        && host_valid(origin)
+        && let Some((remote_user, remote_host)) = acct.split_once('@')
+        && !remote_user.is_empty()
+        && !remote_host.contains('@')
+        && host_valid(remote_host)
     {
         let resolved = hydrate(&format!("/v1/ap/account?acct={}", urlencoding(acct))).await;
         if let Some(remote) = resolved
             .as_ref()
             .and_then(|value| value.get("id"))
             .and_then(Value::as_str)
+            .filter(|remote| id_valid(remote))
         {
-            return (origin.to_owned(), remote.to_owned(), None);
+            return (remote_host.to_owned(), remote.to_owned(), None);
         }
     }
-    let Some(session) = session else {
+    let Some(session) = session.filter(|session| host_valid(&session.host)) else {
         return (host.to_owned(), id.to_owned(), None);
     };
     if session.host == host {
@@ -211,7 +221,8 @@ async fn account_target(
         .and_then(Value::as_array)
         .and_then(|accounts| accounts.first())
         .and_then(|account| account.get("id"))
-        .and_then(Value::as_str);
+        .and_then(Value::as_str)
+        .filter(|local| id_valid(local));
     match local {
         Some(local) => (session.host.clone(), local.to_owned(), Some(session.token)),
         None => (host.to_owned(), id.to_owned(), None),
@@ -238,7 +249,7 @@ async fn status_target(
     host: &str,
     id: &str,
 ) -> (String, String, Option<String>) {
-    let Some(session) = session_of(app, headers) else {
+    let Some(session) = session_of(app, headers).filter(|session| host_valid(&session.host)) else {
         return (host.to_owned(), id.to_owned(), None);
     };
     if session.host == host {
@@ -267,7 +278,8 @@ async fn status_target(
         .and_then(Value::as_array)
         .and_then(|statuses| statuses.first())
         .and_then(|status| status.get("id"))
-        .and_then(Value::as_str);
+        .and_then(Value::as_str)
+        .filter(|local| id_valid(local));
     match local {
         Some(local) => (session.host.clone(), local.to_owned(), Some(session.token)),
         None => (host.to_owned(), id.to_owned(), None),
@@ -279,8 +291,8 @@ pub async fn status(
     headers: HeaderMap,
     Path((host, id)): Path<(String, String)>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
     relay(
@@ -295,8 +307,8 @@ pub async fn context(
     headers: HeaderMap,
     Path((host, id)): Path<(String, String)>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
     relay(
@@ -311,8 +323,8 @@ pub async fn account(
     headers: HeaderMap,
     Path((host, id)): Path<(String, String)>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = account_target(&app, &headers, &host, &id).await;
     relay(
@@ -333,8 +345,11 @@ pub async fn account_statuses(
     Path((host, id)): Path<(String, String)>,
     Query(before): Query<Before>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if before.max_id.as_deref().is_some_and(|max| !id_valid(max)) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = account_target(&app, &headers, &host, &id).await;
     let suffix = before
@@ -377,8 +392,8 @@ pub async fn followers(
     headers: HeaderMap,
     Path((host, id)): Path<(String, String)>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = account_target(&app, &headers, &host, &id).await;
     relay(
@@ -393,8 +408,8 @@ pub async fn following(
     headers: HeaderMap,
     Path((host, id)): Path<(String, String)>,
 ) -> Response {
-    if !host_valid(&host) {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    if !valid_target(&host, &id) {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = account_target(&app, &headers, &host, &id).await;
     relay(
@@ -402,4 +417,53 @@ pub async fn following(
         token.as_deref(),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_valid;
+
+    #[test]
+    fn host_valid_accepts_public_domains_and_ports() {
+        assert!(host_valid("mastodon.social"));
+        assert!(host_valid("fosstodon.org:8443"));
+        assert!(host_valid("sub.domain.example"));
+    }
+
+    #[test]
+    fn host_valid_rejects_ssrf_and_malformed_hosts() {
+        for bad in [
+            "",
+            "..",
+            "...",
+            ".example.com",
+            "example.com.",
+            "a..b",
+            "localhost",
+            "foo.localhost",
+            "metadata.google.internal",
+            "printer.local",
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "127.1",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+            "0.0.0.0",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "224.0.0.1",
+            "::1",
+            "[::1]",
+            "::ffff:127.0.0.1",
+            "example.com:0",
+            "example.com:99999",
+            "example.com:80:80",
+            "https://mastodon.social",
+        ] {
+            assert!(!host_valid(bad), "expected host_valid({bad:?}) to be false");
+        }
+    }
 }

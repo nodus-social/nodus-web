@@ -20,6 +20,7 @@ use nodus_mastodon::HttpInstance;
 #[derive(Debug, Clone)]
 pub struct Client {
     instance: HttpInstance,
+    host: String,
 }
 
 impl Client {
@@ -27,9 +28,19 @@ impl Client {
     /// the app's sign-in screen; `Instance::parse` supplies `https://` when they omitted it.
     pub fn new(host: &str, token: &str) -> Result<Self, String> {
         let instance = Instance::parse(host).map_err(|error| error.to_string())?;
+        crate::validate::validate_instance_url(&instance.base)?;
+        let normalized = crate::validate::normalized_host(&instance.base);
+        let http = crate::validate::public_http_client(std::time::Duration::from_secs(20))
+            .map_err(|error| error.to_string())?;
         Ok(Self {
-            instance: HttpInstance::new(&instance, token.to_owned()),
+            instance: HttpInstance::with_client(&instance, token.to_owned(), http),
+            host: normalized,
         })
+    }
+
+    /// Normalized `host` or `host:port` for this client.
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
     /// Prove the token and learn which account it belongs to.

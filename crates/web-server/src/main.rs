@@ -22,6 +22,7 @@ mod rows;
 mod runtime;
 mod session;
 mod translate;
+mod validate;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -126,7 +127,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dist: PathBuf::from(&asset_dir),
     });
 
-    let router = Router::new()
+    let router = router(app);
+
+    let address: SocketAddr = listen.parse()?;
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    tracing::info!(%address, "listening");
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown())
+        .await?;
+    Ok(())
+}
+
+fn router(app: Arc<App>) -> Router {
+    Router::new()
         .route("/healthz", get(healthz))
         .route("/api/session", get(whoami).post(sign_in).delete(sign_out))
         .route("/public-api/status/{host}/{id}", get(public_api::status))
@@ -159,15 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(|state, headers| public_feed(state, headers, false)),
         )
         .fallback(shell)
-        .with_state(app);
-
-    let address: SocketAddr = listen.parse()?;
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(%address, "listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown())
-        .await?;
-    Ok(())
+        .with_state(app)
 }
 
 async fn shutdown() {
@@ -225,7 +230,7 @@ async fn sign_in(State(app): State<Arc<App>>, Json(body): Json<Credentials>) -> 
         Ok(account) => {
             let admin = client.is_staff().await;
             let id = app.sessions.insert(Session {
-                host: body.host,
+                host: client.host().to_owned(),
                 token: body.token,
                 account_id: account.id.clone(),
                 acct: account.acct.clone(),
@@ -286,7 +291,7 @@ async fn public_thread(app: &App, path: &str) -> Option<String> {
     let Route::Thread { host, id } = Route::from_path(path) else {
         return None;
     };
-    if host.is_empty() {
+    if !validate::host_valid(&host) || !validate::id_valid(&id) {
         return None;
     }
     let client = match Client::new(&host, "") {
@@ -325,7 +330,7 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
         return None;
     };
     let (host, id) = rest.split_once('/')?;
-    if host.is_empty() || id.is_empty() {
+    if !validate::host_valid(host) || !validate::id_valid(id) {
         return None;
     }
     let client = Client::new(host, "").ok()?;
@@ -431,6 +436,10 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::http::StatusCode;
+
     use super::*;
 
     fn test_app(host: &str) -> (Arc<App>, String, String) {
@@ -578,6 +587,215 @@ mod tests {
                     "non-staff response received leaked moderation/admin links"
                 );
             }
+        }
+    }
+    async fn spawn_test_server_with_app() -> (String, Arc<App>) {
+        let app = Arc::new(App {
+            sessions: Arc::new(Sessions::load(None)),
+            assets: std::sync::RwLock::new(Assets::discover(&PathBuf::from("/nonexistent"))),
+            dist: PathBuf::from("/nonexistent"),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app_for_server = Arc::clone(&app);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router(app_for_server)).await;
+        });
+        (format!("http://{addr}"), app)
+    }
+
+    async fn spawn_test_server() -> String {
+        spawn_test_server_with_app().await.0
+    }
+
+    async fn raw_http_status(addr: &str, path: &str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let host_port = addr.strip_prefix("http://").unwrap_or(addr);
+        let mut stream = tokio::net::TcpStream::connect(host_port).await.unwrap();
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        let status_line = text.lines().next().unwrap();
+        status_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    async fn spawn_canary_listener() -> (u16, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = Arc::clone(&hits);
+        tokio::spawn(async move {
+            while let Ok((_stream, _)) = listener.accept().await {
+                hits_clone.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        (port, hits)
+    }
+
+    #[test]
+    fn client_rejects_ssrf_targets() {
+        for bad in [
+            "127.0.0.1:8080",
+            "http://localhost:3000",
+            "10.0.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "http://127.0.0.1:8080",
+            "https://[::1]:8080",
+            "https://user:pass@mastodon.social",
+            "https://mastodon.social/extra/path",
+        ] {
+            assert!(
+                Client::new(bad, "").is_err(),
+                "expected Client::new({bad:?}) to fail"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn public_api_rejects_ssrf_and_path_traversal() {
+        let base = spawn_test_server().await;
+        let (canary_port, canary_hits) = spawn_canary_listener().await;
+        let client = reqwest::Client::new();
+
+        // SSRF attempts against loopback/private/metadata targets.
+        for path in [
+            format!("/public-api/status/127.0.0.1:{canary_port}/1"),
+            format!("/public-api/status/127.0.0.1:{canary_port}/1/context"),
+            format!("/public-api/account/127.0.0.1:{canary_port}/1"),
+            format!("/public-api/account/127.0.0.1:{canary_port}/1/statuses"),
+            format!("/public-api/account/127.0.0.1:{canary_port}/1/followers"),
+            format!("/public-api/account/127.0.0.1:{canary_port}/1/following"),
+            "/public-api/status/169.254.169.254/latest".to_owned(),
+            "/public-api/account/10.0.0.1/1".to_owned(),
+            "/public-api/status/192.168.1.1/1".to_owned(),
+            "/public-api/status/foo.localhost/1".to_owned(),
+        ] {
+            let resp = client.get(format!("{base}{path}")).send().await.unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "path={path}");
+        }
+        assert_eq!(canary_hits.load(Ordering::SeqCst), 0);
+
+        // Path traversal and query-injection attempts via {id} and max_id.
+        for path in [
+            "/public-api/status/mastodon.social/..%2f..%2fapi%2fv1%2finstance",
+            "/public-api/status/mastodon.social/..%2f..%2fapi%2fv1%2finstance/context",
+            "/public-api/account/mastodon.social/..%2fadmin",
+            "/public-api/account/mastodon.social/..%2fadmin/statuses",
+            "/public-api/account/mastodon.social/..%2fadmin/followers",
+            "/public-api/account/mastodon.social/..%2fadmin/following",
+            "/public-api/account/mastodon.social/1/statuses?max_id=1%26admin=true",
+            "/public-api/account/mastodon.social/1/statuses?max_id=..",
+        ] {
+            let resp = client.get(format!("{base}{path}")).send().await.unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "path={path}");
+        }
+
+        // Literal `.` / `..` segments sent without client-side URL normalization (`curl --path-as-is`).
+        for path in [
+            "/public-api/status/mastodon.social/..",
+            "/public-api/status/mastodon.social/.",
+            "/public-api/status/mastodon.social/%2e%2e",
+            "/public-api/status/mastodon.social/%2e",
+        ] {
+            assert_eq!(raw_http_status(&base, path).await, 400, "path={path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_in_and_public_pages_block_ssrf_and_get_sign_in_is_inert() {
+        let (base, app) = spawn_test_server_with_app().await;
+        let (canary_port, canary_hits) = spawn_canary_listener().await;
+        let client = reqwest::Client::new();
+
+        // GET /sign-in must never perform outbound requests or set session cookies.
+        let get_sign_in = client
+            .get(format!("{base}/sign-in?host=127.0.0.1:{canary_port}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(get_sign_in.status(), StatusCode::OK);
+        assert!(get_sign_in.headers().get("set-cookie").is_none());
+
+        // GET /api/session must not sign in.
+        let get_session = client
+            .get(format!("{base}/api/session"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(get_session.status(), StatusCode::UNAUTHORIZED);
+
+        // POST /api/session must reject SSRF hosts without connecting.
+        let post_ssrf = client
+            .post(format!("{base}/api/session"))
+            .json(&serde_json::json!({
+                "host": format!("127.0.0.1:{canary_port}"),
+                "token": "secret",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(post_ssrf.status(), StatusCode::BAD_REQUEST);
+
+        // SSR public_thread / public_account must reject SSRF hosts and traversal IDs without connecting.
+        assert!(
+            public_thread(&app, &format!("/status/127.0.0.1:{canary_port}/1"))
+                .await
+                .is_none()
+        );
+        assert!(
+            public_thread(&app, "/status/mastodon.social/1/../../admin")
+                .await
+                .is_none()
+        );
+        assert!(
+            public_account(&app, &format!("/accounts/127.0.0.1:{canary_port}/1"))
+                .await
+                .is_none()
+        );
+        assert!(
+            public_account(&app, "/accounts/mastodon.social/1/../../admin")
+                .await
+                .is_none()
+        );
+
+        assert_eq!(
+            canary_hits.load(Ordering::SeqCst),
+            0,
+            "server must not connect to loopback canary"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_path_traversal_is_blocked_with_bad_request() {
+        let (base, app) = spawn_test_server_with_app().await;
+        let session_id = app.sessions.insert(crate::session::Session {
+            host: "mastodon.social".to_owned(),
+            token: "super-secret-bearer-token".to_owned(),
+            account_id: "42".to_owned(),
+            acct: "alice@mastodon.social".to_owned(),
+            admin: Some(false),
+        });
+        let client = reqwest::Client::new();
+        for path in [
+            "/public-api/status/mastodon.social/..%2f..%2fapi%2fv1%2fadmin%2faccounts",
+            "/public-api/account/mastodon.social/..%2f..%2fapi%2fv1%2faccounts%2fverify_credentials",
+            "/public-api/account/mastodon.social/1/statuses?max_id=1%26admin=true",
+        ] {
+            let resp = client
+                .get(format!("{base}{path}"))
+                .header("cookie", format!("{}={session_id}", crate::session::COOKIE))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "path={path}");
         }
     }
 }
