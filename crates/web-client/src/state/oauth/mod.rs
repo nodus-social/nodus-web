@@ -46,6 +46,17 @@ pub(super) const SCOPES: &str = "read write follow";
 )]
 pub(super) const ADMIN_SCOPES: &str = "read write follow admin:read admin:write";
 
+/// The scopes requested for an OAuth [`pending::Purpose`].
+///
+/// Keeping this mapping in one place ensures app registration, the authorization
+/// redirect, and the code-to-token exchange always agree on the scopes.
+pub(super) const fn scopes_for(purpose: pending::Purpose) -> &'static str {
+    match purpose {
+        pending::Purpose::SignIn => SCOPES,
+        pending::Purpose::Admin => ADMIN_SCOPES,
+    }
+}
+
 /// Where the instance sends the browser back.
 ///
 /// The same string is registered as `redirect_uris` and echoed to `/oauth/token`:
@@ -64,7 +75,7 @@ pub(crate) const CALLBACK_PATH: &str = crate::shared::router::CALLBACK_PATH;
 /// instance refusing app registration, Web Crypto unavailable, or `sessionStorage`
 /// blocked. Nothing is stored and no navigation happens when this returns `Err`.
 pub async fn begin(host: &str) -> Result<(), String> {
-    begin_with(host, SCOPES, pending::Purpose::SignIn).await
+    begin_with(host, pending::Purpose::SignIn).await
 }
 
 /// Starts the admin grant: same flow, wider scopes, different purpose.
@@ -79,15 +90,12 @@ pub async fn begin(host: &str) -> Result<(), String> {
     )
 )]
 pub async fn begin_admin(host: &str) -> Result<(), String> {
-    begin_with(host, ADMIN_SCOPES, pending::Purpose::Admin).await
+    begin_with(host, pending::Purpose::Admin).await
 }
 
 /// The shared body of both flows.
-async fn begin_with(
-    host: &str,
-    scopes: &'static str,
-    purpose: pending::Purpose,
-) -> Result<(), String> {
+async fn begin_with(host: &str, purpose: pending::Purpose) -> Result<(), String> {
+    let scopes = scopes_for(purpose);
     let host = normalise_host(host)?;
     let origin = origin()?;
     let redirect_uri = format!("{origin}{CALLBACK_PATH}");
@@ -172,7 +180,7 @@ pub async fn finish(search: &str) -> Result<Finished, String> {
         );
     }
 
-    let token = api::exchange_code(&record, &code).await?;
+    let token = api::exchange_code(&record, &code, scopes_for(record.purpose)).await?;
     Ok(Finished {
         host: record.host,
         token,
@@ -263,4 +271,36 @@ fn origin() -> Result<String, String> {
 /// The browser window, or a message the user can act on.
 fn window() -> Result<web_sys::Window, String> {
     web_sys::window().ok_or_else(|| "Sign-in needs a browser window.".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_purpose_maps_to_admin_scopes() {
+        assert_eq!(scopes_for(Purpose::SignIn), SCOPES);
+        assert_eq!(scopes_for(Purpose::Admin), ADMIN_SCOPES);
+        assert!(scopes_for(Purpose::Admin).contains("admin:read"));
+        assert!(scopes_for(Purpose::Admin).contains("admin:write"));
+    }
+
+    #[test]
+    fn authorize_url_carries_admin_scopes_for_admin_purpose() {
+        let url = authorize_url(
+            "mastodon.example",
+            "client-id",
+            "https://nodus.example/oauth/callback",
+            "challenge",
+            "state",
+            scopes_for(Purpose::Admin),
+        )
+        .unwrap();
+        let parsed = Url::parse(&url).unwrap();
+        let scope = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "scope")
+            .map(|(_, value)| value.into_owned());
+        assert_eq!(scope.as_deref(), Some(ADMIN_SCOPES));
+    }
 }
