@@ -72,7 +72,7 @@ pub fn SearchScreen(runtime: Arc<dyn Runtime>, card: CardRenderer) -> impl IntoV
         }
     });
 
-    if !seed.trim().is_empty() {
+    if !seed.trim().is_empty() && runtime.page(&search(&seed)).is_none() {
         ask.run(());
     }
 
@@ -102,4 +102,81 @@ pub fn SearchScreen(runtime: Arc<dyn Runtime>, card: CardRenderer) -> impl IntoV
 
 fn search(query: &str) -> PageKind {
     PageKind::Search(query.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use leptos::prelude::{Callback, IntoAny as _, Owner, RenderHtml as _, Signal};
+    use nodus_client_core::model::{SearchResults, Status, Tag};
+    use nodus_state::page::{PageEntry, PageItems, PageKind};
+
+    use super::{SearchScreen, SearchScreenProps};
+    use crate::components::CardRenderer;
+    use crate::route::{Runtime, TimelineKind, TimelineReply};
+
+    struct PrefetchedSearchRuntime;
+
+    impl Runtime for PrefetchedSearchRuntime {
+        fn revision(&self) -> Signal<u64> {
+            Signal::derive(|| 0)
+        }
+
+        fn now_millis(&self) -> f64 {
+            0.0
+        }
+
+        fn timeline(&self, _kind: &TimelineKind) -> TimelineReply {
+            TimelineReply::unavailable()
+        }
+
+        fn load_timeline(
+            &self,
+            _kind: TimelineKind,
+            _cursor: Option<String>,
+            _done: Callback<Result<(), String>>,
+        ) {
+        }
+
+        fn page(&self, kind: &PageKind) -> Option<PageEntry> {
+            match kind {
+                PageKind::Search(q) if q == "#rust" => Some(PageEntry {
+                    items: PageItems::Search(Box::new(SearchResults {
+                        accounts: Vec::new(),
+                        statuses: Vec::new(),
+                        hashtags: vec![Tag {
+                            name: "rust".to_owned(),
+                            url: "https://example.org/tags/rust".to_owned(),
+                            history: Vec::new(),
+                        }],
+                    })),
+                    cursor: None,
+                    fetched_at: None,
+                }),
+                _ => None,
+            }
+        }
+
+        fn query(&self, key: &str) -> Option<String> {
+            (key == "q").then(|| "#rust".to_owned())
+        }
+    }
+
+    #[test]
+    fn prefetched_search_does_not_fail_on_ssr() {
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        let html = Owner::new().with(|| {
+            SearchScreen(SearchScreenProps {
+                runtime: Arc::new(PrefetchedSearchRuntime),
+                card,
+            })
+            .to_html()
+        });
+        assert!(html.contains("#rust"), "{html}");
+        assert!(
+            !html.contains("This page is not available without the app."),
+            "{html}"
+        );
+    }
 }

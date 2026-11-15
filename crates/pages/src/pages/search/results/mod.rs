@@ -79,7 +79,21 @@ pub fn Results(
             <h2 class="text-sm font-semibold opacity-70">"Hashtags"</h2>
             <div class="flex flex-wrap gap-2">
                 <For each=move || tags.get() key=|tag| tag.name.clone() let:tag>
-                    <span class="badge badge-outline">{format!("#{}", tag.name)}</span>
+                    {
+                        let href = format!(
+                            "/search?q={}",
+                            nodus_ui::html::encode_query(&format!("#{}", tag.name)),
+                        );
+                        view! {
+                            <a
+                                class="badge badge-outline transition-colors hover:badge-primary"
+                                href=href
+                                title="Search this hashtag"
+                            >
+                                {format!("#{}", tag.name)}
+                            </a>
+                        }
+                    }
                 </For>
             </div>
         </Show>
@@ -134,4 +148,37 @@ fn read_only_card(status: Status, age: String) -> AnyView {
         extra: None,
     })
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _, Signal};
+    use nodus_client_core::model::Tag;
+
+    use super::{Results, ResultsProps};
+
+    #[test]
+    fn hashtag_results_render_as_search_links() {
+        let html = Owner::new().with(|| {
+            Results(ResultsProps {
+                accounts: Signal::derive(Vec::new),
+                statuses: Signal::derive(Vec::new),
+                tags: Signal::derive(|| {
+                    vec![Tag {
+                        name: "rust".to_owned(),
+                        url: "https://example.org/tags/rust".to_owned(),
+                        history: Vec::new(),
+                    }]
+                }),
+                searched: Signal::derive(|| true),
+                age_of: None,
+                card: None,
+            })
+            .to_html()
+        });
+
+        assert!(html.contains("<a "), "{html}");
+        assert!(html.contains("href=\"/search?q=%23rust\""), "{html}");
+        assert!(html.contains("#rust</a>"), "{html}");
+    }
 }

@@ -391,20 +391,7 @@ fn StatusChips(
 
 /// Percent-encodes what a query string cannot carry, so `#rust` is not read as a fragment.
 fn encode(text: &str) -> String {
-    use std::fmt::Write as _;
-
-    let mut encoded = String::with_capacity(text.len() + 4);
-    for byte in text.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(char::from(byte));
-            }
-            _ => {
-                let _ = write!(encoded, "%{byte:02X}");
-            }
-        }
-    }
-    encoded
+    crate::html::encode_query(text)
 }
 
 /// A poll: one row per option and the button that sends the pick.

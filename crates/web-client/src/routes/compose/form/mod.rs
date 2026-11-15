@@ -60,7 +60,7 @@ pub fn ComposeForm(initial: Option<Status>) -> impl IntoView {
     let from_handoff = handed.is_some();
     let start = Initial::of(initial.as_ref());
     let (handed_text, reply_to, handed_media) = handed.map_or_else(
-        || (start.text, None, Vec::new()),
+        || (start.text, None, start.media),
         |handed| (handed.text, handed.reply_to, handed.media),
     );
     let (text, set_text) = signal(handed_text);
@@ -76,7 +76,7 @@ pub fn ComposeForm(initial: Option<Status>) -> impl IntoView {
     let emoji_query = RwSignal::new(None); // no hint list here; the token rule still applies
     let (visibility, set_visibility) = signal(start.visibility);
     let (spoiler, set_spoiler) = signal(start.spoiler);
-    let (language, set_language) = signal(String::new()); // empty: let the instance guess
+    let (language, set_language) = signal(start.language); // empty: let the instance guess
     let (warning_open, set_warning_open) = signal(start.warning_open);
     let (sensitive, set_sensitive) = signal(start.sensitive);
     // Stored rather than captured: the submit handler and the button label both read it,

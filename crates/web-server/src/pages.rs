@@ -82,6 +82,15 @@ pub(crate) fn render_thread(
     status: &nodus_client_core::model::Status,
     context: &nodus_client_core::model::Context,
 ) -> String {
+    let mut status = status.clone();
+    nodus_ui::html::sanitize_status(&mut status);
+    let mut context = context.clone();
+    for ancestor in &mut context.ancestors {
+        nodus_ui::html::sanitize_status(ancestor);
+    }
+    for descendant in &mut context.descendants {
+        nodus_ui::html::sanitize_status(descendant);
+    }
     let path = format!("/status/{}", status.id);
     let runtime = StaticRuntime::thread(status.clone(), context.clone());
     let inner = painted(|| {
@@ -96,7 +105,20 @@ pub(crate) fn render_thread(
             banner: None,
         })
     });
-    document::page_of(assets, acct, staff, &path, "Thread", &inner, None)
+    let island = serde_json::json!({
+        "kind": "thread",
+        "status": status,
+        "context": context,
+    });
+    document::page_of(
+        assets,
+        acct,
+        staff,
+        &path,
+        "Thread",
+        &inner,
+        Some(island.to_string()),
+    )
 }
 
 pub(crate) async fn read_page(
@@ -116,49 +138,15 @@ pub(crate) async fn read_page(
         ScreenKind::Notifications => client
             .notifications(PAGE)
             .await
-            .map(|mut items| {
-                for item in &mut items {
-                    nodus_ui::html::sanitize_notification(item);
-                }
-                render_route(
-                    assets,
-                    acct,
-                    staff,
-                    path,
-                    screen.title,
-                    Route::Notifications,
-                    PageKind::Notifications,
-                    PageEntry {
-                        items: PageItems::Notifications(items.clone()),
-                        cursor: None,
-                        fetched_at: None,
-                    },
-                    serde_json::json!({ "kind": "notifications", "items": items, "cursor": null }),
-                )
+            .map(|(items, cursor)| {
+                render_notifications(assets, acct, staff, path, screen.title, items, cursor)
             })
             .ok(),
         ScreenKind::Messages => client
             .conversations(PAGE)
             .await
-            .map(|mut items| {
-                for item in &mut items {
-                    nodus_ui::html::sanitize_conversation(item);
-                }
-                render_route(
-                    assets,
-                    acct,
-                    staff,
-                    path,
-                    screen.title,
-                    Route::Messages,
-                    PageKind::Conversations,
-                    PageEntry {
-                        items: PageItems::Conversations(items.clone()),
-                        cursor: None,
-                        fetched_at: None,
-                    },
-                    serde_json::json!({ "kind": "conversations", "items": items, "cursor": null }),
-                )
+            .map(|(items, cursor)| {
+                render_conversations(assets, acct, staff, path, screen.title, items, cursor)
             })
             .ok(),
         ScreenKind::Saved { bookmarks } => {
@@ -272,7 +260,7 @@ pub fn render_account(
     let runtime = StaticRuntime::profile(
         account.clone(),
         None,
-        statuses,
+        statuses.clone(),
         cursor.map(std::borrow::ToOwned::to_owned),
     );
     let painted = painted(|| {
@@ -284,7 +272,89 @@ pub fn render_account(
             banner: None,
         })
     });
-    document::page_of(assets, acct, staff, &path, &title, &painted, None)
+    let island = serde_json::json!({
+        "kind": "account",
+        "account": account,
+        "statuses": statuses,
+        "cursor": cursor,
+    });
+    document::page_of(
+        assets,
+        acct,
+        staff,
+        &path,
+        &title,
+        &painted,
+        Some(island.to_string()),
+    )
+}
+
+fn render_notifications(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    title: &str,
+    mut items: Vec<nodus_client_core::model::Notification>,
+    cursor: Option<String>,
+) -> String {
+    for item in &mut items {
+        nodus_ui::html::sanitize_notification(item);
+    }
+    let island = serde_json::json!({
+        "kind": "notifications",
+        "items": items,
+        "cursor": cursor,
+    });
+    render_route(
+        assets,
+        acct,
+        staff,
+        path,
+        title,
+        Route::Notifications,
+        PageKind::Notifications,
+        PageEntry {
+            items: PageItems::Notifications(items),
+            cursor,
+            fetched_at: None,
+        },
+        island,
+    )
+}
+
+fn render_conversations(
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    title: &str,
+    mut items: Vec<nodus_client_core::model::Conversation>,
+    cursor: Option<String>,
+) -> String {
+    for item in &mut items {
+        nodus_ui::html::sanitize_conversation(item);
+    }
+    let island = serde_json::json!({
+        "kind": "conversations",
+        "items": items,
+        "cursor": cursor,
+    });
+    render_route(
+        assets,
+        acct,
+        staff,
+        path,
+        title,
+        Route::Messages,
+        PageKind::Conversations,
+        PageEntry {
+            items: PageItems::Conversations(items),
+            cursor,
+            fetched_at: None,
+        },
+        island,
+    )
 }
 
 pub(crate) async fn read_entity(
@@ -660,5 +730,144 @@ mod painting {
             !public_thread_html.contains("steal()"),
             "{public_thread_html}"
         );
+    }
+
+    #[test]
+    fn render_thread_and_render_account_emit_nodus_page_islands() {
+        let assets = crate::document::Assets {
+            script: "/nodus-web.js".to_owned(),
+            wasm: "/nodus-web_bg.wasm".to_owned(),
+            stylesheet: None,
+            stylesheet_css: None,
+        };
+        let account = nodus_client_core::model::Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: "<p>bio</p><img src=x onerror=\"alert(1)\">".to_owned(),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+        };
+        let status = nodus_client_core::model::Status {
+            id: "10".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: "<p>hello</p><script>evil()</script>".to_owned(),
+            visibility: nodus_client_core::model::Visibility::Public,
+            account: account.clone(),
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: Vec::new(),
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        };
+        let context = nodus_client_core::model::Context::default();
+
+        let thread_html = super::render_thread(&assets, "me@example.org", false, &status, &context);
+        let (_, after_thread) = thread_html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("thread page must include #nodus-page island");
+        let (thread_json, _) = after_thread
+            .split_once("</script>")
+            .expect("closing script");
+        let thread_island: serde_json::Value =
+            serde_json::from_str(thread_json).expect("valid thread island json");
+        assert_eq!(thread_island["kind"], "thread");
+        assert_eq!(thread_island["status"]["id"], "10");
+        assert!(!thread_json.contains("<script"), "{thread_json}");
+        assert!(!thread_json.contains("evil()"), "{thread_json}");
+
+        let account_html = super::render_account(
+            &assets,
+            "me@example.org",
+            false,
+            &account,
+            std::slice::from_ref(&status),
+            Some("cursor-99"),
+        );
+        let (_, after_account) = account_html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("account page must include #nodus-page island");
+        let (account_json, _) = after_account
+            .split_once("</script>")
+            .expect("closing script");
+        let account_island: serde_json::Value =
+            serde_json::from_str(account_json).expect("valid account island json");
+        assert_eq!(account_island["kind"], "account");
+        assert_eq!(account_island["account"]["id"], "1");
+        assert_eq!(account_island["cursor"], "cursor-99");
+        assert_eq!(account_island["statuses"][0]["id"], "10");
+        assert!(!account_json.contains("onerror"), "{account_json}");
+
+        let notifications_html = super::render_notifications(
+            &assets,
+            "me@example.org",
+            false,
+            "/notifications",
+            "Notifications",
+            vec![nodus_client_core::model::Notification {
+                id: "n1".to_owned(),
+                kind: nodus_client_core::model::NotificationKind::Favourite,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+                account: account.clone(),
+                status: Some(status),
+            }],
+            Some("notif-next-42".to_owned()),
+        );
+        let (_, after_notif) = notifications_html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("notifications page must include #nodus-page island");
+        let (notif_json, _) = after_notif.split_once("</script>").expect("closing script");
+        let notif_island: serde_json::Value =
+            serde_json::from_str(notif_json).expect("valid notifications island json");
+        assert_eq!(notif_island["kind"], "notifications");
+        assert_eq!(notif_island["cursor"], "notif-next-42");
+
+        let conversations_html = super::render_conversations(
+            &assets,
+            "me@example.org",
+            false,
+            "/messages",
+            "Messages",
+            vec![nodus_client_core::model::Conversation {
+                id: "c1".to_owned(),
+                unread: true,
+                accounts: vec![account],
+                last_status: None,
+            }],
+            Some("conv-next-77".to_owned()),
+        );
+        let (_, after_conv) = conversations_html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("conversations page must include #nodus-page island");
+        let (conv_json, _) = after_conv.split_once("</script>").expect("closing script");
+        let conv_island: serde_json::Value =
+            serde_json::from_str(conv_json).expect("valid conversations island json");
+        assert_eq!(conv_island["kind"], "conversations");
+        assert_eq!(conv_island["cursor"], "conv-next-77");
     }
 }

@@ -196,7 +196,7 @@ impl Runtime for ClientRuntime {
     fn feed_settings(&self) -> Option<Callback<()>> {
         Some(Callback::new(|()| {
             crate::router::navigate(crate::router::Route::Settings(
-                crate::router::SECTION_DEFAULT.to_owned(),
+                SettingsSection::Nodus.slug().to_owned(),
             ));
         }))
     }
@@ -627,8 +627,20 @@ impl Runtime for ClientRuntime {
         })
     }
 
+    fn status(&self, id: &str) -> Option<Status> {
+        with_sdk(|sdk| sdk.read_status(id))
+    }
+
+    fn context(&self, id: &str) -> Option<Context> {
+        crate::state::bridge::seed::thread_context(id)
+    }
+
+    fn account(&self, id: &str) -> Option<Account> {
+        with_sdk(|sdk| sdk.read_account(id))
+    }
+
     fn navigate(&self, path: String) {
-        crate::router::navigate(crate::router::Route::from_path(&path));
+        crate::router::navigate_href(&path);
     }
 
     fn infinite_more(&self, active: Signal<bool>, on_load: Callback<()>) -> Option<ChildrenFn> {

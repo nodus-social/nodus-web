@@ -7,7 +7,9 @@
 //! answers, the month grid, and the label the button shows all depend on today's date here.
 
 use leptos::prelude::*;
-use nodus_pages::pages::compose::inline::schedule::{QuickTime, SchedulePanel as Panel};
+use nodus_pages::pages::compose::inline::schedule::{
+    QuickTime, SchedulePanel as Panel, leading_blank_days, parse_ymd,
+};
 
 use crate::state::clock_format;
 
@@ -32,8 +34,7 @@ pub(super) fn SchedulePanel(
         let (year, month) = shown.get();
         let month = i32::try_from(month).unwrap_or(0);
         let first = js_sys::Date::new_with_year_month_day(year, month, 1);
-        let mut cells: Vec<Option<u32>> =
-            vec![None; usize::try_from(first.get_day().min(6)).unwrap_or(0)];
+        let mut cells: Vec<Option<u32>> = vec![None; leading_blank_days(first.get_day())];
         cells.extend((1..=last_day(year, month)).map(Some));
         cells
     });
@@ -157,11 +158,14 @@ fn day(offset: i64) -> (String, String) {
 
 /// "Mon 10" for a stored `YYYY-MM-DD`, when this browser can name the weekday.
 fn weekday_label(value: &str) -> Option<String> {
-    let date = js_sys::Date::parse(value);
-    if date.is_nan() {
+    let (year, month, day) = parse_ymd(value)?;
+    let date = js_sys::Date::new_with_year_month_day(year, month, day);
+    if date.get_full_year() != year
+        || i32::try_from(date.get_month()).ok() != Some(month)
+        || i32::try_from(date.get_date()).ok() != Some(day)
+    {
         return None;
     }
-    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(date));
     let weekday = date.to_locale_string(
         "en",
         &wasm_bindgen::JsValue::from_str("{\"weekday\":\"short\"}"),

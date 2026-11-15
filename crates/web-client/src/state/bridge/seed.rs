@@ -8,9 +8,9 @@
 //! Nothing here is required for the app to work — a bundle served without the island (the
 //! static deployment, a reload of a client-side route) simply starts cold, as before.
 
-use nodus_client_core::model::{List, SearchResults, Status};
-use nodus_client_sdk::Timeline;
+use nodus_client_core::model::{Account, Context, List, SearchResults, Status};
 use nodus_client_sdk::page::{PageItems, PageKind};
+use nodus_client_sdk::{Command, Timeline};
 
 use super::{handle, with_sdk};
 
@@ -25,6 +25,10 @@ thread_local! {
     /// replaces the node it lives in), but the SDK is installed during `bridge::init`,
     /// which runs later — so the parsed page waits here rather than panicking.
     static PENDING: std::cell::RefCell<Option<Island>> = const { std::cell::RefCell::new(None) };
+
+    /// Thread context painted into a `/status/{id}` island, keyed by the focal status id.
+    static THREAD_CONTEXT: std::cell::RefCell<Option<(String, Context)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// What the server writes into `#nodus-page`.
@@ -44,6 +48,15 @@ struct Island {
     /// The question, when the island is a search answer.
     #[serde(default)]
     query: Option<String>,
+    /// Focal status when the island carries a `/status/{id}` thread.
+    #[serde(default)]
+    status: Option<Status>,
+    /// Ancestors and descendants when the island carries a `/status/{id}` thread.
+    #[serde(default)]
+    context: Option<Context>,
+    /// Account when the island carries an `/accounts/{id}` profile.
+    #[serde(default)]
+    account: Option<Account>,
 }
 
 /// The page the island carries, when it is one of the lists a screen reads from the store.
@@ -129,6 +142,10 @@ pub fn install() {
     PAINTED.with(|painted| *painted.borrow_mut() = Some(island.clone()));
     let usable = if island.kind.is_empty() {
         !island.statuses.is_empty() && timeline_for(&island.which).is_some()
+    } else if island.kind == "thread" {
+        island.status.is_some()
+    } else if island.kind == "account" {
+        island.account.is_some()
     } else {
         page_of(&island).is_some()
     };
@@ -163,6 +180,17 @@ pub fn adopt_pending() {
     if let Some(island) = pending {
         adopt(island);
     }
+}
+
+/// The thread context painted into a `/status/{id}` island, when this document painted `id`.
+#[must_use]
+pub fn thread_context(id: &str) -> Option<Context> {
+    THREAD_CONTEXT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(focal, _)| focal == id)
+            .map(|(_, context)| context.clone())
+    })
 }
 
 /// The store's name for the page the server painted.
@@ -208,6 +236,43 @@ fn sanitize_page_items(items: &mut PageItems) {
 }
 
 fn adopt(mut island: Island) {
+    if island.kind == "thread" {
+        if let Some(mut status) = island.status.take() {
+            nodus_ui::html::sanitize_status(&mut status);
+            let mut context = island.context.take().unwrap_or_default();
+            for ancestor in &mut context.ancestors {
+                nodus_ui::html::sanitize_status(ancestor);
+            }
+            for descendant in &mut context.descendants {
+                nodus_ui::html::sanitize_status(descendant);
+            }
+            let id = status.id.clone();
+            let mut statuses =
+                Vec::with_capacity(1 + context.ancestors.len() + context.descendants.len());
+            statuses.extend(context.ancestors.iter().cloned());
+            statuses.push(status);
+            statuses.extend(context.descendants.iter().cloned());
+            THREAD_CONTEXT.with(|slot| *slot.borrow_mut() = Some((id, context)));
+            with_sdk(|sdk| sdk.dispatch(Command::StatusesUpserted { statuses }));
+        }
+        return;
+    }
+    if island.kind == "account" {
+        if let Some(mut account) = island.account.take() {
+            nodus_ui::html::sanitize_account(&mut account);
+            let id = account.id.clone();
+            for status in &mut island.statuses {
+                nodus_ui::html::sanitize_status(status);
+            }
+            with_sdk(|sdk| {
+                sdk.dispatch(Command::AccountsUpserted {
+                    accounts: vec![account],
+                });
+                sdk.adopt_page(Timeline::Account(id), None, island.statuses, island.cursor);
+            });
+        }
+        return;
+    }
     if !island.kind.is_empty() {
         if let Some((kind, mut items)) = page_of(&island) {
             sanitize_page_items(&mut items);

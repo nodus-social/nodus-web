@@ -49,10 +49,13 @@ pub fn when_visible(sentinel: NodeRef<html::Div>, fire: impl Fn() + 'static) {
     };
 
     observer.observe(&element);
-    // Held for the lifetime of the scope: dropping the closure would leave the observer
-    // with a dead callback, and dropping the observer would stop the list from growing.
+    // Held for the lifetime of the scope: disconnecting first ensures the callback cannot
+    // fire after it is dropped when the owner cleans up.
+    let held = leptos::prelude::StoredValue::new_local(Some(callback));
     on_cleanup(move || {
         observer.disconnect();
+        held.update_value(|slot| {
+            slot.take();
+        });
     });
-    std::mem::forget(callback);
 }
