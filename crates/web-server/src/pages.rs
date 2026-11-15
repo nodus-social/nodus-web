@@ -105,7 +105,10 @@ pub(crate) async fn read_page(
         ScreenKind::Notifications => client
             .notifications(PAGE)
             .await
-            .map(|items| {
+            .map(|mut items| {
+                for item in &mut items {
+                    nodus_ui::html::sanitize_notification(item);
+                }
                 render_route(
                     assets,
                     acct,
@@ -125,7 +128,10 @@ pub(crate) async fn read_page(
         ScreenKind::Messages => client
             .conversations(PAGE)
             .await
-            .map(|items| {
+            .map(|mut items| {
+                for item in &mut items {
+                    nodus_ui::html::sanitize_conversation(item);
+                }
                 render_route(
                     assets,
                     acct,
@@ -193,7 +199,10 @@ pub(crate) async fn read_page(
         ScreenKind::Directory => client
             .directory(true)
             .await
-            .map(|items| {
+            .map(|mut items| {
+                for account in &mut items {
+                    nodus_ui::html::sanitize_account(account);
+                }
                 render_route(
                     assets,
                     acct,
@@ -229,12 +238,22 @@ pub fn render_account(
     statuses: &[nodus_client_core::model::Status],
     cursor: Option<&str>,
 ) -> String {
+    let mut account = account.clone();
+    nodus_ui::html::sanitize_account(&mut account);
+    let statuses: Vec<_> = statuses
+        .iter()
+        .cloned()
+        .map(|mut status| {
+            nodus_ui::html::sanitize_status(&mut status);
+            status
+        })
+        .collect();
     let path = format!("/accounts/{}", account.id);
     let title = format!("{} · {acct}", account.acct);
     let runtime = StaticRuntime::profile(
         account.clone(),
         None,
-        statuses.to_vec(),
+        statuses,
         cursor.map(std::borrow::ToOwned::to_owned),
     );
     let painted = painted(|| {
@@ -288,7 +307,10 @@ pub(crate) async fn read_saved(
 ) -> Option<String> {
     use nodus_pages::pages::saved::shelf::Shelf;
 
-    let (statuses, cursor) = client.saved(bookmarks, PAGE).await.ok()?;
+    let (mut statuses, cursor) = client.saved(bookmarks, PAGE).await.ok()?;
+    for status in &mut statuses {
+        nodus_ui::html::sanitize_status(status);
+    }
     let shelf = if bookmarks {
         Shelf::Bookmarks
     } else {
@@ -338,7 +360,8 @@ pub(crate) async fn read_search(
     if query.trim().is_empty() {
         return None;
     }
-    let results = client.search(&query).await.ok()?;
+    let mut results = client.search(&query).await.ok()?;
+    nodus_ui::html::sanitize_search_results(&mut results);
     let runtime = StaticRuntime::pages_with_query(
         [(
             PageKind::Search(query.clone()),
@@ -412,9 +435,16 @@ pub fn render_public_thread(
     assets: &document::Assets,
     host: &str,
     id: &str,
-    status: nodus_client_core::model::Status,
-    context: nodus_client_core::model::Context,
+    mut status: nodus_client_core::model::Status,
+    mut context: nodus_client_core::model::Context,
 ) -> String {
+    nodus_ui::html::sanitize_status(&mut status);
+    for ancestor in &mut context.ancestors {
+        nodus_ui::html::sanitize_status(ancestor);
+    }
+    for descendant in &mut context.descendants {
+        nodus_ui::html::sanitize_status(descendant);
+    }
     let path = format!("/status/{host}/{id}");
     let inner = painted(|| {
         nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
@@ -448,9 +478,13 @@ pub fn render_public_account(
     assets: &document::Assets,
     host: &str,
     id: &str,
-    account: nodus_client_core::model::Account,
-    statuses: Vec<nodus_client_core::model::Status>,
+    mut account: nodus_client_core::model::Account,
+    mut statuses: Vec<nodus_client_core::model::Status>,
 ) -> String {
+    nodus_ui::html::sanitize_account(&mut account);
+    for status in &mut statuses {
+        nodus_ui::html::sanitize_status(status);
+    }
     let path = format!("/accounts/{host}/{id}");
     let inner = painted(|| {
         nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
@@ -509,5 +543,94 @@ mod painting {
         });
 
         assert!(html.contains("<li>1</li>"), "{html}");
+    }
+
+    #[test]
+    fn render_account_and_public_pages_sanitize_xss_payloads() {
+        let assets = crate::document::Assets {
+            script: "/nodus-web.js".to_owned(),
+            wasm: "/nodus-web_bg.wasm".to_owned(),
+            stylesheet: None,
+            stylesheet_css: None,
+        };
+        let account = nodus_client_core::model::Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: "<p>bio</p><img src=x onerror=\"alert(1)\"><script>steal()</script>".to_owned(),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+        };
+        let status = nodus_client_core::model::Status {
+            id: "10".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: "<p>post</p><img src=x onerror=\"steal()\"><a href=\"https://example.com/:wave:\">go</a>".to_owned(),
+            visibility: nodus_client_core::model::Visibility::Public,
+            account: account.clone(),
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: vec![nodus_client_core::model::CustomEmoji {
+                shortcode: "wave".to_owned(),
+                url: "https://cdn.test/wave.png".to_owned(),
+                static_url: None,
+            }],
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        };
+
+        let profile_html = super::render_account(
+            &assets,
+            "me@example.org",
+            &account,
+            std::slice::from_ref(&status),
+            None,
+        );
+        assert!(!profile_html.contains("onerror"), "{profile_html}");
+        assert!(!profile_html.contains("steal()"), "{profile_html}");
+        assert!(
+            profile_html.contains("href=\"https://example.com/:wave:\""),
+            "{profile_html}"
+        );
+
+        let public_thread_html = super::render_public_thread(
+            &assets,
+            "example.org",
+            "10",
+            status,
+            nodus_client_core::model::Context::default(),
+        );
+        assert!(
+            !public_thread_html.contains("onerror"),
+            "{public_thread_html}"
+        );
+        assert!(
+            !public_thread_html.contains("steal()"),
+            "{public_thread_html}"
+        );
     }
 }

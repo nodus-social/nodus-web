@@ -7,6 +7,7 @@
 
 pub mod blurhash;
 pub mod components;
+pub mod html;
 pub mod mfm;
 
 pub use components::anchor::{Anchor, Relative};

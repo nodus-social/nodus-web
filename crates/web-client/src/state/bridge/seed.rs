@@ -178,9 +178,39 @@ fn timeline_for(which: &str) -> Option<Timeline> {
     }
 }
 
-fn adopt(island: Island) {
+fn sanitize_page_items(items: &mut PageItems) {
+    match items {
+        PageItems::Notifications(list) => {
+            for item in list {
+                nodus_ui::html::sanitize_notification(item);
+            }
+        }
+        PageItems::Conversations(list) => {
+            for item in list {
+                nodus_ui::html::sanitize_conversation(item);
+            }
+        }
+        PageItems::Statuses(list) => {
+            for status in list {
+                nodus_ui::html::sanitize_status(status);
+            }
+        }
+        PageItems::Accounts(list) => {
+            for account in list {
+                nodus_ui::html::sanitize_account(account);
+            }
+        }
+        PageItems::Search(results) => {
+            nodus_ui::html::sanitize_search_results(results);
+        }
+        _ => {}
+    }
+}
+
+fn adopt(mut island: Island) {
     if !island.kind.is_empty() {
-        if let Some((kind, items)) = page_of(&island) {
+        if let Some((kind, mut items)) = page_of(&island) {
+            sanitize_page_items(&mut items);
             with_sdk(|sdk| sdk.adopt_items(kind, items, island.cursor));
         }
         return;
@@ -188,6 +218,9 @@ fn adopt(island: Island) {
     let Some(which) = timeline_for(&island.which) else {
         return;
     };
+    for status in &mut island.statuses {
+        nodus_ui::html::sanitize_status(status);
+    }
     with_sdk(|sdk| {
         sdk.adopt_page(which, None, island.statuses, island.cursor);
     });

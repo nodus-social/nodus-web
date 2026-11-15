@@ -15,7 +15,6 @@
 
 mod content;
 mod document;
-mod html;
 mod mastodon;
 mod pages;
 mod public_api;
