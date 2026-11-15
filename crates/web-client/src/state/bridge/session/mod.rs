@@ -118,17 +118,22 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
 
 /// Signs out: forgets the stored session and tells the SDK.
 pub fn sign_out() {
-    forget_on_server();
     let Some(sdk) = handle() else {
+        forget_on_server();
         clear_session();
         return;
     };
+    // Clear the active account's session record and admin grant before `forget` switches
+    // to any fallback account, otherwise `clear_session` would wipe the fallback's record.
+    clear_session();
     // The account being signed out is the one on screen, and it is the only one this
     // gesture may forget: the others keep their tokens and their SDKs.
     if let Some(key) = super::active_key() {
         super::forget(&key);
     }
-    clear_session();
+    if super::active_key().is_none() {
+        forget_on_server();
+    }
     if let Some(window) = web_sys::window() {
         if let Ok(Some(storage)) = window.session_storage() {
             let _ = storage.remove_item(SSR_RELOADED);
@@ -190,6 +195,13 @@ pub fn save_session(host: &str, token: &str, session: &Session) {
         id: session.account_id.clone(),
         acct: session.acct.clone(),
     });
+}
+
+/// Persists a switched-to account as the active browser session and updates the SSR cookie.
+pub(super) fn activate(host: &str, token: &str, account_id: &str, acct: &str) {
+    record::store(host, token, account_id, acct);
+    record::remember_host(host);
+    announce_to_server(host, token);
 }
 
 /// The instance this browser last read from.
@@ -279,14 +291,27 @@ fn restore(stored: StoredSession) {
     wasm_bindgen_futures::spawn_local(async move {
         match sdk.sign_in(&stored.host, scopes()).await {
             Ok(session) => {
-                // The instance is the authority: if the account behind the token
-                // changed, the record (and the header drawn from it) follows.
-                if session.account_id != stored.account_id || session.acct != stored.acct {
+                if super::is_current_sdk(&sdk) {
+                    // Always save/register so PENDING moves into LIVE even when
+                    // `account_id` and `acct` match the stored record.
                     save_session(&stored.host, &stored.token, &session);
+                    load_first_page(&sdk, ui).await;
+                } else {
+                    super::register_background(
+                        super::accounts::Account {
+                            host: stored.host.clone(),
+                            token: stored.token.clone(),
+                            id: session.account_id,
+                            acct: session.acct,
+                        },
+                        &sdk,
+                    );
                 }
-                load_first_page(&sdk, ui).await;
             }
             Err(error) => {
+                if !super::is_current_sdk(&sdk) {
+                    return;
+                }
                 // A token the instance rejected is dead: forget it so the next boot
                 // does not replay it. Anything else (offline, server down) keeps it,
                 // because the user's consent has not changed.
@@ -308,7 +333,7 @@ fn restore(stored: StoredSession) {
 ///
 /// The instance's token page hands out `read write follow`; OAuth will let the
 /// user narrow this, and PKCE will request exactly what the app uses.
-fn scopes() -> Vec<String> {
+pub(super) fn scopes() -> Vec<String> {
     vec!["read".to_owned(), "write".to_owned(), "follow".to_owned()]
 }
 
@@ -345,14 +370,15 @@ fn announce_to_server(host: &str, token: &str) {
         if !response.ok() {
             return;
         }
-        // The document on screen was painted before the server knew this session, so it
-        // shows the landing page. Reloading once turns the next paint into the reader's
-        // own timeline; the flag keeps that from becoming a loop when the cookie still
-        // does not stick (private mode, storage cleared between requests).
+        // Only reload when the client has not already adopted a session; otherwise
+        // reloading mid-flight duplicates boot-time timeline fetches and races hydration.
+        let has_session = handle().is_some_and(|sdk| sdk.state().session.get().is_some());
         let Some(storage) = window.session_storage().ok().flatten() else {
             return;
         };
-        if storage.get_item(SSR_RELOADED).ok().flatten().is_some() {
+        let already_reloaded = storage.get_item(SSR_RELOADED).ok().flatten().is_some();
+        if !nodus_web::shared::account_state::announce_should_reload(has_session, already_reloaded)
+        {
             return;
         }
         let _ = storage.set_item(SSR_RELOADED, "1");

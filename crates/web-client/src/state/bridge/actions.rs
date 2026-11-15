@@ -6,6 +6,7 @@
 //! it. Nothing here writes into `AppState`: an optimistic toggle that the server later
 //! refused would be a lie the state machine cannot retract.
 
+use core::cell::RefCell;
 use core::future::Future;
 
 use nodus_client_core::InstanceApi;
@@ -14,51 +15,64 @@ use nodus_client_core::actions::{
     ScheduleActions, Search, StatusActions,
 };
 use nodus_client_core::model::{
-    Account, Context, Conversation, Draft, Filter, FilterDraft, HistoryEntry, List, LocalId,
-    MediaAttachment, PollDraft, ProfileUpdate, Relationship, SearchResults, Status,
+    Account, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft, HistoryEntry,
+    Language, List, LocalId, MediaAttachment, Poll, PollDraft, ProfileUpdate, Relationship,
+    SearchResults, Status,
 };
 use nodus_mastodon::BrowserInstance;
+use nodus_web::shared::account_state::AccountCache;
 
 pub use nodus_client_core::model::Visibility;
 
-use super::instance_transport;
+use super::{active_cache_key, instance_transport};
 
-/// The emoji this instance offers, asked for once per page load.
+async fn cached_list<T: Clone>(
+    cache: &'static std::thread::LocalKey<RefCell<AccountCache<Vec<T>>>>,
+    label: &str,
+    fetch: impl Future<Output = Result<Vec<T>, String>>,
+) -> Vec<T> {
+    let key = active_cache_key();
+    if let Some(key) = &key {
+        if let Some(held) = cache.with(|held| held.borrow().get(key).cloned()) {
+            return held;
+        }
+    }
+    match fetch.await {
+        Ok(values) => {
+            if let Some(key) = key {
+                cache.with(|held| {
+                    held.borrow_mut().insert(key, values.clone());
+                });
+            }
+            values
+        }
+        Err(message) => {
+            web_sys::console::warn_1(&format!("nodus: {label}: {message}").into());
+            Vec::new()
+        }
+    }
+}
+
+/// The languages this instance publishes in.
 ///
-/// The set is large (hundreds of entries on a busy instance) and changes only when the
-/// instance's cache does, so it is fetched on demand and kept for the life of the document
-/// rather than on every keystroke that opens a suggestion list.
+/// Cached per account like the emoji catalogue: the list changes when an admin edits
+/// the server's languages, not between two posts, and a composer that refetched it on every
+/// open would spend a request per keystroke-sized decision.
 #[expect(
     clippy::future_not_send,
     reason = "the browser transport is single-threaded; the SDK is used from one task at a time"
 )]
-/// The languages this instance publishes in.
-///
-/// Cached for the document like the emoji catalogue: the list changes when an admin edits
-/// the server's languages, not between two posts, and a composer that refetched it on every
-/// open would spend a request per keystroke-sized decision.
-pub async fn languages() -> Vec<nodus_client_core::model::Language> {
+pub async fn languages() -> Vec<Language> {
     thread_local! {
-        static HELD: std::cell::RefCell<Option<Vec<nodus_client_core::model::Language>>> =
-            const { std::cell::RefCell::new(None) };
+        static HELD: RefCell<AccountCache<Vec<Language>>> = RefCell::new(AccountCache::new());
     }
-    if let Some(held) = HELD.with(|held| held.borrow().clone()) {
-        return held;
-    }
-    let fresh = match instance_transport() {
-        Some(transport) => call(transport.languages()).await,
-        None => Err("the client is not installed".to_owned()),
-    };
-    match fresh {
-        Ok(languages) => {
-            HELD.with(|held| *held.borrow_mut() = Some(languages.clone()));
-            languages
+    cached_list(&HELD, "languages unavailable", async {
+        match instance_transport() {
+            Some(transport) => call(transport.languages()).await,
+            None => Err("the client is not installed".to_owned()),
         }
-        Err(message) => {
-            web_sys::console::warn_1(&format!("nodus: languages unavailable: {message}").into());
-            Vec::new()
-        }
-    }
+    })
+    .await
 }
 
 /// The signed-in account's own posting language, when it set one.
@@ -67,23 +81,15 @@ pub async fn languages() -> Vec<nodus_client_core::model::Language> {
 /// languages it supports, not the one a writer posts in. `None` means "ask the instance",
 /// which in practice means English or the instance's first published language.
 pub async fn my_language() -> Option<String> {
-    /// Three states, not two: "not asked yet" is different from "asked, and the account
-    /// did not choose one" — collapsing them would re-ask on every composer.
-    enum Held {
-        Unknown,
-        Answer(Option<String>),
-    }
-
     thread_local! {
-        static HELD: std::cell::RefCell<Held> = const { std::cell::RefCell::new(Held::Unknown) };
+        static HELD: RefCell<AccountCache<Option<String>>> = RefCell::new(AccountCache::new());
     }
 
-    let cached = HELD.with(|held| match &*held.borrow() {
-        Held::Unknown => None,
-        Held::Answer(answer) => Some(answer.clone()),
-    });
-    if let Some(answer) = cached {
-        return answer;
+    let key = active_cache_key();
+    if let Some(key) = &key {
+        if let Some(answer) = HELD.with(|held| held.borrow().get(key).cloned()) {
+            return answer;
+        }
     }
     let fresh = match instance_transport() {
         Some(transport) => call(transport.credential_account())
@@ -92,34 +98,30 @@ pub async fn my_language() -> Option<String> {
             .and_then(|account| account.source.language),
         None => None,
     };
-    HELD.with(|held| *held.borrow_mut() = Held::Answer(fresh.clone()));
+    if let Some(key) = key {
+        HELD.with(|held| {
+            held.borrow_mut().insert(key, fresh.clone());
+        });
+    }
     fresh
 }
 
-pub async fn custom_emojis() -> Vec<nodus_client_core::model::CustomEmoji> {
+/// The emoji this instance offers, asked for once per account.
+///
+/// The set is large (hundreds of entries on a busy instance) and changes only when the
+/// instance's cache does, so it is fetched on demand and kept for the life of the document
+/// rather than on every keystroke that opens a suggestion list.
+pub async fn custom_emojis() -> Vec<CustomEmoji> {
     thread_local! {
-        static HELD: std::cell::RefCell<Option<Vec<nodus_client_core::model::CustomEmoji>>> =
-            const { std::cell::RefCell::new(None) };
+        static HELD: RefCell<AccountCache<Vec<CustomEmoji>>> = RefCell::new(AccountCache::new());
     }
-    if let Some(held) = HELD.with(|held| held.borrow().clone()) {
-        return held;
-    }
-    let fresh = match instance_transport() {
-        Some(transport) => call(transport.custom_emojis()).await,
-        None => Err("the client is not installed".to_owned()),
-    };
-    match fresh {
-        Ok(emojis) => {
-            HELD.with(|held| *held.borrow_mut() = Some(emojis.clone()));
-            emojis
+    cached_list(&HELD, "could not read custom emojis", async {
+        match instance_transport() {
+            Some(transport) => call(transport.custom_emojis()).await,
+            None => Err("the client is not installed".to_owned()),
         }
-        Err(message) => {
-            web_sys::console::warn_1(
-                &format!("nodus: could not read custom emojis: {message}").into(),
-            );
-            Vec::new()
-        }
-    }
+    })
+    .await
 }
 
 /// The transport for the current session, or a message fit for inline display.
@@ -377,8 +379,8 @@ pub async fn reject_follow_request(id: &str) -> Result<(), String> {
     call(transport()?.reject_follow_request(&LocalId(id.to_owned()))).await
 }
 
-/// Votes on a poll and returns the status it belongs to.
-pub async fn vote(poll_id: &str, choices: &[usize]) -> Result<Status, String> {
+/// Votes on a poll and returns the updated poll.
+pub async fn vote(poll_id: &str, choices: &[usize]) -> Result<Poll, String> {
     call(transport()?.vote(poll_id, choices)).await
 }
 

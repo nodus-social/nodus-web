@@ -52,12 +52,12 @@ pub fn StatusBody(shown: ReadSignal<Status>, set_shown: WriteSignal<Status>) -> 
     }
 }
 
-/// Sends the picked options and folds the answer back into the card.
+/// Sends the picked options and folds the updated poll back into the card.
 ///
-/// The vote answers with the whole status, which is the only way to learn the new counts:
-/// Mastodon has no "read this poll" endpoint, so the card replaces its copy with the
-/// response instead of trusting a locally incremented number. The writes go through
-/// [`Alive`] because the answer arrives after the reader may have left the screen.
+/// The vote endpoint returns the updated [`Poll`](nodus_client_core::model::Poll), so the
+/// card replaces `status.poll` with the server's answer instead of trusting locally
+/// incremented counts. The writes go through [`Alive`] because the answer arrives after
+/// the reader may have left the screen.
 fn vote(
     poll_id: String,
     choices: Vec<usize>,
@@ -68,7 +68,11 @@ fn vote(
     set_error.set(None);
     spawn_local(async move {
         match actions::vote(&poll_id, &choices).await {
-            Ok(status) => alive.if_alive(|| set_shown.set(status)),
+            Ok(poll) => alive.if_alive(|| {
+                set_shown.update(|status| {
+                    status.poll = Some(poll);
+                });
+            }),
             Err(message) => alive.if_alive(|| set_error.set(Some(message))),
         }
     });

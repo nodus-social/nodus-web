@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use nodus_client_core::model::{
-    Account, Context, Conversation, Filter, List, Relationship, Status,
+    Account, Context, Conversation, Filter, List, Poll, Relationship, Status,
 };
 use nodus_shared::{AccountItem, PostItem};
 use nodus_state::page::{PageEntry, PageKind};
@@ -174,6 +174,7 @@ pub enum Action {
 pub enum ActionResult {
     None,
     Status(Status),
+    Poll(Poll),
     Conversation(Conversation),
     Relationship(Relationship),
     List(List),
@@ -749,5 +750,28 @@ fn copy(kind: &TimelineKind) -> (&'static str, &'static str, &'static str) {
             "Posts from the accounts on this list.",
             "Nobody on this list has posted yet.",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_result_carries_voted_poll() {
+        let poll = Poll {
+            id: "poll-1".to_owned(),
+            expires_at: None,
+            expired: false,
+            multiple: false,
+            votes_count: 1,
+            voters_count: Some(1),
+            voted: true,
+            own_votes: vec![0],
+            options: vec![],
+            emojis: vec![],
+        };
+        let result = ActionResult::Poll(poll.clone());
+        assert!(matches!(result, ActionResult::Poll(returned) if returned == poll));
     }
 }

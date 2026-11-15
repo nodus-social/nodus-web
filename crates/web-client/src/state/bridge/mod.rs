@@ -25,9 +25,11 @@ use std::rc::Rc;
 
 use leptos::prelude::*;
 use nodus_client_sdk::instance_api::Instance;
+use nodus_client_sdk::state::Session;
 use nodus_client_sdk::{Command, MemoryPersistence, Sdk, Subscription, SystemClock};
 use nodus_discovery::BrowserDiscovery;
 use nodus_mastodon::BrowserInstance;
+use nodus_web::shared::account_state::{AccountKey, AccountMeta, AccountRegistry};
 use url::Url;
 
 pub mod accounts;
@@ -104,19 +106,8 @@ thread_local! {
     static SUBSCRIPTIONS: RefCell<Vec<Subscription>> = const { RefCell::new(Vec::new()) };
     /// Whether [`init`] has wired the SDK, so a remount does not subscribe twice.
     static INSTALLED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
-    /// One installed SDK per account, so switching does not rebuild state (and does not
-    /// re-fetch a timeline a previous visit already holds). Subscriptions live here too:
-    /// an inactive account still receives socket frames for its own sessions, and those
-    /// frames land in its own store.
-    static LIVE: RefCell<std::collections::HashMap<String, Live>> = RefCell::new(std::collections::HashMap::new());
-    /// The SDK built by the last [`install`], before it has an account to belong to.
-    ///
-    /// The host and token arrive before the session does — `sign_in` is what learns the
-    /// account id — so the SDK waits here until [`register`] can name it.
-    static PENDING: RefCell<Option<Live>> = const { RefCell::new(None) };
-    /// The token behind the installed transport. The SDK state names the host and
-    /// account but deliberately does not expose credentials.
-    static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Per-account live SDKs, staged pending SDK, and active bearer token.
+    static REGISTRY: RefCell<AccountRegistry<Live>> = RefCell::new(AccountRegistry::new());
 }
 
 /// The Feed tab's request state, which belongs to the view and not to the SDK.
@@ -254,11 +245,24 @@ pub(super) fn existing_feed_id() -> Option<String> {
     FEED_ID.with_borrow(std::clone::Clone::clone)
 }
 
-/// Drops the snapshot id kept for event batches.
-///
 /// The bearer behind the installed SDK, for the few calls that need the home API directly.
 pub(crate) fn session_token() -> Option<String> {
-    TOKEN.with_borrow(Clone::clone)
+    REGISTRY.with_borrow(|reg| reg.token().map(str::to_owned))
+}
+
+/// The `(host, account_id)` key for per-account in-memory caches, when signed in.
+pub(super) fn active_cache_key() -> Option<AccountKey> {
+    handle().and_then(|sdk| {
+        sdk.state()
+            .session
+            .get()
+            .map(|session| (session.host, session.account_id))
+    })
+}
+
+/// Whether `sdk` is still the active SDK installed in this tab.
+pub(super) fn is_current_sdk(sdk: &Rc<WebSdk>) -> bool {
+    handle().is_some_and(|current| Rc::ptr_eq(&current, sdk))
 }
 
 /// Called when the session ends, so a late batch cannot carry the previous
@@ -270,8 +274,7 @@ pub(super) fn forget_feed_id() {
 /// Builds a [`WebSdk`] for `instance` and swaps it in. Replaces any previous one.
 use nodus_client_core::actions::AdminActions;
 
-fn install(instance: &Instance, token: &str) -> Result<(), String> {
-    TOKEN.with_borrow_mut(|slot| *slot = Some(token.to_owned()));
+fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
     let base =
         api_base().ok_or_else(|| "Could not determine the API origin for this page.".to_owned())?;
     let transport = BrowserInstance::new(instance, token);
@@ -282,10 +285,6 @@ fn install(instance: &Instance, token: &str) -> Result<(), String> {
         SystemClock,
     ));
 
-    let revision = revision();
-    // `try_update`, not `update`: this callback runs from socket frames and background
-    // ticks, which outlive any single screen. A disposed signal must be a missed repaint,
-    // never a panic inside a task poll.
     let bump = schedule_repaint;
     let mut subscriptions = Vec::new();
     {
@@ -325,16 +324,6 @@ fn install(instance: &Instance, token: &str) -> Result<(), String> {
     let transport =
         transport.with_stream_sink(wasm_bindgen::JsCast::unchecked_into(sink.into_js_value()));
 
-    SUBSCRIPTIONS.with_borrow_mut(|slot| *slot = Vec::new());
-    INSTANCE.with_borrow_mut(|slot| *slot = Some(transport.clone()));
-    PENDING.with_borrow_mut(|slot| {
-        *slot = Some(Live {
-            sdk: Rc::clone(&sdk),
-            transport,
-            _subscriptions: subscriptions,
-        });
-    });
-
     // Negotiate the protocol once per session. This is a question about the server,
     // not about a screen, so it must not be asked from a render: every view reads the
     // recorded answer and picks its path synchronously. A server that does not answer
@@ -348,9 +337,33 @@ fn install(instance: &Instance, token: &str) -> Result<(), String> {
         }
     });
 
+    Ok(Live {
+        sdk,
+        transport,
+        _subscriptions: subscriptions,
+    })
+}
+
+fn install(instance: &Instance, token: &str) -> Result<(), String> {
+    let live = build_live(instance, token)?;
+    let sdk = Rc::clone(&live.sdk);
+    let transport = live.transport.clone();
+
+    SUBSCRIPTIONS.with_borrow_mut(|slot| *slot = Vec::new());
+    INSTANCE.with_borrow_mut(|slot| *slot = Some(transport));
+    REGISTRY.with_borrow_mut(|reg| reg.stage(token.to_owned(), live));
     SDK.with_borrow_mut(|slot| *slot = Some(sdk));
-    revision.update(|generation| *generation += 1);
+    revision().update(|generation| *generation += 1);
     Ok(())
+}
+
+fn meta_of(account: &accounts::Account) -> AccountMeta {
+    AccountMeta {
+        host: account.host.clone(),
+        token: account.token.clone(),
+        id: account.id.clone(),
+        acct: account.acct.clone(),
+    }
 }
 
 /// Names the SDK built by [`install`] and keeps it for switching.
@@ -359,18 +372,30 @@ fn install(instance: &Instance, token: &str) -> Result<(), String> {
 /// only when the instance answers, and an account the switcher cannot name is an
 /// account the user cannot return to.
 pub fn register(account: accounts::Account) {
+    register_account(account, None, true);
+}
+
+/// Registers an account restored in the background after the user already switched away,
+/// without hijacking the active token or session.
+pub(super) fn register_background(account: accounts::Account, expected_sdk: &Rc<WebSdk>) {
+    register_account(account, Some(expected_sdk), false);
+}
+
+fn register_account(account: accounts::Account, expected_sdk: Option<&Rc<WebSdk>>, activate: bool) {
     let key = account.key();
-    let live = PENDING.with_borrow_mut(Option::take);
-    if let Some(live) = live {
-        LIVE.with_borrow_mut(|all| {
-            all.insert(key.clone(), live);
+    let meta = meta_of(&account);
+    REGISTRY.with_borrow_mut(|reg| {
+        reg.register(meta, activate, |live| {
+            expected_sdk.is_none_or(|sdk| Rc::ptr_eq(&live.sdk, sdk))
         });
-    }
+    });
     let mut list = accounts::load();
     accounts::insert(&mut list, account);
     accounts::store(&list);
-    accounts::set_active(Some(&key));
-    revision().update(|generation| *generation += 1);
+    if activate {
+        accounts::set_active(Some(&key));
+        revision().update(|generation| *generation += 1);
+    }
 }
 
 /// The accounts this browser holds, oldest first.
@@ -387,34 +412,45 @@ pub fn active_key() -> Option<String> {
 
 /// Show another account without signing out of this one.
 ///
-/// The SDK is already built, so switching is a pointer move: the timeline the previous
-/// visit loaded is exactly what the SDK should keep holding.
-///
-/// # Errors
-///
-/// Returns a message when the account has no installed SDK, which happens after a
-/// reload: records are on disk, SDKs are not, and the caller must reinstall instead.
+/// Reuses an already-installed SDK when present, or lazily installs the stored account
+/// from `accounts::load()`, then updates `TOKEN`, `nodus.session`, and the SSR cookie.
 pub fn switch(key: &str) -> Result<(), String> {
-    let live = LIVE.with_borrow(|all| {
-        all.get(key)
-            .map(|live| (Rc::clone(&live.sdk), live.transport.clone()))
-    });
-    let Some((sdk, transport)) = live else {
-        return Err("That account needs its session restored first.".to_owned());
-    };
+    let stored: Vec<AccountMeta> = accounts::load().iter().map(meta_of).collect();
+    let (sdk, transport, meta) = REGISTRY.with_borrow_mut(|reg| {
+        reg.switch(
+            key,
+            &stored,
+            |meta| {
+                let instance = Instance::parse(&meta.host).map_err(|error| error.to_string())?;
+                let live = build_live(&instance, &meta.token)?;
+                live.sdk.adopt_session(Session {
+                    host: meta.host.clone(),
+                    account_id: meta.id.clone(),
+                    acct: meta.acct.clone(),
+                    scopes: session::scopes(),
+                });
+                Ok(live)
+            },
+            str::to_owned,
+        )
+        .map(|(live, meta)| (Rc::clone(&live.sdk), live.transport.clone(), meta))
+    })?;
+
+    impressions::finish_all();
     INSTANCE.with_borrow_mut(|slot| *slot = Some(transport));
     SDK.with_borrow_mut(|slot| *slot = Some(sdk));
     accounts::set_active(Some(key));
     forget_feed_id();
+    feed_ui().error.set(None);
+    posts_ui().error.set(None);
+    session::activate(&meta.host, &meta.token, &meta.id, &meta.acct);
     revision().update(|generation| *generation += 1);
     Ok(())
 }
 
 /// Forget one account, and fall back to another if it was the one on screen.
 pub fn forget(key: &str) {
-    LIVE.with_borrow_mut(|all| {
-        all.remove(key);
-    });
+    REGISTRY.with_borrow_mut(|reg| reg.remove(key));
     let mut list = accounts::load();
     list.retain(|account| account.key() != key);
     accounts::store(&list);
@@ -423,6 +459,7 @@ pub fn forget(key: &str) {
             Some(next) if switch(&next.key()).is_ok() => {}
             _ => {
                 accounts::set_active(None);
+                REGISTRY.with_borrow_mut(AccountRegistry::clear_token);
                 SDK.with_borrow_mut(|slot| *slot = None);
                 INSTANCE.with_borrow_mut(|slot| *slot = None);
                 revision().update(|generation| *generation += 1);

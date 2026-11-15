@@ -486,9 +486,9 @@ impl Runtime for ClientRuntime {
                 Action::DeleteStatus(id) => actions::delete_status(&id)
                     .await
                     .map(|()| ActionResult::None),
-                Action::Vote { poll, choices } => actions::vote(&poll, &choices)
-                    .await
-                    .map(ActionResult::Status),
+                Action::Vote { poll, choices } => {
+                    actions::vote(&poll, &choices).await.map(ActionResult::Poll)
+                }
                 Action::Reply { parent, text } => {
                     actions::publish(&actions::NewStatus::reply(text, &parent))
                         .await

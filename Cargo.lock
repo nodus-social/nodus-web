@@ -1795,6 +1795,7 @@ dependencies = [
  "nodus-client-core",
  "nodus-discovery",
  "nodus-persist",
+ "nodus-protocol",
  "nodus-runtime",
  "nodus-state",
  "serde",
