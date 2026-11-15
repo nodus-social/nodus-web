@@ -633,6 +633,7 @@ mod painting {
         let profile_html = super::render_account(
             &assets,
             "me@example.org",
+            false,
             &account,
             std::slice::from_ref(&status),
             None,
