@@ -646,4 +646,29 @@ mod tests {
             "{rendered}"
         );
     }
+
+    #[test]
+    fn status_body_blocks_unclosed_tag_and_open_quote_xss_on_ssr() {
+        for payload in [
+            "<img src=x onerror=\"alert(1)\" ",
+            "<img src=x onerror=\"alert(1)\" alt=\"",
+        ] {
+            let status = sample_status(payload, Vec::new());
+            let rendered = Owner::new().with(|| {
+                StatusBody(StatusBodyProps {
+                    status,
+                    on_open_media: None,
+                    on_vote: None,
+                    interactive: false,
+                    revealed_init: false,
+                    target_language: "en".to_owned(),
+                })
+                .to_html()
+            });
+
+            assert!(!rendered.contains("<img"), "{rendered}");
+            assert!(!rendered.contains("onerror"), "{rendered}");
+            assert!(!rendered.contains("alert(1)"), "{rendered}");
+        }
+    }
 }

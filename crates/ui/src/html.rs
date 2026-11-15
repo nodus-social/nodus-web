@@ -13,7 +13,7 @@
 //! classes from remote instances.
 
 use lol_html::html_content::ContentType;
-use lol_html::{RewriteStrSettings, doc_comments, doc_text, element, rewrite_str};
+use lol_html::{RewriteStrSettings, doc_comments, doc_text, doctype, element, rewrite_str};
 use nodus_client_core::model::{
     Account, Conversation, CustomEmoji, Notification, SearchResults, Status,
 };
@@ -92,6 +92,193 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// Decodes HTML character references in attribute strings before URL validation.
+///
+/// `lol_html` returns raw attribute values without decoding entities, so `/&#x2f;evil.test`,
+/// `/&sol;evil.test`, and `/&#92;evil.test` would otherwise look like single-leading-slash
+/// paths to [`safe_url`].
+fn decode_html_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_owned();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0_usize;
+    let bytes = input.as_bytes();
+
+    while index < bytes.len() {
+        if bytes[index] != b'&' {
+            let ch = input[index..].chars().next().expect("valid utf8");
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        if let Some((decoded, consumed)) = decode_entity_at(&input[index..]) {
+            out.push(decoded);
+            index += consumed;
+        } else {
+            out.push('&');
+            index += 1;
+        }
+    }
+    out
+}
+
+fn decode_entity_at(rest: &str) -> Option<(char, usize)> {
+    let after_amp = rest.strip_prefix('&')?;
+    if let Some(after_hash) = after_amp.strip_prefix('#') {
+        let (radix, digits_str, prefix_len) = if let Some(hex) = after_hash.strip_prefix(['x', 'X'])
+        {
+            (16_u32, hex, 3_usize)
+        } else {
+            (10_u32, after_hash, 2_usize)
+        };
+        let digit_bytes = digits_str
+            .bytes()
+            .take_while(|byte| match radix {
+                16 => byte.is_ascii_hexdigit(),
+                _ => byte.is_ascii_digit(),
+            })
+            .count();
+        if digit_bytes == 0 {
+            return None;
+        }
+        let value = u32::from_str_radix(&digits_str[..digit_bytes], radix)
+            .ok()
+            .filter(|&code| code != 0)
+            .and_then(char::from_u32)
+            .unwrap_or('\u{FFFD}');
+        let semi = usize::from(digits_str.as_bytes().get(digit_bytes) == Some(&b';'));
+        return Some((value, prefix_len + digit_bytes + semi));
+    }
+
+    let semi = after_amp.find(';')?;
+    let name = &after_amp[..semi];
+    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let decoded = match name {
+        "sol" => '/',
+        "bsol" => '\\',
+        "colon" => ':',
+        "apos" => '\'',
+        "num" => '#',
+        "quest" => '?',
+        "commat" => '@',
+        "percnt" => '%',
+        "plus" => '+',
+        "equals" => '=',
+        "semi" => ';',
+        "comma" => ',',
+        "period" => '.',
+        "excl" => '!',
+        "lpar" => '(',
+        "rpar" => ')',
+        "lsqb" => '[',
+        "rsqb" => ']',
+        "lcub" => '{',
+        "rcub" => '}',
+        "lowbar" => '_',
+        "hyphen" | "dash" => '-',
+        "ast" => '*',
+        "verbar" => '|',
+        "tilde" => '~',
+        _ if name.eq_ignore_ascii_case("tab") => '\t',
+        _ if name.eq_ignore_ascii_case("newline") => '\n',
+        _ if name.eq_ignore_ascii_case("amp") => '&',
+        _ if name.eq_ignore_ascii_case("lt") => '<',
+        _ if name.eq_ignore_ascii_case("gt") => '>',
+        _ if name.eq_ignore_ascii_case("quot") => '"',
+        _ if name.eq_ignore_ascii_case("nbsp") => '\u{00A0}',
+        _ => return None,
+    };
+    Some((decoded, 1 + semi + 1))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanState {
+    Data,
+    TagOpen,
+    EndTag,
+    TagName,
+    BeforeAttrName,
+    AttrName,
+    AfterAttrName,
+    BeforeAttrValue,
+    AttrValueDouble,
+    AttrValueSingle,
+    AttrValueUnquoted,
+    SelfClosing,
+}
+
+impl ScanState {
+    fn step(self, byte: u8) -> Self {
+        match self {
+            Self::Data | Self::AttrValueDouble | Self::AttrValueSingle => match self {
+                Self::Data if byte == b'<' => Self::TagOpen,
+                Self::AttrValueDouble if byte == b'"' => Self::BeforeAttrName,
+                Self::AttrValueSingle if byte == b'\'' => Self::BeforeAttrName,
+                _ => self,
+            },
+            _ if byte == b'>' => Self::Data,
+            Self::SelfClosing => Self::BeforeAttrName.step(byte),
+            Self::EndTag => Self::EndTag,
+            Self::TagOpen => match byte {
+                b'/' => Self::EndTag,
+                _ if byte.is_ascii_alphabetic() => Self::TagName,
+                _ => Self::BeforeAttrName,
+            },
+            Self::TagName => match byte {
+                b'/' => Self::SelfClosing,
+                b if b.is_ascii_whitespace() => Self::BeforeAttrName,
+                _ => Self::TagName,
+            },
+            Self::BeforeAttrName | Self::AfterAttrName => match byte {
+                b'=' if self == Self::AfterAttrName => Self::BeforeAttrValue,
+                b'/' => Self::SelfClosing,
+                b if b.is_ascii_whitespace() => self,
+                _ => Self::AttrName,
+            },
+            Self::AttrName => match byte {
+                b'/' => Self::SelfClosing,
+                b'=' => Self::BeforeAttrValue,
+                b if b.is_ascii_whitespace() => Self::AfterAttrName,
+                _ => Self::AttrName,
+            },
+            Self::BeforeAttrValue => match byte {
+                b'"' => Self::AttrValueDouble,
+                b'\'' => Self::AttrValueSingle,
+                b if b.is_ascii_whitespace() => Self::BeforeAttrValue,
+                _ => Self::AttrValueUnquoted,
+            },
+            Self::AttrValueUnquoted => {
+                if byte.is_ascii_whitespace() {
+                    Self::BeforeAttrName
+                } else {
+                    Self::AttrValueUnquoted
+                }
+            }
+        }
+    }
+}
+
+/// Returns the byte offset of a trailing unclosed `<...` tag or open attribute quote at EOF.
+fn find_unclosed_tag_start(html: &str) -> Option<usize> {
+    let mut state = ScanState::Data;
+    let mut tag_start = None;
+
+    for (idx, byte) in html.bytes().enumerate() {
+        let was_data = state == ScanState::Data;
+        state = state.step(byte);
+        if was_data && state != ScanState::Data {
+            tag_start = Some(idx);
+        } else if state == ScanState::Data {
+            tag_start = None;
+        }
+    }
+
+    (state != ScanState::Data).then_some(tag_start).flatten()
+}
+
 /// Rewrites a status body or account bio into markup this origin is willing to render.
 ///
 /// On a rewrite error the escaped text is returned: a post that cannot be sanitised is
@@ -99,10 +286,23 @@ pub fn escape(text: &str) -> String {
 #[must_use]
 pub fn body(html: &str) -> String {
     let settings = RewriteStrSettings {
-        document_content_handlers: vec![doc_comments!(|comment| {
-            comment.remove();
-            Ok(())
-        })],
+        document_content_handlers: vec![
+            doctype!(|doctype| {
+                doctype.remove();
+                Ok(())
+            }),
+            doc_comments!(|comment| {
+                comment.remove();
+                Ok(())
+            }),
+            doc_text!(|chunk| {
+                if chunk.as_str().contains('<') {
+                    let escaped = chunk.as_str().replace('<', "&lt;");
+                    chunk.replace(&escaped, ContentType::Html);
+                }
+                Ok(())
+            }),
+        ],
         element_content_handlers: vec![element!("*", |el| {
             let tag = el.tag_name();
             if !KEEP.contains(&tag.as_str()) {
@@ -123,7 +323,8 @@ pub fn body(html: &str) -> String {
 
             if tag == "a" {
                 let href = el.get_attribute("href").unwrap_or_default();
-                if href.is_empty() || !safe_url(&href) {
+                let decoded = decode_html_entities(&href);
+                if decoded.is_empty() || !safe_url(&decoded) {
                     el.remove_attribute("href");
                 } else {
                     // A link out of this page opens in its own tab, and says so.
@@ -133,7 +334,8 @@ pub fn body(html: &str) -> String {
             }
             if tag == "img" {
                 let src = el.get_attribute("src").unwrap_or_default();
-                if src.is_empty() || !safe_url(&src) {
+                let decoded = decode_html_entities(&src);
+                if decoded.is_empty() || !safe_url(&decoded) {
                     el.remove();
                     return Ok(());
                 }
@@ -148,7 +350,18 @@ pub fn body(html: &str) -> String {
         ..RewriteStrSettings::default()
     };
 
-    rewrite_str(html, settings).unwrap_or_else(|_| escape(html))
+    match rewrite_str(html, settings) {
+        Ok(mut rewritten) => {
+            // `lol_html` emits unclosed `<...` tags/attributes at EOF as raw bytes without
+            // running element handlers; drop any incomplete trailing tag so surrounding SSR
+            // elements cannot close it into active markup.
+            if let Some(unclosed_start) = find_unclosed_tag_start(&rewritten) {
+                rewritten.truncate(unclosed_start);
+            }
+            rewritten
+        }
+        Err(_) => escape(html),
+    }
 }
 
 /// Sanitises a status body and expands the custom emoji the status declares in text nodes.
@@ -433,5 +646,72 @@ mod tests {
         );
         assert!(!out.contains("<img"), "{out}");
         assert!(out.contains("std::vec::Vec"), "{out}");
+    }
+
+    #[test]
+    fn body_drops_unclosed_tag_and_open_attribute_quotes_at_eof() {
+        let cases = [
+            "<img src=x onerror=\"alert(1)\" ",
+            "<img src=x onerror=\"alert(1)\" alt=\"",
+            "<img src=x onerror=\"alert(1)\" alt=\"foo>bar",
+            "<img/src=x onerror=\"alert(1)\" alt=\"foo>bar",
+            "<p>hello</p><img src=x onerror=\"alert(1)\"",
+            "<p>hello</p><script src=x",
+        ];
+        for payload in cases {
+            let out = body(payload);
+            let wrapped = format!("<span>{out}</span>");
+            assert!(
+                !wrapped.contains("onerror"),
+                "payload `{payload}` -> `{wrapped}`"
+            );
+            assert!(
+                !wrapped.contains("<img"),
+                "payload `{payload}` -> `{wrapped}`"
+            );
+            assert!(
+                !wrapped.contains("<script"),
+                "payload `{payload}` -> `{wrapped}`"
+            );
+            assert!(
+                wrapped.ends_with("</span>"),
+                "payload `{payload}` -> `{wrapped}`"
+            );
+        }
+    }
+
+    #[test]
+    fn body_blocks_entity_encoded_protocol_relative_urls() {
+        let links = [
+            "<a href=\"/&#x2f;evil.test\">x</a>",
+            "<a href=\"/&sol;evil.test\">x</a>",
+            "<a href=\"/&#92;evil.test\">x</a>",
+            "<a href=\"/&#47evil.test\">x</a>",
+            "<a href=\"&#x09;/&#x2f;evil.test\">x</a>",
+        ];
+        for html in links {
+            let out = body(html);
+            assert!(!out.contains("href="), "link `{html}` kept href: `{out}`");
+            assert!(
+                !out.contains("evil.test"),
+                "link `{html}` leaked host: `{out}`"
+            );
+        }
+
+        let imgs = [
+            "<img src=\"/&#x2f;evil.test/x.png\">",
+            "<img src=\"/&sol;evil.test/x.png\">",
+            "<img src=\"/&#92;evil.test/x.png\">",
+        ];
+        for html in imgs {
+            let out = body(html);
+            assert!(!out.contains("<img"), "img `{html}` survived: `{out}`");
+        }
+
+        let safe = body("<a href=\"https://example.com/search?a=1&amp;b=2\">ok</a>");
+        assert!(
+            safe.contains("href=\"https://example.com/search?a=1&amp;b=2\""),
+            "{safe}"
+        );
     }
 }

