@@ -133,18 +133,6 @@ pub struct Island<'a> {
     pub cursor: Option<&'a str>,
 }
 
-// Whether this request's reader may moderate. Set once per request by `shell`; a
-// thread-local rather than a parameter because every page function would otherwise have to
-// thread a flag it does not use, and the server handles one request per thread.
-thread_local! {
-    static STAFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Whether this request's reader may moderate.
-pub fn set_staff(staff: bool) {
-    STAFF.with(|state| state.set(staff));
-}
-
 /// The two doors a moderator has, drawn from the same list the client draws.
 fn staff_doors(path: &str) -> leptos::prelude::AnyView {
     imperative::rail_rows(path)
@@ -181,7 +169,7 @@ mod imperative {
     }
 }
 
-fn chrome(signed_in: bool, path: &str, inner: &str) -> String {
+fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
     use leptos::prelude::{IntoAny, Owner, Signal};
 
     // The frame, the rail and the icons come from `nodus-view`, the same components the
@@ -201,7 +189,7 @@ fn chrome(signed_in: bool, path: &str, inner: &str) -> String {
                 leptos::html::div().inner_html(body.clone()).into_any()
             }),
             on_home: None,
-            extra: STAFF.with(std::cell::Cell::get).then(move || {
+            extra: (signed_in && staff).then(move || {
                 std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
             }),
         })
@@ -230,17 +218,30 @@ fn timeline_header(active: &str) -> String {
 
 /// The screen heading, drawn by the crate the client draws with.
 /// The signed-in home page, painted.
-pub fn home(assets: &Assets, acct: &str, statuses: &[Status], cursor: Option<&str>) -> String {
-    feed(assets, acct, "home", "Home", "/home", statuses, cursor)
+pub fn home(
+    assets: &Assets,
+    acct: &str,
+    staff: bool,
+    statuses: &[Status],
+    cursor: Option<&str>,
+) -> String {
+    feed(
+        assets, acct, staff, "home", "Home", "/home", statuses, cursor,
+    )
 }
 
 /// A timeline page, painted: the same header, the same cards, the same island.
 ///
 /// `which` is the client's own name for the timeline, so the island it adopts is the page
 /// the reader is looking at rather than the home one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "renders a feed document from request, session, and fetched timeline data"
+)]
 pub fn feed(
     assets: &Assets,
     acct: &str,
+    staff: bool,
     which: &str,
     title: &str,
     path: &str,
@@ -284,7 +285,7 @@ pub fn feed(
     page(
         assets,
         &format!("{title} · {acct}"),
-        &chrome(true, path, &body),
+        &chrome(true, staff, path, &body),
         Some(&island),
         false,
     )
@@ -292,7 +293,13 @@ pub fn feed(
 
 /// A thread: what came before, the status itself, then the replies.
 #[must_use]
-pub fn thread_page(assets: &Assets, acct: &str, status: &Status, context: &Context) -> String {
+pub fn thread_page(
+    assets: &Assets,
+    acct: &str,
+    staff: bool,
+    status: &Status,
+    context: &Context,
+) -> String {
     // The page itself is shared, so what is left here is the server's half of it: the content
     // preparation, because `inner_html` carries whatever the caller hands it and the browser
     // would only ever get the instance's own text.
@@ -308,7 +315,7 @@ pub fn thread_page(assets: &Assets, acct: &str, status: &Status, context: &Conte
         ancestors: context.ancestors.iter().map(&paint).collect(),
         descendants: context.descendants.iter().map(&paint).collect(),
     };
-    crate::pages::render_thread(assets, acct, &paint(status), &painted_context)
+    crate::pages::render_thread(assets, acct, staff, &paint(status), &painted_context)
 }
 
 /// Paints a page that is already a rendered component tree.
@@ -319,6 +326,7 @@ pub fn thread_page(assets: &Assets, acct: &str, status: &Status, context: &Conte
 pub fn page_of(
     assets: &Assets,
     acct: &str,
+    staff: bool,
     path: &str,
     title: &str,
     inner: &str,
@@ -327,7 +335,7 @@ pub fn page_of(
     page(
         assets,
         &format!("{title} · {acct}"),
-        &chrome(true, path, inner),
+        &chrome(true, staff, path, inner),
         island.as_deref(),
         false,
     )
@@ -341,13 +349,25 @@ pub fn page_of_public(
     inner: &str,
     noindex: bool,
 ) -> String {
-    page(assets, title, &chrome(false, path, inner), None, noindex)
+    page(
+        assets,
+        title,
+        &chrome(false, false, path, inner),
+        None,
+        noindex,
+    )
 }
 
 /// The signed-out page, and the shell a signed-in reader gets before their data arrives.
 pub fn landing(assets: &Assets) -> String {
     let inner = Owner::new().with(|| nodus_pages::pages::landing::LandingPage().to_html());
-    page(assets, "Nodus", &chrome(false, "/", &inner), None, false)
+    page(
+        assets,
+        "Nodus",
+        &chrome(false, false, "/", &inner),
+        None,
+        false,
+    )
 }
 
 /// The shell for every route the client owns.
@@ -358,7 +378,7 @@ pub fn landing(assets: &Assets) -> String {
 /// body the moment it boots, and its store answers the screen from cache when it can.
 /// Painting the chrome is still worth it — the reader sees the application, not a blank
 /// document, while two megabytes of wasm arrive.
-pub fn shell(assets: &Assets, acct: Option<&str>, path: &str) -> String {
+pub fn shell(assets: &Assets, acct: Option<&str>, staff: bool, path: &str) -> String {
     use leptos::prelude::*;
 
     if acct.is_none() {
@@ -384,16 +404,16 @@ pub fn shell(assets: &Assets, acct: Option<&str>, path: &str) -> String {
         return page(
             assets,
             "Sign in · Nodus",
-            &chrome(false, path, &inner),
+            &chrome(false, false, path, &inner),
             None,
             false,
         );
     }
 
-    crate::pages::render_unclaimed(assets, acct.unwrap_or_default(), path)
+    crate::pages::render_unclaimed(assets, acct.unwrap_or_default(), staff, path)
 }
 
-pub fn error(assets: &Assets, message: &str) -> String {
+pub fn error(assets: &Assets, staff: bool, message: &str) -> String {
     let inner = Owner::new().with(|| {
         nodus_pages::pages::shell::TimelineError(nodus_pages::pages::shell::TimelineErrorProps {
             message: message.to_owned(),
@@ -403,7 +423,7 @@ pub fn error(assets: &Assets, message: &str) -> String {
     page(
         assets,
         "Timeline unavailable",
-        &chrome(true, "/home", &inner),
+        &chrome(true, staff, "/home", &inner),
         None,
         false,
     )
@@ -457,4 +477,109 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_assets() -> Assets {
+        Assets {
+            script: "/nodus-web.js".to_owned(),
+            wasm: "/nodus-web_bg.wasm".to_owned(),
+            stylesheet: None,
+            stylesheet_css: None,
+        }
+    }
+
+    fn has_staff_links(html: &str) -> bool {
+        html.contains("href=\"/moderation\"") || html.contains("href=\"/admin\"")
+    }
+
+    #[test]
+    fn staff_links_follow_explicit_flag_only() {
+        let assets = test_assets();
+
+        // Staff renders include moderation and administration links.
+        let staff_home = home(&assets, "mod@example.com", true, &[], None);
+        assert!(staff_home.contains("href=\"/moderation\""));
+        assert!(staff_home.contains("href=\"/admin\""));
+
+        let staff_feed = feed(
+            &assets,
+            "mod@example.com",
+            true,
+            "local",
+            "Local",
+            "/home/local",
+            &[],
+            None,
+        );
+        assert!(staff_feed.contains("href=\"/moderation\""));
+        assert!(staff_feed.contains("href=\"/admin\""));
+
+        let staff_page = page_of(
+            &assets,
+            "mod@example.com",
+            true,
+            "/lists",
+            "Lists",
+            "<p/>",
+            None,
+        );
+        assert!(staff_page.contains("href=\"/moderation\""));
+        assert!(staff_page.contains("href=\"/admin\""));
+
+        let staff_shell = shell(&assets, Some("mod@example.com"), true, "/settings/account");
+        assert!(staff_shell.contains("href=\"/moderation\""));
+        assert!(staff_shell.contains("href=\"/admin\""));
+
+        let staff_error = error(&assets, true, "unavailable");
+        assert!(staff_error.contains("href=\"/moderation\""));
+        assert!(staff_error.contains("href=\"/admin\""));
+
+        // Non-staff and public renders immediately after never include staff links.
+        assert!(!has_staff_links(&home(
+            &assets,
+            "user@example.com",
+            false,
+            &[],
+            None
+        )));
+        assert!(!has_staff_links(&feed(
+            &assets,
+            "user@example.com",
+            false,
+            "local",
+            "Local",
+            "/home/local",
+            &[],
+            None,
+        )));
+        assert!(!has_staff_links(&page_of(
+            &assets,
+            "user@example.com",
+            false,
+            "/lists",
+            "Lists",
+            "<p/>",
+            None,
+        )));
+        assert!(!has_staff_links(&shell(
+            &assets,
+            Some("user@example.com"),
+            false,
+            "/settings/account",
+        )));
+        assert!(!has_staff_links(&error(&assets, false, "unavailable")));
+        assert!(!has_staff_links(&shell(&assets, None, true, "/sign-in")));
+        assert!(!has_staff_links(&landing(&assets)));
+        assert!(!has_staff_links(&page_of_public(
+            &assets,
+            "/status/example.com/1",
+            "Post",
+            "<p/>",
+            false,
+        )));
+    }
 }
