@@ -76,9 +76,12 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
     let Some(session) = session_of(&app, &headers) else {
         return Html(document::landing(&app.bundle())).into_response();
     };
+    let staff = resolve_staff(&app, &session).await;
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
-        Err(message) => return Html(document::error(&app.bundle(), &message)).into_response(),
+        Err(message) => {
+            return Html(document::error(&app.bundle(), staff, &message)).into_response();
+        }
     };
     let (which, title, path) = if local {
         ("local", "Local", "/home/local")
@@ -89,6 +92,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
         Ok((statuses, cursor)) => Html(document::feed(
             &app.bundle(),
             &session.acct,
+            staff,
             which,
             title,
             path,
@@ -96,7 +100,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
             cursor.as_deref(),
         ))
         .into_response(),
-        Err(message) => Html(document::error(&app.bundle(), &message)).into_response(),
+        Err(message) => Html(document::error(&app.bundle(), staff, &message)).into_response(),
     }
 }
 
@@ -342,6 +346,22 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
     ))
 }
 
+/// Resolves whether `session` belongs to a moderator, caching the answer on first check.
+async fn resolve_staff(app: &App, session: &Session) -> bool {
+    if let Some(admin) = session.admin {
+        return admin;
+    }
+    let answer = match Client::new(&session.host, &session.token) {
+        Ok(client) => client.is_staff().await,
+        Err(message) => {
+            tracing::warn!(%message, "could not ask whether this account moderates");
+            false
+        }
+    };
+    app.sessions.set_admin(&session.host, &session.acct, answer);
+    answer
+}
+
 async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Response {
     let path = uri.path();
     if std::path::Path::new(path)
@@ -367,30 +387,15 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
         if let Some(html) = public_account(&app, path).await {
             return Html(html).into_response();
         }
-        return Html(document::shell(&app.bundle(), None, path)).into_response();
+        return Html(document::shell(&app.bundle(), None, false, path)).into_response();
     };
     // The rail draws the moderation doors for a moderator, and it is drawn before any
     // wasm runs, so the answer has to come from the session that was established at
     // sign-in (`Session::admin`).
-    let admin = if let Some(admin) = session.admin {
-        admin
-    } else {
-        {
-            let answer = match Client::new(&session.host, &session.token) {
-                Ok(client) => client.is_staff().await,
-                Err(message) => {
-                    tracing::warn!(%message, "could not ask whether this account moderates");
-                    false
-                }
-            };
-            app.sessions.set_admin(&session.host, &session.acct, answer);
-            answer
-        }
-    };
-    document::set_staff(admin);
+    let staff = resolve_staff(&app, &session).await;
     let assets = app.bundle();
     let painted = match Client::new(&session.host, &session.token) {
-        Ok(client) => read_page(&client, &assets, &session.acct, path, uri.query()).await,
+        Ok(client) => read_page(&client, &assets, &session.acct, staff, path, uri.query()).await,
         Err(message) => {
             tracing::warn!(%message, "session could not be used; painting the skeleton");
             None
@@ -398,7 +403,7 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
     };
     match painted {
         Some(html) => Html(html).into_response(),
-        None => Html(document::shell(&assets, Some(&session.acct), path)).into_response(),
+        None => Html(document::shell(&assets, Some(&session.acct), staff, path)).into_response(),
     }
 }
 
@@ -410,19 +415,176 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let Some(session) = session_of(&app, &headers) else {
         return Html(document::landing(&app.bundle())).into_response();
     };
+    let staff = resolve_staff(&app, &session).await;
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
-        Err(message) => return Html(document::error(&app.bundle(), &message)).into_response(),
+        Err(message) => {
+            return Html(document::error(&app.bundle(), staff, &message)).into_response();
+        }
     };
     match client.home(PAGE).await {
         Ok((statuses, cursor)) => Html(document::home(
             &app.bundle(),
             &session.acct,
+            staff,
             &statuses,
             cursor.as_deref(),
         ))
         .into_response(),
-        Err(message) => Html(document::error(&app.bundle(), &message)).into_response(),
+        Err(message) => Html(document::error(&app.bundle(), staff, &message)).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app(host: &str) -> (Arc<App>, String, String) {
+        let sessions = Arc::new(Sessions::load(None));
+        let staff_id = sessions.insert(Session {
+            host: host.to_owned(),
+            token: "staff-token".to_owned(),
+            account_id: "1".to_owned(),
+            acct: "mod@example.com".to_owned(),
+            admin: Some(true),
+        });
+        let user_id = sessions.insert(Session {
+            host: host.to_owned(),
+            token: "user-token".to_owned(),
+            account_id: "2".to_owned(),
+            acct: "user@example.com".to_owned(),
+            admin: Some(false),
+        });
+        let app = Arc::new(App {
+            sessions,
+            assets: std::sync::RwLock::new(Assets {
+                script: "/nodus-web.js".to_owned(),
+                wasm: "/nodus-web_bg.wasm".to_owned(),
+                stylesheet: None,
+                stylesheet_css: None,
+            }),
+            dist: PathBuf::from("/nonexistent"),
+        });
+        (app, staff_id, user_id)
+    }
+
+    fn cookie_headers(session_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{COOKIE}={session_id}").parse().unwrap(),
+        );
+        headers
+    }
+
+    async fn body_text(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn staff_navigation_does_not_leak_across_requests_on_same_thread() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let (app, staff_id, user_id) = test_app(&closed_host);
+
+        // Staff request hits `shell`, which awaits `read_page` and falls back to `document::shell`.
+        let staff_html = body_text(
+            shell(
+                State(Arc::clone(&app)),
+                cookie_headers(&staff_id),
+                "/settings/account".parse().unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            staff_html.contains("href=\"/moderation\"") && staff_html.contains("href=\"/admin\""),
+            "staff response should include moderation and admin navigation"
+        );
+
+        // Subsequent non-staff and anonymous requests on the same thread must never inherit staff links.
+        let home_html =
+            body_text(home(State(Arc::clone(&app)), cookie_headers(&user_id)).await).await;
+        assert!(
+            !home_html.contains("href=\"/moderation\"") && !home_html.contains("href=\"/admin\""),
+            "non-staff /home response leaked staff navigation"
+        );
+
+        let feed_html =
+            body_text(public_feed(State(Arc::clone(&app)), cookie_headers(&user_id), true).await)
+                .await;
+        assert!(
+            !feed_html.contains("href=\"/moderation\"") && !feed_html.contains("href=\"/admin\""),
+            "non-staff /home/local response leaked staff navigation"
+        );
+
+        let anon_html = body_text(
+            shell(
+                State(Arc::clone(&app)),
+                HeaderMap::new(),
+                "/sign-in".parse().unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            !anon_html.contains("href=\"/moderation\"") && !anon_html.contains("href=\"/admin\""),
+            "anonymous /sign-in response leaked staff navigation"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn staff_navigation_is_isolated_across_concurrent_tokio_tasks() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let (app, staff_id, user_id) = test_app(&closed_host);
+        let mut handles = Vec::new();
+        for index in 0..40 {
+            let app = Arc::clone(&app);
+            let is_staff = index % 2 == 0;
+            let session_id = if is_staff {
+                staff_id.clone()
+            } else {
+                user_id.clone()
+            };
+            handles.push(tokio::spawn(async move {
+                // `/lists` triggers `read_page` to await an HTTP call (which yields across worker threads).
+                let html = body_text(
+                    shell(
+                        State(app),
+                        cookie_headers(&session_id),
+                        "/lists".parse().unwrap(),
+                    )
+                    .await,
+                )
+                .await;
+                (is_staff, html)
+            }));
+        }
+
+        for handle in handles {
+            let (is_staff, html) = handle.await.unwrap();
+            let has_mod = html.contains("href=\"/moderation\"");
+            let has_admin = html.contains("href=\"/admin\"");
+            if is_staff {
+                assert!(
+                    has_mod && has_admin,
+                    "staff response lost moderation/admin links across await"
+                );
+            } else {
+                assert!(
+                    !has_mod && !has_admin,
+                    "non-staff response received leaked moderation/admin links"
+                );
+            }
+        }
     }
 }
 

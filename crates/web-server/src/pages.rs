@@ -46,6 +46,7 @@ fn painted<V: leptos::IntoView>(view: impl FnOnce() -> V) -> String {
 fn render_route(
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     path: &str,
     title: &str,
     route: Route,
@@ -63,12 +64,21 @@ fn render_route(
             banner: None,
         })
     });
-    document::page_of(assets, acct, path, title, &inner, Some(island.to_string()))
+    document::page_of(
+        assets,
+        acct,
+        staff,
+        path,
+        title,
+        &inner,
+        Some(island.to_string()),
+    )
 }
 
 pub(crate) fn render_thread(
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     status: &nodus_client_core::model::Status,
     context: &nodus_client_core::model::Context,
 ) -> String {
@@ -86,18 +96,19 @@ pub(crate) fn render_thread(
             banner: None,
         })
     });
-    document::page_of(assets, acct, &path, "Thread", &inner, None)
+    document::page_of(assets, acct, staff, &path, "Thread", &inner, None)
 }
 
 pub(crate) async fn read_page(
     client: &Client,
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     path: &str,
     query: Option<&str>,
 ) -> Option<String> {
     let Some(screen) = Screen::of_path(path) else {
-        return read_entity(client, assets, acct, path).await;
+        return read_entity(client, assets, acct, staff, path).await;
     };
 
     let page = match screen.kind {
@@ -109,6 +120,7 @@ pub(crate) async fn read_page(
                 render_route(
                     assets,
                     acct,
+                    staff,
                     path,
                     screen.title,
                     Route::Notifications,
@@ -129,6 +141,7 @@ pub(crate) async fn read_page(
                 render_route(
                     assets,
                     acct,
+                    staff,
                     path,
                     screen.title,
                     Route::Messages,
@@ -142,7 +155,9 @@ pub(crate) async fn read_page(
                 )
             })
             .ok(),
-        ScreenKind::Saved { bookmarks } => read_saved(client, assets, acct, path, bookmarks).await,
+        ScreenKind::Saved { bookmarks } => {
+            read_saved(client, assets, acct, staff, path, bookmarks).await
+        }
         ScreenKind::Lists => client
             .lists()
             .await
@@ -160,6 +175,7 @@ pub(crate) async fn read_page(
                 document::page_of(
                     assets,
                     acct,
+                    staff,
                     path,
                     screen.title,
                     &inner,
@@ -177,6 +193,7 @@ pub(crate) async fn read_page(
                 render_route(
                     assets,
                     acct,
+                    staff,
                     path,
                     screen.title,
                     Route::Scheduled,
@@ -197,6 +214,7 @@ pub(crate) async fn read_page(
                 render_route(
                     assets,
                     acct,
+                    staff,
                     path,
                     screen.title,
                     Route::Directory,
@@ -210,13 +228,13 @@ pub(crate) async fn read_page(
                 )
             })
             .ok(),
-        ScreenKind::Search => read_search(client, assets, acct, path, query).await,
+        ScreenKind::Search => read_search(client, assets, acct, staff, path, query).await,
         _ => None,
     };
     if page.is_some() {
         return page;
     }
-    read_entity(client, assets, acct, path).await
+    read_entity(client, assets, acct, staff, path).await
 }
 
 /// Before the routes with a name in them: one account, or one thread.
@@ -225,6 +243,7 @@ pub(crate) async fn read_page(
 pub fn render_account(
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     account: &nodus_client_core::model::Account,
     statuses: &[nodus_client_core::model::Status],
     cursor: Option<&str>,
@@ -246,13 +265,14 @@ pub fn render_account(
             banner: None,
         })
     });
-    document::page_of(assets, acct, &path, &title, &painted, None)
+    document::page_of(assets, acct, staff, &path, &title, &painted, None)
 }
 
 pub(crate) async fn read_entity(
     client: &Client,
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     path: &str,
 ) -> Option<String> {
     if let Some(id) = path.strip_prefix("/accounts/") {
@@ -262,6 +282,7 @@ pub(crate) async fn read_entity(
             return Some(render_account(
                 assets,
                 acct,
+                staff,
                 &account,
                 &statuses,
                 cursor.as_deref(),
@@ -275,7 +296,9 @@ pub(crate) async fn read_entity(
     }
     let status = client.status(id).await.ok()?;
     let context = client.context(id).await.ok()?;
-    Some(document::thread_page(assets, acct, &status, &context))
+    Some(document::thread_page(
+        assets, acct, staff, &status, &context,
+    ))
 }
 
 /// Favourites or bookmarks: one screen, two shelves, the same shape.
@@ -283,6 +306,7 @@ pub(crate) async fn read_saved(
     client: &Client,
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     path: &str,
     bookmarks: bool,
 ) -> Option<String> {
@@ -302,6 +326,7 @@ pub(crate) async fn read_saved(
     Some(render_route(
         assets,
         acct,
+        staff,
         path,
         shelf.label(),
         Route::Saved(shelf.slug().to_owned()),
@@ -324,6 +349,7 @@ pub(crate) async fn read_search(
     client: &Client,
     assets: &document::Assets,
     acct: &str,
+    staff: bool,
     path: &str,
     query: Option<&str>,
 ) -> Option<String> {
@@ -369,6 +395,7 @@ pub(crate) async fn read_search(
     Some(document::page_of(
         assets,
         acct,
+        staff,
         path,
         "Search",
         &inner,
@@ -467,7 +494,7 @@ pub fn render_public_account(
 
 /// The last route seam: any path the data readers did not claim is drawn by the same
 /// `RouteView` the browser will mount, with no prefetched answers.
-pub fn render_unclaimed(assets: &document::Assets, acct: &str, path: &str) -> String {
+pub fn render_unclaimed(assets: &document::Assets, acct: &str, staff: bool, path: &str) -> String {
     let route = Route::from_path(path);
     let title = Screen::of_path(path)
         .map(|screen| screen.title.to_owned())
@@ -481,7 +508,7 @@ pub fn render_unclaimed(assets: &document::Assets, acct: &str, path: &str) -> St
             banner: None,
         })
     });
-    document::page_of(assets, acct, path, title.as_str(), &inner, None)
+    document::page_of(assets, acct, staff, path, title.as_str(), &inner, None)
 }
 
 #[cfg(test)]
