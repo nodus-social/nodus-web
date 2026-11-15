@@ -9,7 +9,6 @@
 use gloo_net::http::{Headers, Request};
 use wasm_bindgen::JsValue;
 
-use super::SCOPES;
 use super::pending::Pending;
 
 /// Name the instance shows on its "authorized applications" page.
@@ -63,25 +62,36 @@ pub(super) async fn register_app(
 ///
 /// The verifier proves this browser is the one that started the flow; `redirect_uri`
 /// must repeat the registered value byte-for-byte, which is why it is stored rather
-/// than rebuilt.
-pub(super) async fn exchange_code(record: &Pending, code: &str) -> Result<String, String> {
+/// than rebuilt. `scopes` must match the scopes requested in app registration and
+/// authorization (e.g. `ADMIN_SCOPES` for an admin grant).
+pub(super) async fn exchange_code(
+    record: &Pending,
+    code: &str,
+    scopes: &str,
+) -> Result<String, String> {
     let url = endpoint(&record.host, "/oauth/token");
-    let json = post_form(
-        &url,
-        &[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("client_id", record.client_id.as_str()),
-            ("client_secret", record.client_secret.as_str()),
-            ("redirect_uri", record.redirect_uri.as_str()),
-            ("code_verifier", record.verifier.as_str()),
-            ("scope", SCOPES),
-        ],
-    )
-    .await?;
+    let form = token_exchange_form(record, code, scopes);
+    let json = post_form(&url, &form).await?;
     string_field(&json, "access_token")
         .filter(|token| !token.is_empty())
         .ok_or_else(|| format!("{url} returned no access token."))
+}
+
+/// Builds the form-encoded parameters for `POST /oauth/token`.
+pub(super) fn token_exchange_form<'a>(
+    record: &'a Pending,
+    code: &'a str,
+    scopes: &'a str,
+) -> [(&'static str, &'a str); 7] {
+    [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", record.client_id.as_str()),
+        ("client_secret", record.client_secret.as_str()),
+        ("redirect_uri", record.redirect_uri.as_str()),
+        ("code_verifier", record.verifier.as_str()),
+        ("scope", scopes),
+    ]
 }
 
 /// `https://` is hard-coded: the client id, the code and the token travel on these
@@ -137,4 +147,37 @@ fn string_field(value: &JsValue, name: &str) -> Option<String> {
     js_sys::Reflect::get(value, &JsValue::from_str(name))
         .ok()?
         .as_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::pending::{Pending, Purpose};
+    use super::super::{ADMIN_SCOPES, SCOPES, scopes_for};
+    use super::token_exchange_form;
+
+    fn sample_pending(purpose: Purpose) -> Pending {
+        Pending {
+            host: "mastodon.example".to_owned(),
+            client_id: "client-id".to_owned(),
+            client_secret: "client-secret".to_owned(),
+            verifier: "verifier-value".to_owned(),
+            state: "state-value".to_owned(),
+            redirect_uri: "https://nodus.example/oauth/callback".to_owned(),
+            purpose,
+        }
+    }
+
+    #[test]
+    fn admin_exchange_form_requests_admin_scopes() {
+        let pending = sample_pending(Purpose::Admin);
+        let form = token_exchange_form(&pending, "auth-code", scopes_for(pending.purpose));
+        assert!(form.contains(&("scope", ADMIN_SCOPES)));
+    }
+
+    #[test]
+    fn sign_in_exchange_form_requests_standard_scopes() {
+        let pending = sample_pending(Purpose::SignIn);
+        let form = token_exchange_form(&pending, "auth-code", scopes_for(pending.purpose));
+        assert!(form.contains(&("scope", SCOPES)));
+    }
 }
