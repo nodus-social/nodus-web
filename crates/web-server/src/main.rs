@@ -437,6 +437,10 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::http::StatusCode;
+
     use super::*;
 
     fn test_app(host: &str) -> (Arc<App>, String, String) {
@@ -586,18 +590,6 @@ mod tests {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use axum::http::StatusCode;
-
-    use super::{App, Assets, Client, Sessions, public_account, public_thread, router};
-
     async fn spawn_test_server_with_app() -> (String, Arc<App>) {
         let app = Arc::new(App {
             sessions: Arc::new(Sessions::load(None)),

@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::validate::{host_valid, id_valid, is_public_ip};
+use crate::validate::{host_valid, id_valid, public_http_client};
 use crate::{App, session_of};
 
 fn local_host() -> Option<String> {
@@ -117,53 +117,8 @@ fn hydrated_status(post: &Value, account: &Value) -> Value {
     })
 }
 
-#[derive(Debug)]
-struct PublicDnsResolver;
-
-impl reqwest::dns::Resolve for PublicDnsResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async move {
-            let addrs: Vec<std::net::SocketAddr> =
-                tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            if addrs.is_empty() || addrs.iter().any(|addr| !is_public_ip(addr.ip())) {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "host resolved to a non-public IP address",
-                ))
-                    as Box<dyn std::error::Error + Send + Sync>);
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
 fn external_client() -> Result<reqwest::Client, reqwest::Error> {
-    let redirect = reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= 5 {
-            return attempt.error("too many redirects");
-        }
-        let url = attempt.url();
-        let valid_target = url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.host_str().is_some_and(|host| {
-                let candidate = match url.port() {
-                    Some(port) => format!("{host}:{port}"),
-                    None => host.to_owned(),
-                };
-                host_valid(&candidate)
-            });
-        if valid_target {
-            attempt.follow()
-        } else {
-            attempt.error("blocked redirect to non-public target")
-        }
-    });
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .dns_resolver(Arc::new(PublicDnsResolver))
-        .redirect(redirect)
-        .build()
+    public_http_client(std::time::Duration::from_secs(12))
 }
 
 fn valid_target(host: &str, id: &str) -> bool {
