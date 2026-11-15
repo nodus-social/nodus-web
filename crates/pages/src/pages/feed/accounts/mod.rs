@@ -324,7 +324,7 @@ fn EmptyPeople(#[prop(optional_no_strip)] on_settings: Option<Callback<()>>) -> 
                     "Follow a few accounts to give the recommender something to work with, or turn on background sync in "
                     <a
                         class="link link-primary"
-                        href="/settings/account"
+                        href="/settings/nodus"
                         on:click=move |event| follow_settings(&event, on_settings)
                     >
                         "Settings"
@@ -377,5 +377,20 @@ fn follow_settings(event: &leptos::ev::MouseEvent, on_settings: Option<Callback<
         #[cfg(target_arch = "wasm32")]
         event.prevent_default();
         on_settings.run(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _};
+
+    use super::{EmptyPeople, EmptyPeopleProps};
+
+    #[test]
+    fn empty_people_links_to_nodus_settings() {
+        let html =
+            Owner::new().with(|| EmptyPeople(EmptyPeopleProps { on_settings: None }).to_html());
+        assert!(html.contains("href=\"/settings/nodus\""), "{html}");
+        assert!(!html.contains("href=\"/settings/account\""), "{html}");
     }
 }

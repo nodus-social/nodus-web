@@ -91,7 +91,7 @@ fn install_links() {
                 return;
             }
             event.prevent_default();
-            navigate(Route::from_path(path));
+            navigate_href(&href);
         });
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             let callback: &js_sys::Function = wasm_bindgen::JsCast::unchecked_ref(handler.as_ref());
@@ -120,19 +120,25 @@ fn is_internal(path: &str) -> bool {
 /// current tab stacks a second identical history entry, and the Back button then appears
 /// to do nothing — it pops to the same URL, and the same screen renders again.
 pub fn navigate(to: Route) {
+    let url = to.path();
+    navigate_to(to, &url);
+}
+
+/// Navigates to an internal link `href`, preserving query string and fragment.
+pub fn navigate_href(href: &str) {
+    let (to, url) = Route::parse_href(href);
+    navigate_to(to, &url);
+}
+
+fn navigate_to(to: Route, url: &str) {
     let current = route();
-    let path = to.path();
-    let unchanged = current.get_untracked() == to
-        && web_sys::window()
-            .and_then(|window| window.location().pathname().ok())
-            .is_some_and(|here| here == path);
+    let unchanged = current.get_untracked() == to && current_url().is_some_and(|here| here == url);
     if unchanged {
         return;
     }
     if let Some(window) = web_sys::window() {
         if let Ok(history) = window.history() {
-            // `path()` builds the string, so it has to outlive the call that borrows it.
-            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
+            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(url));
         }
         // A new screen starts at its top: keeping the previous offset left the reader
         // halfway down a page they had not seen yet.
@@ -140,6 +146,14 @@ pub fn navigate(to: Route) {
     }
     current.set(to);
     crate::state::epoch::bump();
+}
+
+fn current_url() -> Option<String> {
+    let location = web_sys::window()?.location();
+    let pathname = location.pathname().ok()?;
+    let search = location.search().unwrap_or_default();
+    let hash = location.hash().unwrap_or_default();
+    Some(format!("{pathname}{search}{hash}"))
 }
 
 /// Click handler for internal links: keeps the SPA and the address bar in step.
@@ -184,33 +198,5 @@ fn current_pathname() -> String {
 #[must_use]
 pub fn query_param(name: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
-    let pairs = search.strip_prefix('?')?;
-    for pair in pairs.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        if key == name {
-            return Some(decode_query(value));
-        }
-    }
-    None
-}
-
-/// Decodes the escapes a link built in this app produces.
-fn decode_query(value: &str) -> String {
-    let mut decoded = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(index) = rest.find('%') {
-        decoded.push_str(&rest[..index]);
-        let escape = rest
-            .get(index + 1..index + 3)
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        if let Some(character) = escape.and_then(|byte| char::from_u32(u32::from(byte))) {
-            decoded.push(character);
-            rest = &rest[index + 3..];
-        } else {
-            decoded.push('%');
-            rest = &rest[index + 1..];
-        }
-    }
-    decoded.push_str(rest);
-    decoded.replace('+', " ")
+    crate::shared::router::parse_query_param(&search, name)
 }

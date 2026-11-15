@@ -93,24 +93,30 @@ impl Client {
         Ok((page.items, page.next_max_id))
     }
 
-    /// Notifications, in the instance's order.
-    pub async fn notifications(&self, limit: u16) -> Result<Vec<Notification>, String> {
+    /// Notifications, in the instance's order, plus the pagination cursor if more follow.
+    pub async fn notifications(
+        &self,
+        limit: u16,
+    ) -> Result<(Vec<Notification>, Option<String>), String> {
         let page = self
             .instance
             .notifications(PageParams::first(limit))
             .await
             .map_err(|error| error.to_string())?;
-        Ok(page.items)
+        Ok((page.items, page.next_max_id))
     }
 
-    /// Conversations, newest first.
-    pub async fn conversations(&self, limit: u16) -> Result<Vec<Conversation>, String> {
+    /// Conversations, newest first, plus the pagination cursor if more follow.
+    pub async fn conversations(
+        &self,
+        limit: u16,
+    ) -> Result<(Vec<Conversation>, Option<String>), String> {
         let page = self
             .instance
             .conversations(PageParams::first(limit))
             .await
             .map_err(|error| error.to_string())?;
-        Ok(page.items)
+        Ok((page.items, page.next_max_id))
     }
 
     /// Favourites or bookmarks.

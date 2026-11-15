@@ -13,7 +13,7 @@ import { keymap } from "prosemirror-keymap";
 import { EditorState, Plugin } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 
-import { buildIndex, fromDraft, schema, toDraft } from "./schema.mjs";
+import { TOKEN, buildIndex, fromDraft, schema, toDraft } from "./schema.mjs";
 
 const EMPTY = "Type your post…";
 
@@ -327,6 +327,33 @@ function mount(element, options = {}) {
     setEmoji: (list) => {
       index = buildIndex(list);
       codes = [...index.keys()].map((token) => token.slice(1, -1));
+      const replacements = [];
+      view.state.doc.descendants((node, pos) => {
+        if (!node.isText || !node.text) {
+          return true;
+        }
+        TOKEN.lastIndex = 0;
+        for (const match of node.text.matchAll(TOKEN)) {
+          const token = match[0].toLowerCase();
+          const url = index.get(token);
+          if (!url) {
+            continue;
+          }
+          const from = pos + (match.index ?? 0);
+          replacements.push({ from, to: from + match[0].length, token, url });
+        }
+        return true;
+      });
+      if (replacements.length > 0) {
+        const tr = view.state.tr.setMeta("addToHistory", false);
+        for (let i = replacements.length - 1; i >= 0; i -= 1) {
+          const { from, to, token, url } = replacements[i];
+          tr.replaceWith(from, to, schema.node("customEmoji", { token, url }));
+        }
+        view.dispatch(tr);
+      }
+      hint = trailing(view.state);
+      emit();
     },
     accept,
     insert,

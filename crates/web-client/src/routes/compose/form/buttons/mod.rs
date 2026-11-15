@@ -36,7 +36,7 @@ pub fn ComposerActions(
             extra=Some(extra)
             thread_mode=thread_mode
             invalid=Some(invalid)
-            on_thread=Some(on_thread)
+            on_thread=(!editing).then_some(on_thread)
             on_submit=on_submit
             on_cancel=Callback::new(move |()| router::navigate(Route::Home))
         />

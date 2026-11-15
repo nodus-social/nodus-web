@@ -50,7 +50,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
     let account = RwSignal::new(runtime.get_value().account(&id));
     let relationship = RwSignal::new(runtime.get_value().relationship(&id));
     let tab = RwSignal::new(Tab::Posts);
-    let (loading, set_loading) = signal(true);
+    let (loading, set_loading) = signal(false);
     let busy = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let alive = crate::Alive::new();
@@ -80,18 +80,26 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
 
     let load_id = id.clone();
     Effect::new(move |_| {
-        if account.get_untracked().is_none() {
+        if account.get_untracked().is_none() || relationship.get_untracked().is_none() {
             let account_done = Callback::new(move |result: Result<Account, String>| {
                 alive.if_alive(|| match result {
                     Ok(found) => account.set(Some(found)),
-                    Err(message) => error.set(Some(message)),
+                    Err(message) => {
+                        if account.get_untracked().is_none() {
+                            error.set(Some(message));
+                        }
+                    }
                 });
             });
             let relationship_done =
                 Callback::new(move |result: Result<Option<Relationship>, String>| {
                     alive.if_alive(|| match result {
                         Ok(found) => relationship.set(found),
-                        Err(message) => error.set(Some(message)),
+                        Err(message) => {
+                            if account.get_untracked().is_none() {
+                                error.set(Some(message));
+                            }
+                        }
                     });
                 });
             runtime
@@ -246,4 +254,85 @@ fn toggle(
         });
     });
     runtime.action(action, done);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use leptos::prelude::{Callback, IntoAny as _, Owner, RenderHtml as _, Signal};
+    use nodus_client_core::model::{Account, Status};
+
+    use super::{AccountScreen, AccountScreenProps};
+    use crate::components::CardRenderer;
+    use crate::route::{Runtime, TimelineKind, TimelineReply};
+
+    struct HeldAccountRuntime;
+
+    impl Runtime for HeldAccountRuntime {
+        fn revision(&self) -> Signal<u64> {
+            Signal::derive(|| 0)
+        }
+
+        fn now_millis(&self) -> f64 {
+            0.0
+        }
+
+        fn timeline(&self, _kind: &TimelineKind) -> TimelineReply {
+            TimelineReply {
+                items: Vec::new(),
+                cursor: Some("next-cursor".to_owned()),
+                held: true,
+                unavailable: false,
+            }
+        }
+
+        fn load_timeline(
+            &self,
+            _kind: TimelineKind,
+            _cursor: Option<String>,
+            _done: Callback<Result<(), String>>,
+        ) {
+        }
+
+        fn account(&self, id: &str) -> Option<Account> {
+            (id == "42").then(|| Account {
+                id: "42".to_owned(),
+                acct: "alice@example.org".to_owned(),
+                display_name: "Alice".to_owned(),
+                note: String::new(),
+                avatar: String::new(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 1,
+                following_count: 2,
+                statuses_count: 3,
+                last_status_at: None,
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+            })
+        }
+    }
+
+    #[test]
+    fn held_account_with_cursor_renders_idle_load_more() {
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        let html = Owner::new().with(|| {
+            AccountScreen(AccountScreenProps {
+                runtime: Arc::new(HeldAccountRuntime),
+                id: "42".to_owned(),
+                card,
+            })
+            .to_html()
+        });
+        let load_more_pos = html.find(">Load more</button>").expect("Load more button");
+        let button_start = html[..load_more_pos].rfind("<button").expect("button tag");
+        let load_more_tag = &html[button_start..load_more_pos];
+        assert!(
+            !load_more_tag.contains("disabled"),
+            "Load more button must not be disabled when timeline is held: {load_more_tag}"
+        );
+    }
 }
