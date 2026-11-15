@@ -288,6 +288,20 @@ async fn whoami(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     }
 }
 
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn normalized_style_host(raw: &str) -> Option<String> {
+    nodus_client_core::Instance::parse(raw)
+        .ok()
+        .map(|instance| validate::normalized_host(&instance.base))
+}
+
 /// Syncs updated `SessionStyle` from the browser client into SSR session state & per-account cache.
 async fn update_session_style(
     State(app): State<Arc<App>>,
@@ -297,6 +311,37 @@ async fn update_session_style(
     let Some(session) = session_of(&app, &headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    let Some(raw_host) = header_value(&headers, "x-nodus-host") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "x-nodus-host header is required" })),
+        )
+            .into_response();
+    };
+    let Some(target_account_id) = header_value(&headers, "x-nodus-account-id") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "x-nodus-account-id header is required" })),
+        )
+            .into_response();
+    };
+    let Some(target_host) = normalized_style_host(raw_host) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid x-nodus-host header" })),
+        )
+            .into_response();
+    };
+    let session_host =
+        normalized_style_host(&session.host).unwrap_or_else(|| session.host.to_ascii_lowercase());
+    if target_host != session_host || target_account_id != session.account_id {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "session account mismatch" })),
+        )
+            .into_response();
+    }
+
     let clean = style.sanitized();
     app.sessions
         .set_style(&session.host, &session.account_id, clean.clone());
@@ -942,6 +987,73 @@ mod tests {
             style: Some(SessionStyle::default()),
         });
 
+        let stale_payload = serde_json::json!({
+            "top": {
+                "split": "horizontal",
+                "slots": [{ "url": "https://cdn.example/stale-overwrite.png" }]
+            }
+        });
+
+        // Missing account-binding headers must be rejected cleanly.
+        let missing_headers = client
+            .post(format!("{base}/api/session/style"))
+            .header("cookie", format!("{COOKIE}={alice_id}"))
+            .json(&stale_payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_headers.status(), StatusCode::BAD_REQUEST);
+
+        // Stale sync targeting Bob or Carol while Alice's session cookie is active must return 409 Conflict
+        // and leave every account's cached SSR style untouched.
+        let wrong_account = client
+            .post(format!("{base}/api/session/style"))
+            .header("cookie", format!("{COOKIE}={alice_id}"))
+            .header("x-nodus-host", "alpha.example")
+            .header("x-nodus-account-id", "2")
+            .json(&stale_payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong_account.status(), StatusCode::CONFLICT);
+
+        let wrong_host = client
+            .post(format!("{base}/api/session/style"))
+            .header("cookie", format!("{COOKIE}={alice_id}"))
+            .header("x-nodus-host", "beta.example")
+            .header("x-nodus-account-id", "1")
+            .json(&stale_payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong_host.status(), StatusCode::CONFLICT);
+
+        assert!(
+            app.sessions
+                .cached_style("alpha.example", "1")
+                .unwrap()
+                .top
+                .slots
+                .is_empty()
+        );
+        assert_eq!(
+            app.sessions
+                .cached_style("alpha.example", "2")
+                .unwrap()
+                .top
+                .slots[0]
+                .url,
+            "https://cdn.example/bob-top.png"
+        );
+        assert!(
+            app.sessions
+                .cached_style("beta.example", "1")
+                .unwrap()
+                .top
+                .slots
+                .is_empty()
+        );
+
         // Update Alice via POST /api/session/style with mixed valid and XSS image URLs.
         let payload = serde_json::json!({
             "top": {
@@ -964,6 +1076,8 @@ mod tests {
         let resp = client
             .post(format!("{base}/api/session/style"))
             .header("cookie", format!("{COOKIE}={alice_id}"))
+            .header("x-nodus-host", "https://ALPHA.EXAMPLE/")
+            .header("x-nodus-account-id", "1")
             .json(&payload)
             .send()
             .await

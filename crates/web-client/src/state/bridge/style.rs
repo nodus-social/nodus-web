@@ -14,7 +14,7 @@ use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::Deserialize;
 use wasm_bindgen::JsCast as _;
 
-use super::{accounts, active_cache_key, instance_transport, with_sdk};
+use super::{accounts, active_cache_key, instance_transport, revision};
 
 const STYLE_STORAGE_PREFIX: &str = "nodus.session_style.";
 
@@ -156,8 +156,8 @@ pub async fn refresh_active() -> Result<SessionStyle, String> {
     cache_put(&key, &fetched);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(fetched.clone());
+        sync_ssr_style(&key, &fetched).await;
     }
-    sync_ssr_style(&fetched).await;
     Ok(fetched)
 }
 
@@ -229,8 +229,8 @@ pub async fn save_style(style: SessionStyle) -> Result<SessionStyle, String> {
     cache_put(&key, &clean);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(clean.clone());
+        sync_ssr_style(&key, &clean).await;
     }
-    sync_ssr_style(&clean).await;
     Ok(clean)
 }
 
@@ -255,8 +255,8 @@ pub async fn reset_style() -> Result<(), String> {
     cache_put(&key, &default);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(default.clone());
+        sync_ssr_style(&key, &default).await;
     }
-    sync_ssr_style(&default).await;
     Ok(())
 }
 
@@ -274,7 +274,20 @@ async fn fetch_style_with(transport: &BrowserInstance) -> Result<SessionStyle, S
     Ok(SessionStyle::from_metadata_map(&envelope.metadata))
 }
 
-async fn sync_ssr_style(style: &SessionStyle) {
+fn normalized_host(host: &str) -> String {
+    Instance::parse(host).map_or_else(
+        |_| host.trim().to_ascii_lowercase(),
+        |instance| {
+            let domain = instance.base.host_str().unwrap_or_default();
+            match instance.base.port() {
+                Some(port) => format!("{domain}:{port}"),
+                None => domain.to_owned(),
+            }
+        },
+    )
+}
+
+async fn sync_ssr_style(key: &AccountKey, style: &SessionStyle) {
     let Some(window) = web_sys::window() else {
         return;
     };
@@ -288,7 +301,10 @@ async fn sync_ssr_style(style: &SessionStyle) {
     let Ok(request) = web_sys::Request::new_with_str_and_init("/api/session/style", &init) else {
         return;
     };
-    let _ = request.headers().set("content-type", "application/json");
+    let headers = request.headers();
+    let _ = headers.set("content-type", "application/json");
+    let _ = headers.set("x-nodus-host", &normalized_host(&key.0));
+    let _ = headers.set("x-nodus-account-id", &key.1);
     if let Ok(response) =
         wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request)).await
     {
@@ -298,10 +314,6 @@ async fn sync_ssr_style(style: &SessionStyle) {
 
 /// Active account key helper exposed for UI editors that reset draft state on account switch.
 pub fn current_account_key() -> Option<String> {
-    with_sdk(|sdk| {
-        sdk.state()
-            .session
-            .get()
-            .map(|session| format!("{}::{}", session.host, session.account_id))
-    })
+    let _ = revision().get();
+    active_cache_key().map(|(host, account_id)| format!("{}::{account_id}", normalized_host(&host)))
 }

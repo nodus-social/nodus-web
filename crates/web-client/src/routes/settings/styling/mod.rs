@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use nodus_pages::pages::settings::styling::{StylingPage, UploadSlotRenderer};
+use nodus_pages::pages::settings::styling::{StyleDraftSnapshot, StylingPage, UploadSlotRenderer};
 use nodus_ui::session_style::{BannerRegionKind, ImageSlot, MAX_SLOTS_PER_REGION, SessionStyle};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen_futures::JsFuture;
@@ -215,13 +215,16 @@ pub(crate) fn StylingEditor() -> impl IntoView {
     let (message, set_message) = signal(None::<String>);
     let (error, set_error) = signal(None::<String>);
 
-    Effect::new(move |prev_key: Option<Option<String>>| {
+    Effect::new(move |prev: Option<StyleDraftSnapshot>| {
         let key = bridge_style::current_account_key();
         let current = active_style.get();
-        if prev_key.as_ref() != Some(&key) {
-            draft.set(current);
+        if StyleDraftSnapshot::should_apply_update(prev.as_ref(), &key, &draft.get_untracked()) {
+            draft.set(current.clone());
         }
-        key
+        StyleDraftSnapshot {
+            account_key: key,
+            synced: current,
+        }
     });
 
     let upload_zone: UploadSlotRenderer =

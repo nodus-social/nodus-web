@@ -14,6 +14,31 @@ use crate::components::panel::Panel;
 /// Optional client-provided file dropzone / picker rendered inside each banner region editor.
 pub type UploadSlotRenderer = Arc<dyn Fn(BannerRegionKind) -> AnyView + Send + Sync>;
 
+/// Last `(account_key, synced_style)` snapshot observed by an interactive styling editor.
+///
+/// Used to apply incoming background refreshes (e.g., `refresh_active()` completing after initial
+/// mount) without discarding local unsaved edits, while still resetting on account switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleDraftSnapshot {
+    pub account_key: Option<String>,
+    pub synced: SessionStyle,
+}
+
+impl StyleDraftSnapshot {
+    /// Returns `true` when incoming `active_style` updates should replace `current_draft`.
+    #[must_use]
+    pub fn should_apply_update(
+        prev: Option<&Self>,
+        account_key: &Option<String>,
+        current_draft: &SessionStyle,
+    ) -> bool {
+        match prev {
+            None => true,
+            Some(last) => last.account_key != *account_key || *current_draft == last.synced,
+        }
+    }
+}
+
 fn preview_region_block(
     region: BannerRegion,
     empty_label: &'static str,
@@ -778,5 +803,50 @@ mod tests {
         assert!(html.contains("nodus-right-image"));
         assert!(html.contains("Pin favorite"));
         assert!(html.contains("Expandable submenu"));
+    }
+
+    #[test]
+    fn style_draft_snapshot_hydrates_async_refresh_unless_locally_edited() {
+        let alice_key = Some(String::from("alpha.example::1"));
+        let bob_key = Some(String::from("alpha.example::2"));
+        let initial = SessionStyle::default();
+
+        // Initial mount always applies active style.
+        assert!(StyleDraftSnapshot::should_apply_update(
+            None, &alice_key, &initial
+        ));
+        let mut prev = StyleDraftSnapshot {
+            account_key: alice_key.clone(),
+            synced: initial.clone(),
+        };
+
+        // Background refresh arrives for the same account while draft is still untouched: must update draft.
+        assert!(StyleDraftSnapshot::should_apply_update(
+            Some(&prev),
+            &alice_key,
+            &initial
+        ));
+        let mut server_style = SessionStyle::default();
+        server_style
+            .top
+            .slots
+            .push(ImageSlot::new("https://cdn.example/saved.png", None, None).unwrap());
+        prev.synced = server_style.clone();
+        let mut draft = server_style.clone();
+
+        // User makes a local unsaved edit; a subsequent refresh must preserve the local draft.
+        draft.nav.move_item_to("lists", NavPlacement::Right);
+        assert!(!StyleDraftSnapshot::should_apply_update(
+            Some(&prev),
+            &alice_key,
+            &draft
+        ));
+
+        // Switching accounts resets the draft even when there were unsaved local edits.
+        assert!(StyleDraftSnapshot::should_apply_update(
+            Some(&prev),
+            &bob_key,
+            &draft
+        ));
     }
 }
