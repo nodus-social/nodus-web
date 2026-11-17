@@ -37,6 +37,7 @@ fn card_view_for(status: &nodus_client_core::model::Status) -> leptos::prelude::
 /// `painted(Page(props))` would build the page before the owner exists and panic with
 /// "no reactive owner" the first time a list had a row in it.
 fn painted<V: leptos::IntoView>(view: impl FnOnce() -> V) -> String {
+    crate::prepare_render();
     Owner::new().with(|| view().to_html())
 }
 

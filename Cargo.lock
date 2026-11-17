@@ -1981,6 +1981,7 @@ dependencies = [
 name = "nodus-web-server"
 version = "0.1.0"
 dependencies = [
+ "any_spawner",
  "axum",
  "leptos",
  "nodus-client-core",

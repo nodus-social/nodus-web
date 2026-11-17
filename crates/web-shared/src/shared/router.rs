@@ -164,6 +164,44 @@ impl Route {
         if trimmed == CALLBACK_PATH {
             return Self::OauthCallback;
         }
+        // `/@name` and `/@name@host` are how a handle is written everywhere else on the
+        // network, and `/@name@host/{id}` is what a shared remote-status link looks like.
+        // They name the same screens the canonical `/accounts/{host}/{name}` and
+        // `/status/{host}/{id}` do, so a pasted link lands instead of falling home.
+        if let Some(rest) = trimmed.strip_prefix("/@") {
+            let (handle, id) = match rest.split_once('/') {
+                Some((handle, id)) => (handle, Some(id)),
+                None => (rest, None),
+            };
+            let id = id.map(str::trim).filter(|id| !id.is_empty());
+            let handle = handle.trim_start_matches('@');
+            match handle.split_once('@') {
+                Some((name, host)) => {
+                    let (name, host) = (name.trim(), host.trim());
+                    if !name.is_empty() && !host.is_empty() {
+                        return match id {
+                            Some(id) => Self::Thread {
+                                host: host.to_owned(),
+                                id: id.to_owned(),
+                            },
+                            None => Self::Account(format!("{host}/{name}")),
+                        };
+                    }
+                }
+                None => {
+                    let name = handle.trim();
+                    if !name.is_empty() {
+                        return match id {
+                            Some(id) => Self::Thread {
+                                host: String::new(),
+                                id: id.to_owned(),
+                            },
+                            None => Self::Account(name.to_owned()),
+                        };
+                    }
+                }
+            }
+        }
         if let Some(rest) = trimmed.strip_prefix("/status/") {
             // `/status/{host}/{id}` is the shareable form; `/status/{id}` stays the
             // in-session one, because an id alone says nothing about where to read it.
@@ -343,6 +381,39 @@ mod tests {
             url,
             format!("{}/search?q=%40alice%40example.org#top", super::BASE)
         );
+    }
+
+    #[test]
+    fn a_handle_is_a_profile_and_a_handle_with_an_id_is_a_thread() {
+        assert_eq!(
+            Route::from_path("/@luxuride"),
+            Route::Account("luxuride".to_owned())
+        );
+        assert_eq!(
+            Route::from_path("/@luxuride@nodus.luxuride.eu"),
+            Route::Account("nodus.luxuride.eu/luxuride".to_owned())
+        );
+        assert_eq!(
+            Route::from_path("/@Gargron@mastodon.social/115"),
+            Route::Thread {
+                host: "mastodon.social".to_owned(),
+                id: "115".to_owned()
+            }
+        );
+        assert_eq!(
+            Route::from_path("/@luxuride/01M7"),
+            Route::Thread {
+                host: String::new(),
+                id: "01M7".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_handle_path_keeps_its_canonical_address_so_links_are_stable() {
+        let (route, url) = Route::parse_href("/@Gargron@mastodon.social");
+        assert_eq!(url, format!("{}/accounts/mastodon.social/Gargron", super::BASE));
+        assert_eq!(route, Route::Account("mastodon.social/Gargron".to_owned()));
     }
 
     #[test]

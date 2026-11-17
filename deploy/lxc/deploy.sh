@@ -40,7 +40,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     -e CARGO_HOME=/cargo \
     rust:1-bookworm \
     cargo build --release --locked --bin nodus-web-server \
-      --target-dir /src/target-bookworm
+      --target-dir /src/web/target-bookworm
 fi
 
 [[ -x "${BINARY}" ]] || { echo "missing ${BINARY}" >&2; exit 1; }

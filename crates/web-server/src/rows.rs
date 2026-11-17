@@ -19,11 +19,14 @@ pub fn status_card(status: &Status) -> String {
     // The account names its instance for a remote author; a local one is named by the
     // post's own url, which is on this instance.
     let host = handles::host_of_acct(&inner.account.acct)
-        .or_else(|| inner.url.as_deref().and_then(handles::host_of_url));
+        .or_else(|| inner.url.as_deref().and_then(handles::host_of_url))
+        .or_else(|| instance_host())
+        .unwrap_or_default()
+        .to_owned();
     painted(
         status,
-        &handles::profile_path_for(&inner.account.acct, host),
-        &handles::status_path(host, &inner.id),
+        &handles::profile_path_for(&inner.account.acct, Some(&host)),
+        &handles::status_path(Some(&host), &inner.id),
     )
 }
 
@@ -32,9 +35,25 @@ pub fn status_card_public(status: &Status, host: &str) -> String {
     let inner = status.reblog.as_deref().unwrap_or(status);
     painted(
         status,
-        &format!("/accounts/{host}/{}", inner.account.id),
+        &handles::profile_path_for(&inner.account.acct, Some(host)),
         &format!("/status/{host}/{}", inner.id),
     )
+}
+
+/// The instance this deployment calls itself, when it knows.
+///
+/// A local post's url is its own address, so the host is usually in hand; a post that has
+/// no url yet still links "here", which is this name.
+fn instance_host() -> Option<&'static str> {
+    static NAMED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAMED
+        .get_or_init(|| {
+            std::env::var("NODUS_INSTANCE_HOST")
+                .ok()
+                .map(|host| host.trim().to_owned())
+                .filter(|host| !host.is_empty())
+        })
+        .as_deref()
 }
 
 fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {

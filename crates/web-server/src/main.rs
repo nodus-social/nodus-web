@@ -127,6 +127,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // Installed once per process: any_spawner keeps a single global set of function
+    // pointers, and more than one render path reaches a component that starts a task.
+    prepare_render();
+
     let listen = std::env::var("NODUS_LISTEN").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let asset_dir = std::env::var("NODUS_ASSET_DIR").unwrap_or_else(|_| "/srv/nodus".to_owned());
     let sessions_path = std::env::var("NODUS_SESSIONS")
@@ -189,7 +193,21 @@ fn router(app: Arc<App>) -> Router {
             get(|state, headers| public_feed(state, headers, false)),
         )
         .fallback(shell)
+        .layer(axum::middleware::from_fn(install_executor))
         .with_state(app)
+}
+
+/// Prepares the render executor on whichever worker thread answers this request.
+///
+/// The executor's function pointers are process-wide, but the instance they call lives on
+/// the thread that installed it, so a thread that renders without this panics instead of
+/// dropping its task.
+async fn install_executor(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    prepare_render();
+    next.run(request).await
 }
 
 /// What `/authorize_interaction` accepts from a link somebody shared.
@@ -527,10 +545,34 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
     }
     // `/accounts/{host}/{name}` is the permanent address and `/accounts/{host}/{id}` is
     // what the API hands out; the name is resolved by the instance the address named.
-    let id = crate::public_api::resolve_account_ref(host, segment, None).await?;
-    let client = Client::new(host, "").ok()?;
-    let account = client.account(&id).await.ok()?;
-    let (statuses, _) = client.account_statuses(&id, PAGE).await.ok()?;
+    let id = match crate::public_api::resolve_account_ref(host, segment, None).await {
+        Some(id) => id,
+        None => {
+            tracing::warn!(%host, %segment, "public account name could not be resolved");
+            return None;
+        }
+    };
+    let client = match Client::new(host, "") {
+        Ok(client) => client,
+        Err(message) => {
+            tracing::warn!(%message, %host, "public account host could not be used");
+            return None;
+        }
+    };
+    let account = match client.account(&id).await {
+        Ok(account) => account,
+        Err(message) => {
+            tracing::warn!(%message, %host, %id, "public account could not be read");
+            return None;
+        }
+    };
+    let (statuses, _) = match client.account_statuses(&id, PAGE).await {
+        Ok(page) => page,
+        Err(message) => {
+            tracing::warn!(%message, %host, %id, "public account posts could not be read");
+            return None;
+        }
+    };
     Some(pages::render_public_account(
         &app.bundle(),
         host,
@@ -538,6 +580,88 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
         account,
         statuses,
     ))
+}
+
+/// The canonical page address for a handle-shaped path.
+///
+/// `/@name` and `/@name@host` are the addresses a reader copies from another instance, and
+/// `/@name@host/{id}` is what a shared remote post looks like. The server reads pages by the
+/// canonical `/accounts/{host}/{name}` and `/status/{host}/{id}` forms, so the handle form is
+/// rewritten before the read rather than learned twice.
+fn canonical_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/@")?;
+    let mut steps = rest.split('/').filter(|step| !step.is_empty());
+    let handle = steps.next()?.trim_start_matches('@');
+    let id = steps.next();
+    let (name, host) = match handle.split_once('@') {
+        Some((name, host)) => (name.trim(), Some(host.trim())),
+        None => (handle.trim(), None),
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let host = host.filter(|host| !host.is_empty());
+    Some(match (host, id) {
+        (Some(host), Some(id)) => format!("/status/{host}/{id}"),
+        (Some(host), None) => format!("/accounts/{host}/{name}"),
+        (None, Some(id)) => format!("/status/{id}"),
+        (None, None) => {
+            // A bare handle names an account here only when this deployment knows which
+            // instance it is; without that the client resolves it against the session.
+            let host = std::env::var("NODUS_INSTANCE_HOST").unwrap_or_default();
+            let host = host.trim().to_owned();
+            if host.is_empty() {
+                return None;
+            }
+            format!("/accounts/{host}/{name}")
+        }
+    })
+}
+
+/// A server render is one pass over a finished tree: nothing reads a signal after it, so a
+/// task started during the paint has nowhere to report and is dropped. Pages read their data
+/// before the paint, through the runtime they were handed.
+struct RenderExecutor;
+
+impl any_spawner::CustomExecutor for RenderExecutor {
+    fn spawn(&self, future: any_spawner::PinnedFuture<()>) {
+        tokio::spawn(future);
+    }
+
+    fn spawn_local(&self, future: any_spawner::PinnedLocalFuture<()>) {
+        drop(future);
+    }
+
+    fn poll_local(&self) {}
+}
+
+/// Installs the render executor on this worker thread, once per thread.
+fn prepare_render() {
+    let _ = any_spawner::Executor::init_local_custom_executor(RenderExecutor);
+}
+
+/// The extensions a bundle asset can carry.
+///
+/// A page path may contain a dot — `/@name@host` is a handle, not a file — so an extension
+/// on its own does not mean "asset", only one of these does.
+const ASSET_EXTENSIONS: [&str; 15] = [
+    "js", "mjs", "wasm", "css", "map", "json", "png", "jpg", "jpeg", "gif", "webp", "svg",
+    "ico", "woff", "woff2",
+];
+
+/// Whether `path` names an asset the bundle should have served, rather than a page.
+fn is_asset(path: &str) -> bool {
+    if path.ends_with('/') {
+        return false;
+    }
+    std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            ASSET_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(extension))
+        })
 }
 
 /// Resolves whether `session` belongs to a moderator, caching the answer on first check.
@@ -579,13 +703,12 @@ async fn resolve_style(app: &App, session: &Session) -> SessionStyle {
 }
 
 async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Response {
-    let path = uri.path();
-    if std::path::Path::new(path)
-        .extension()
-        .is_some_and(|_| !path.ends_with('/'))
-    {
+    let address = uri.path();
+    if is_asset(address) {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let canonical = canonical_path(address);
+    let path = canonical.as_deref().unwrap_or(address);
     let Some(session) = session_of(&app, &headers) else {
         if let Some(id) = path.strip_prefix("/accounts/") {
             if !id.contains('/') {

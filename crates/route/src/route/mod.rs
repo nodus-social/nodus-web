@@ -495,6 +495,16 @@ where
     Callback::new(|_| ())
 }
 
+/// Whether an account address segment is one of our ids rather than a handle.
+///
+/// Mastodon's ids are digit strings and ours are 26-character ULIDs; a handle is neither,
+/// which is what lets a bare name resolve as a name.
+fn looks_like_id(segment: &str) -> bool {
+    let digits = !segment.is_empty() && segment.chars().all(|c| c.is_ascii_digit());
+    let ulid = segment.len() == 26 && segment.chars().all(|c| c.is_ascii_alphanumeric());
+    digits || ulid
+}
+
 /// The route renderer both paints call.
 #[component]
 #[expect(
@@ -594,6 +604,21 @@ pub fn RouteView(
                     }
                     .into_any()
                 }
+            }
+            // A bare handle means "here": with a session the reader's instance is where
+            // the name resolves, so the profile is the screen, not a prompt to sign in.
+            // An id-shaped segment stays with the older screen, which reads it as one.
+            _ if runtime.session_host().is_some() && !looks_like_id(&id) => {
+                let host = runtime.session_host().unwrap_or_default();
+                view! {
+                    <crate::route::screens::profile::ProfileScreen
+                        runtime
+                        host
+                        name=id.to_owned()
+                        card
+                    />
+                }
+                .into_any()
             }
             _ => view! { <AccountScreen runtime id card/> }.into_any(),
         },

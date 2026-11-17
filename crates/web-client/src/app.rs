@@ -235,8 +235,17 @@ pub(crate) fn App() -> impl IntoView {
                                 />
                             }
                             .into_any(),
-                            Route::Account(id) => match crate::state::runtime::runtime()
-                                .public_host()
+                            // A bare handle means "here": the instance the reader is signed
+                            // in at, then the one this deployment names, then the address
+                            // they typed. An id alone cannot be read without knowing which
+                            // instance minted it, so signing in is the honest fallback.
+                            Route::Account(id) => match crate::state::bridge::session::remembered_host()
+                                .or_else(|| crate::state::runtime::runtime().public_host())
+                                .or_else(|| {
+                                    web_sys::window()
+                                        .and_then(|window| window.location().host().ok())
+                                        .filter(|host| !host.trim().is_empty())
+                                })
                             {
                                 Some(host) => view! {
                                     <nodus_route::route::RouteView
