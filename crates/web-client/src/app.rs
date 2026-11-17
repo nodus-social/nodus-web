@@ -10,6 +10,7 @@ use crate::routes::home::HomeTimeline;
 use crate::routes::sign_in::SignIn;
 use crate::shell;
 use crate::state::bridge::{init, revision, with_sdk};
+use nodus_web::shared::screens::Screen;
 
 use leptos::prelude::*;
 #[cfg(feature = "admin")]
@@ -31,6 +32,24 @@ pub(crate) fn App() -> impl IntoView {
     router::install();
 
     let revision = revision();
+    // The server paints the title for the page it thinks it is serving, which — for any
+    // screen behind a session — is the signed-out one, so a signed-in reader would see
+    // "Sign in" in the tab for the whole session. The page half comes from the route table
+    // the two paints share; the instance half is whatever the server wrote, kept as it is.
+    Effect::new(move |_| {
+        let path = router::route().get().path();
+        let Some(screen) = Screen::of_path(&path) else {
+            return;
+        };
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        let instance = document
+            .title()
+            .rsplit_once('\u{b7}')
+            .map_or_else(|| "Nodus".to_owned(), |(_, name)| name.trim().to_owned());
+        document.set_title(&screen.document_title(&instance));
+    });
     let route = router::route();
     Effect::new(move |_| crate::state::runtime::remember_path(&route.get().path()));
     // A `Memo`, not a closure: the screen match below reads this, and a plain closure

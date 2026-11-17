@@ -92,6 +92,14 @@ impl Screen {
         if path.starts_with("/settings/") {
             return Self::named("/settings", ScreenKind::Settings);
         }
+        // The console screens are sections of one tab, not screens of their own: the tab
+        // keeps the name of the area the reader is in.
+        if path.starts_with("/admin/") {
+            return Self::named("/admin", ScreenKind::Admin);
+        }
+        if path.starts_with("/moderation/") {
+            return Self::named("/moderation", ScreenKind::Moderation);
+        }
         None
     }
 
@@ -246,6 +254,15 @@ mod tests {
         assert_eq!(
             Screen::of_path("/home/local/").map(|s| s.kind),
             Some(ScreenKind::Public { local: true })
+        );
+        // The console's sections all belong to the one tab that names their area.
+        assert_eq!(
+            Screen::of_path("/admin/overview").map(|s| s.title),
+            Some("Administration")
+        );
+        assert_eq!(
+            Screen::of_path("/moderation/scans").map(|s| s.title),
+            Some("Moderation")
         );
     }
 

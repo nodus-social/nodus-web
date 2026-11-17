@@ -77,6 +77,8 @@ test('the dashboard counts what the server reports', async ({ page }) => {
   await expect(page.getByText('12', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Open reports', { exact: true })).toBeVisible()
   await expect(page.getByText('Last seven days')).toBeVisible()
+  // The server paints the signed-out title; the client names the page it actually shows.
+  await expect(page).toHaveTitle(/^Administration \u00b7 /)
   // The graphs are canvases: a spec that never reached Chart.js would leave the panel
   // showing its empty-state caption instead.
   await expect(page.locator('canvas')).toHaveCount(4)
