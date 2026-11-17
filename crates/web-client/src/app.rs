@@ -6,7 +6,7 @@
 
 use crate::router::{self, Route};
 use crate::routes::callback::Callback;
-use crate::routes::home::{FederatedTimeline, HomeTimeline, LocalTimeline};
+use crate::routes::home::HomeTimeline;
 use crate::routes::sign_in::SignIn;
 use crate::shell;
 use crate::state::bridge::{init, revision, with_sdk};
@@ -14,7 +14,6 @@ use crate::state::bridge::{init, revision, with_sdk};
 use leptos::prelude::*;
 #[cfg(feature = "admin")]
 use leptos::task::spawn_local;
-use nodus_route::route::RouteView;
 use nodus_ui::components::CardRenderer;
 #[cfg(feature = "admin")]
 use nodus_ui::icons::Icon;
@@ -108,8 +107,6 @@ pub(crate) fn App() -> impl IntoView {
         }
     });
 
-    // Whether this reader has staff doors decides whether the tray offers to move them.
-    let has_staff = extra_doors().is_some();
     view! {
         <nodus_ui::Frame
             signed_in=Signal::derive(move || signed_in.get())
@@ -125,7 +122,8 @@ pub(crate) fn App() -> impl IntoView {
                     crate::state::bridge::style::active_style_signal().get()
                 }
             })
-            profile=Signal::derive(move || profile.get())            // The rail's cards read the stores the rest of the app already filled; the
+            profile=Signal::derive(move || profile.get())
+            // The rail's cards read the stores the rest of the app already filled; the
             // first visit asks for the two the site itself does not need.
             sidebar=Signal::derive(move || crate::state::bridge::sidebar::data())
             editor=Some(crate::state::bridge::style::editor())
@@ -352,7 +350,7 @@ fn StaffRail() -> impl IntoView {
     });
 
     view! {
-        <Show when=move || !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No))>
+        <Show when=move || !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No(_)))>
             <RailItem
                 label="Moderation"
                 icon=Icon::Shield

@@ -15,7 +15,7 @@ use web_sys::Storage;
 /// The key carries the format version, so a later record shape can use a new key and
 /// this build simply never sees the old value — that is why there is no separate
 /// format-marker line here, unlike the session record (`state/bridge/session/record.rs`).
-const PENDING_KEY: &str = "nodus-oauth/3";
+const PENDING_KEY: &str = "nodus-oauth/4";
 
 /// What the callback needs, and nothing else.
 ///
@@ -66,6 +66,13 @@ pub(crate) struct Pending {
     pub(crate) redirect_uri: String,
     /// What the callback should do with the token.
     pub(crate) purpose: Purpose,
+    /// The account an admin grant is for; empty for a sign-in.
+    ///
+    /// A grant belongs to the account that asked for it, not to the instance, so the
+    /// callback must not have to guess which session was current when it started.
+    pub(crate) account_id: String,
+    /// The in-app path that asked for the grant; empty when there is nowhere to return.
+    pub(crate) return_to: String,
 }
 
 impl fmt::Debug for Pending {
@@ -114,8 +121,7 @@ fn storage() -> Option<Storage> {
     web_sys::window()?.session_storage().ok()?
 }
 
-/// Serializes the record: six fields and the purpose, one per line, escaped by
-/// [`escape_into`].
+/// Serializes the record: nine fields, one per line, escaped by [`escape_into`].
 fn encode(pending: &Pending) -> String {
     let purpose = pending.purpose.as_str().to_owned();
     let fields = [
@@ -126,6 +132,8 @@ fn encode(pending: &Pending) -> String {
         &pending.state,
         &pending.redirect_uri,
         &purpose,
+        &pending.account_id,
+        &pending.return_to,
     ];
     let mut out = String::new();
     for (index, field) in fields.iter().enumerate() {
@@ -151,6 +159,8 @@ fn decode(raw: &str) -> Option<Pending> {
         state: unescape(lines.next()?)?,
         redirect_uri: unescape(lines.next()?)?,
         purpose: Purpose::parse(&unescape(lines.next()?)?)?,
+        account_id: unescape(lines.next()?)?,
+        return_to: unescape(lines.next()?)?,
     };
     // More lines than fields means this was written by something else.
     if lines.next().is_some() {
@@ -167,6 +177,11 @@ fn decode(raw: &str) -> Option<Pending> {
         &pending.redirect_uri,
     ];
     if fields.iter().any(|field| field.is_empty()) {
+        return None;
+    }
+    // An admin grant without an account id cannot be keyed to the account that asked,
+    // so it would be stored somewhere no later transport looks.
+    if pending.purpose == Purpose::Admin && pending.account_id.is_empty() {
         return None;
     }
     Some(pending)

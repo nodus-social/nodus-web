@@ -1,4 +1,5 @@
-//! Builds the two bundles the composer mounts, plus the emoji data file they search.
+//! Builds the bundles the composer and the console mount, plus the emoji data file they
+//! search.
 //!
 //! Run from `web`: `npm install && npm run build`. `crates/web-client/build.rs` runs this
 //! automatically when an output is missing or older than its source, so the files are
@@ -19,6 +20,11 @@ const targets = [
   {
     entryPoints: ["js/picker.mjs"],
     outfile: `${OUT}/picker.js`,
+    format: "iife",
+  },
+  {
+    entryPoints: ["js/charts.mjs"],
+    outfile: `${OUT}/charts.js`,
     format: "iife",
   },
 ];

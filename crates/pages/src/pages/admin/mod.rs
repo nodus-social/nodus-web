@@ -19,16 +19,25 @@ use crate::{PageHeader, Screen};
 pub mod announcements;
 pub mod audit;
 pub mod domains;
+pub mod email;
 pub mod overview;
 pub mod protocol;
+pub mod replies;
+pub mod scanners;
 
 /// One section of the administration area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     /// The dashboard.
     Overview,
+    /// The services that read content, and what their labels mean.
+    Scanners,
     /// Domains allowed through a general block.
     Domains,
+    /// Mail domains that may not sign up.
+    Email,
+    /// The instance's canned replies.
+    Replies,
     /// What the instance is telling everyone.
     Announcements,
     /// What staff have done.
@@ -39,9 +48,12 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::Overview,
+        Self::Scanners,
         Self::Domains,
+        Self::Email,
+        Self::Replies,
         Self::Announcements,
         Self::Audit,
         Self::Protocol,
@@ -52,7 +64,10 @@ impl Section {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Overview => "overview",
+            Self::Scanners => "scanners",
             Self::Domains => "domains",
+            Self::Email => "email",
+            Self::Replies => "replies",
             Self::Announcements => "announcements",
             Self::Audit => "audit",
             Self::Protocol => "protocol",
@@ -73,7 +88,10 @@ impl Section {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
+            Self::Scanners => "Scanners",
             Self::Domains => "Allowed domains",
+            Self::Email => "Mail domains",
+            Self::Replies => "Canned replies",
             Self::Announcements => "Announcements",
             Self::Audit => "Audit log",
             Self::Protocol => "Protocol",
@@ -85,7 +103,10 @@ impl Section {
     pub const fn hint(self) -> &'static str {
         match self {
             Self::Overview => "What this instance counted this week",
+            Self::Scanners => "The services that read content, and what their labels mean",
             Self::Domains => "Domains allowed through a general block",
+            Self::Email => "Mail domains that may not sign up",
+            Self::Replies => "The sentences a moderator can send",
             Self::Announcements => "What the instance is telling everyone",
             Self::Audit => "Administrative actions recorded by this server",
             Self::Protocol => "The client API the SDK selects for this server",
@@ -97,7 +118,10 @@ impl Section {
     pub const fn icon(self) -> Icon {
         match self {
             Self::Overview | Self::Protocol => Icon::Globe,
+            Self::Scanners => Icon::Shield,
             Self::Domains => Icon::Link,
+            Self::Email => Icon::Mail,
+            Self::Replies => Icon::Pen,
             Self::Announcements => Icon::Bell,
             Self::Audit => Icon::List,
         }
@@ -130,6 +154,12 @@ pub fn AdminPage(
     /// Asks for the wider token, then retries the probe. Absent where nobody can ask.
     #[prop(optional_no_strip)]
     on_grant: Option<Callback<()>>,
+    /// The last probe or grant failure, shown beside the gate. Absent on the server.
+    #[prop(optional_no_strip)]
+    error: Option<Signal<Option<String>>>,
+    /// Whether a grant is on its way to the instance, so the gate can hold its button.
+    #[prop(optional_no_strip)]
+    granting: Option<Signal<bool>>,
     /// Opens a section inside the app, by slug. Absent on the server.
     #[prop(optional_no_strip)]
     on_navigate: Option<Callback<String>>,
@@ -153,7 +183,7 @@ pub fn AdminPage(
                 description="This instance: what it counted, who it talks to, what it says."
             />
 
-            <StaffGate standing=standing on_grant=on_grant>
+            <StaffGate standing=standing on_grant=on_grant error=error granting=granting>
                 <SectionStrip
                     base="/admin"
                     tabs=tabs.get_value()

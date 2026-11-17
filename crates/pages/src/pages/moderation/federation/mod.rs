@@ -41,6 +41,16 @@ pub fn FederationPage(
     /// Lifts one block. Absent where nothing can be sent.
     #[prop(optional)]
     on_remove: Option<Callback<String>>,
+    /// Records the list being pasted in.
+    #[prop(optional)]
+    on_import: Option<Callback<String>>,
+    /// Imports the pasted list in one request.
+    #[prop(optional)]
+    on_import_now: Option<Callback<()>>,
+    /// What the last import did.
+    #[prop(into)]
+    #[prop(optional)]
+    imported: Signal<Option<String>>,
 ) -> impl IntoView {
     view! {
         <Show when=move || error.get().is_some()>
@@ -111,6 +121,39 @@ pub fn FederationPage(
             >
                 "Block domain"
             </button>
+        </div>
+
+        <div class="mt-4 flex flex-col gap-2">
+            <p class="text-sm font-medium">"Import a list"</p>
+            <p class="text-xs opacity-60">
+                "One domain per line, as a block list exports them. Domains already blocked are skipped."
+            </p>
+            <textarea
+                class="textarea textarea-bordered textarea-sm h-24 font-mono text-xs"
+                placeholder="one.domain"
+                disabled=on_import.is_none()
+                on:input=move |event| {
+                    if let Some(on_import) = on_import {
+                        on_import.run(event_target_value(&event));
+                    }
+                }
+            ></textarea>
+            <div class="flex items-center gap-2">
+                <button
+                    class="btn btn-sm"
+                    disabled=move || busy.get() || on_import_now.is_none()
+                    on:click=move |_| {
+                        if let Some(on_import_now) = on_import_now {
+                            on_import_now.run(());
+                        }
+                    }
+                >
+                    "Block these"
+                </button>
+                <Show when=move || imported.get().is_some()>
+                    <span class="text-xs opacity-70">{move || imported.get().unwrap_or_default()}</span>
+                </Show>
+            </div>
         </div>
     }
 }

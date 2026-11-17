@@ -1,6 +1,6 @@
 //! The moderation area: one section at a time, behind the staff gate.
 //!
-//! The area and its four sections were drawn in the client, so the server had nothing to paint
+//! The area and its sections were drawn in the client, so the server had nothing to paint
 //! for `/moderation/{section}` beyond a skeleton. The heading, the gate and the strip are one
 //! tree now; the section's body arrives as `children`, because each body reads its own list
 //! and a page may not fetch. The section enum lives here rather than in the client for the
@@ -16,6 +16,7 @@ use crate::{PageHeader, Screen};
 
 pub mod accounts;
 pub mod federation;
+pub mod flags;
 pub mod registrations;
 pub mod reports;
 
@@ -30,6 +31,8 @@ pub mod people;
 pub enum Section {
     /// The report queue.
     Reports,
+    /// Content the scanners flagged.
+    Scans,
     /// Account standing.
     Accounts,
     /// Who is waiting to be let in.
@@ -40,8 +43,9 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Reports,
+        Self::Scans,
         Self::Accounts,
         Self::Registrations,
         Self::Federation,
@@ -52,6 +56,7 @@ impl Section {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Reports => "reports",
+            Self::Scans => "scans",
             Self::Accounts => "accounts",
             Self::Registrations => "registrations",
             Self::Federation => "federation",
@@ -72,6 +77,7 @@ impl Section {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Reports => "Reports",
+            Self::Scans => "Scans",
             Self::Accounts => "Accounts",
             Self::Registrations => "Registrations",
             Self::Federation => "Federation",
@@ -83,6 +89,7 @@ impl Section {
     pub const fn hint(self) -> &'static str {
         match self {
             Self::Reports => "Posts someone reported, and what was decided",
+            Self::Scans => "What the scanners found, and what a person decided",
             Self::Accounts => "Look an account up, and act on it",
             Self::Registrations => "Who is waiting, and how somebody may join",
             Self::Federation => "Domains this instance refuses",
@@ -94,6 +101,7 @@ impl Section {
     pub const fn icon(self) -> Icon {
         match self {
             Self::Reports => Icon::Alert,
+            Self::Scans => Icon::Image,
             Self::Accounts => Icon::Users,
             Self::Registrations => Icon::Check,
             Self::Federation => Icon::Shield,
@@ -131,6 +139,12 @@ pub fn ModerationPage(
     /// Asks for the wider token, then retries the probe. Absent where nobody can ask.
     #[prop(optional)]
     on_grant: Option<Callback<()>>,
+    /// The last probe or grant failure, shown beside the gate. Absent on the server.
+    #[prop(optional_no_strip)]
+    error: Option<Signal<Option<String>>>,
+    /// Whether a grant is on its way to the instance, so the gate can hold its button.
+    #[prop(optional_no_strip)]
+    granting: Option<Signal<bool>>,
     /// Opens a section inside the app, by slug. Absent on the server.
     #[prop(optional)]
     on_navigate: Option<Callback<String>>,
@@ -154,7 +168,7 @@ pub fn ModerationPage(
                 description="Decisions about people: reports, accounts, registrations and blocked domains."
             />
 
-            <StaffGate standing=standing on_grant=on_grant>
+            <StaffGate standing=standing on_grant=on_grant error=error granting=granting>
                 <SectionStrip
                     base="/moderation"
                     tabs=tabs.get_value()

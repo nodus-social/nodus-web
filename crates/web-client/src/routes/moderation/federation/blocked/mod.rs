@@ -17,6 +17,8 @@ pub(super) fn BlockedList() -> impl IntoView {
     let (suspend, set_suspend) = signal(true);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
+    let (import_list, set_import_list) = signal(String::new());
+    let (imported, set_imported) = signal(None::<String>);
 
     let reload = Callback::new(move |()| {
         spawn_local(async move {
@@ -69,6 +71,44 @@ pub(super) fn BlockedList() -> impl IntoView {
         });
     });
 
+    let import_now = Callback::new(move |()| {
+        let pasted = import_list.get_untracked();
+        let domains: Vec<String> = pasted
+            .lines()
+            .map(|line| line.trim().trim_start_matches('#').trim().to_lowercase())
+            .filter(|line| line.contains('.') && !line.contains(char::is_whitespace))
+            .collect();
+        if domains.is_empty() {
+            set_error.set(Some("Paste at least one domain, one per line.".to_owned()));
+            return;
+        }
+        let severity = if suspend.get_untracked() {
+            DomainSeverity::Suspend
+        } else {
+            DomainSeverity::Silence
+        };
+        spawn_local(async move {
+            let names: Vec<&str> = domains.iter().map(String::as_str).collect();
+            match admin::import_domain_blocks(&names, severity).await {
+                Ok(outcome) => {
+                    alive.if_alive(|| {
+                        set_imported.set(Some(match outcome.skipped.len() {
+                            0 => format!("{} blocked.", outcome.blocked),
+                            skipped => format!(
+                                "{} blocked; {skipped} line(s) were not a domain.",
+                                outcome.blocked
+                            ),
+                        }));
+                        set_import_list.set(String::new());
+                        set_error.set(None);
+                    });
+                    reload.run(());
+                }
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
     view! {
         <FederationPage
             blocks=blocks
@@ -80,6 +120,9 @@ pub(super) fn BlockedList() -> impl IntoView {
             on_suspend=Callback::new(move |entire: bool| set_suspend.set(entire))
             on_block=add
             on_remove=remove
+            on_import=Callback::new(move |value: String| set_import_list.set(value))
+            on_import_now=import_now
+            imported=imported
         />
     }
 }

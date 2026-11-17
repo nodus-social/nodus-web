@@ -36,14 +36,32 @@ pub fn StaffGate(
     /// turn `None` into a present (therefore enabled) button.
     #[prop(optional_no_strip)]
     on_grant: Option<Callback<()>>,
+    /// The last failure — a refused probe or a grant that could not start — shown above the
+    /// arms so it survives whichever standing the probe ends on.
+    #[prop(optional_no_strip)]
+    error: Option<Signal<Option<String>>>,
+    /// Whether a grant is already on its way to the instance. While it is, the button is
+    /// disabled: the browser is leaving for the consent page, and a second press would
+    /// start a second grant.
+    #[prop(optional_no_strip)]
+    granting: Option<Signal<bool>>,
     /// The section the gate opens on `Yes`.
     children: ChildrenFn,
 ) -> impl IntoView {
     // Taken out of the view once, so the gate can be read as three arms rather than one
     // nested `Show`.
     let body = StoredValue::new(children);
+    let error_text =
+        Signal::derive(move || error.and_then(|error| error.get()).unwrap_or_default());
+    let pending = Signal::derive(move || granting.is_some_and(|granting| granting.get()));
 
     view! {
+        <Show when=move || !error_text.get().is_empty()>
+            <div class="alert alert-error alert-soft py-2 text-sm" role="alert">
+                {move || error_text.get()}
+            </div>
+        </Show>
+
         <Show when=move || standing.get().is_none()>
             <p class="text-sm opacity-70">"Checking what this account may do…"</p>
         </Show>
@@ -67,15 +85,22 @@ pub fn StaffGate(
                     </p>
                     <button
                         class="btn btn-sm w-fit"
-                        disabled=on_grant.is_none()
+                        disabled=move || on_grant.is_none() || pending.get()
                         on:click=move |_| {
                             if let Some(on_grant) = on_grant {
                                 on_grant.run(());
                             }
                         }
                     >
-                        "Grant admin access"
+                        {move || {
+                            if pending.get() { "Waiting for the instance…" } else { "Grant admin access" }
+                        }}
                     </button>
+                    <Show when=move || pending.get()>
+                        <p class="text-xs opacity-60">
+                            "Approve the request in the instance's own window; this page comes back here when it is done."
+                        </p>
+                    </Show>
                 </div>
             </div>
         </Show>
@@ -89,6 +114,29 @@ pub fn StaffGate(
                          would work. An admin has to give it one; that is not something a
                          client can do."
                     </p>
+                    <p class="text-sm opacity-70">
+                        "If you were granted moderation recently, or this browser still holds
+                         a grant from another account, asking again is safe: the instance
+                         shows exactly what is being approved."
+                    </p>
+                    <button
+                        class="btn btn-sm w-fit"
+                        disabled=move || on_grant.is_none() || pending.get()
+                        on:click=move |_| {
+                            if let Some(on_grant) = on_grant {
+                                on_grant.run(());
+                            }
+                        }
+                    >
+                        {move || {
+                            if pending.get() { "Waiting for the instance…" } else { "Grant admin access again" }
+                        }}
+                    </button>
+                    <Show when=move || pending.get()>
+                        <p class="text-xs opacity-60">
+                            "Approve the request in the instance's own window; this page comes back here when it is done."
+                        </p>
+                    </Show>
                 </div>
             </div>
         </Show>

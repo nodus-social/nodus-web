@@ -6,7 +6,7 @@
 
 use leptos::prelude::*;
 
-use crate::router::{Route, navigate};
+use crate::router::{Route, navigate, navigate_href};
 use crate::state::alive::Alive;
 use crate::state::bridge;
 use crate::state::oauth;
@@ -30,9 +30,22 @@ pub fn Callback() -> impl IntoView {
     wasm_bindgen_futures::spawn_local(async move {
         match oauth::finish(&search).await {
             Ok(finished) if finished.purpose == oauth::Purpose::Admin => {
-                match bridge::keep_admin_token(&finished.host, &finished.token).await {
-                    // Back to the screen that asked, where the panels now answer.
-                    Ok(()) => navigate(Route::Settings(crate::router::SECTION_DEFAULT.to_owned())),
+                match bridge::keep_admin_token(
+                    &finished.host,
+                    &finished.account_id,
+                    &finished.token,
+                )
+                .await
+                {
+                    // Back to the screen that asked, where the panels now answer. A path
+                    // that is not an internal absolute path is ignored rather than passed
+                    // to the history API.
+                    Ok(()) => match finished.return_to.as_deref() {
+                        Some(path) if path.starts_with('/') && !path.starts_with("//") => {
+                            navigate_href(path);
+                        }
+                        _ => navigate(Route::Settings(crate::router::SECTION_DEFAULT.to_owned())),
+                    },
                     Err(message) => alive.if_alive(|| error.set(Some(message))),
                 }
             }

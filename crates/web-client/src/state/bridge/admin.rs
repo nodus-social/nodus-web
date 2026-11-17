@@ -3,8 +3,11 @@
 use super::{admin_transport, instance_transport};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
-    AdminAccount, AdminMeasure, Announcement, AnnouncementDraft, AuditEntry, DomainAllow,
-    DomainBlock, DomainSeverity, ModerationAction, Report, ReportState,
+    AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
+    AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
+    DomainAllow, DomainBlock, DomainBlockDraft, DomainImportOutcome, DomainSeverity,
+    EmailDomainBlock, FlagState, ModerationAction, NewScanner, Report, ReportFilter, ReportState,
+    Scan, ScanFlag, ScanRequest, ScanSeverity, Scanner, ScannerAsset, ScannerRule, WarningPreset,
 };
 
 /// How many rows a moderation screen asks for.
@@ -14,12 +17,15 @@ use nodus_client_core::model::{
 pub const PAGE: u16 = 20;
 
 /// What the moderation screens can offer right now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Staff {
     /// The token opened the report queue: the panels work.
     Yes,
-    /// The instance refused: this account is not a moderator, whatever scopes it holds.
-    No,
+    /// The instance refused, with the probe's own reason.
+    ///
+    /// The text is kept so a stale grant can be told apart from an account that never
+    /// had the role, and so the screen can offer a fresh grant instead of dead-ending.
+    No(String),
     /// No admin token was granted, so nothing can be said yet.
     NeedsGrant,
 }
@@ -36,7 +42,9 @@ pub async fn staff() -> Staff {
     };
     match transport.reports(ReportState::Open, 1).await {
         Ok(_) => Staff::Yes,
-        Err(_) => Staff::No,
+        Err(error) => Staff::No(format!(
+            "The instance refused access to the report queue: {error}"
+        )),
     }
 }
 
@@ -84,36 +92,7 @@ pub async fn delete_announcement(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// Reports in the given state.
-pub async fn reports(state: ReportState) -> Result<Vec<Report>, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .reports(state, PAGE)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-/// Marks a report as handled.
-pub async fn resolve_report(id: &str) -> Result<Report, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .resolve_report(id)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Reopens a handled report.
-///
-/// Unused until the queue grows a "resolved" tab; the SDK keeps it because a report
-/// closed by mistake can only be reopened, never re-created.
-#[expect(
-    dead_code,
-    reason = "the reports screen resolves and dismisses; reopening is implemented on the SDK side and unused until the panel grows a verb for it"
-)]
 pub async fn reopen_report(id: &str) -> Result<Report, String> {
     let transport = admin_transport()
         .or_else(instance_transport)
@@ -270,6 +249,469 @@ pub async fn reject_account(id: &str) -> Result<AdminAccount, String> {
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .reject_account(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One page of the report queue, narrowed by the filter.
+pub async fn reports_page(filter: &ReportFilter) -> Result<Vec<Report>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .reports_page(filter)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One report with its accounts and statuses filled in.
+pub async fn report(id: &str) -> Result<Report, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .report(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Marks a report handled, recording why.
+pub async fn resolve_report_with_note(id: &str, note: &str) -> Result<Report, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .resolve_report_with_note(id, note)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Claims a report for an account, or puts it back in the unclaimed queue.
+pub async fn assign_report(id: &str, account_id: Option<&str>) -> Result<Report, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .assign_report(id, account_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The account directory, narrowed by the query.
+pub async fn search_accounts(query: &AdminAccountQuery) -> Result<Vec<AdminAccount>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .search_accounts(query)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One account with its notes, flags and report count.
+pub async fn account_detail(id: &str) -> Result<AccountDetail, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .account_detail(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Adds a private note to an account.
+pub async fn add_account_note(id: &str, body: &str) -> Result<AccountNote, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .add_account_note(id, body)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Deletes one of an account's notes.
+pub async fn delete_account_note(id: &str, note_id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_account_note(id, note_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Applies a decision, recording why and optionally resolving the report behind it.
+pub async fn moderate_with_note(
+    id: &str,
+    action: ModerationAction,
+    note: &str,
+    report_id: Option<&str>,
+) -> Result<AdminAccount, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .moderate_account_with_note(id, action, note, report_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Grants or revokes administrator rights.
+pub async fn set_staff(id: &str, staff: bool) -> Result<AdminAccount, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .set_staff(id, staff)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Allows or refuses lossless uploads from one account.
+pub async fn set_lossless(id: &str, images: bool, videos: bool) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .set_lossless(id, images, videos)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Deletes the account and everything it owns. Irreversible.
+pub async fn purge_account(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .purge_account(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Replaces a block's domain, severity and flags.
+pub async fn update_domain_block(
+    id: &str,
+    draft: &DomainBlockDraft,
+) -> Result<DomainBlock, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_domain_block(id, draft)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Blocks many domains at one severity.
+pub async fn import_domain_blocks(
+    domains: &[&str],
+    severity: DomainSeverity,
+) -> Result<DomainImportOutcome, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .import_domain_blocks(domains, severity)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Mail domains registrations are refused from.
+pub async fn email_domain_blocks() -> Result<Vec<EmailDomainBlock>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .email_domain_blocks(PAGE)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Refuses registrations from a mail domain.
+pub async fn create_email_domain_block(
+    domain: &str,
+    allow_registration: bool,
+) -> Result<EmailDomainBlock, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .create_email_domain_block(domain, allow_registration)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Stops refusing a mail domain.
+pub async fn delete_email_domain_block(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_email_domain_block(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Who the grant belongs to, what it may do, and how much is waiting.
+pub async fn meta() -> Result<AdminMeta, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .admin_meta()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The flat counts behind the overview screen.
+pub async fn overview() -> Result<AdminOverview, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .admin_overview()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// What the instance noticed, most recent first.
+pub async fn alerts(unacknowledged: bool) -> Result<Vec<AdminAlert>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .admin_alerts(unacknowledged, PAGE)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Records that an alert has been seen.
+pub async fn acknowledge_alert(id: &str) -> Result<AdminAlert, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .acknowledge_alert(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The registered scanner services, with their rules.
+pub async fn scanners() -> Result<Vec<Scanner>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .scanners()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Registers a scanner service.
+pub async fn create_scanner(scanner: &NewScanner) -> Result<Scanner, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .create_scanner(scanner)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Replaces a scanner's settings.
+pub async fn update_scanner(id: &str, scanner: &NewScanner) -> Result<Scanner, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_scanner(id, scanner)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Unregisters a scanner.
+pub async fn delete_scanner(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_scanner(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Asks a scanner what it can report and stores the answer.
+pub async fn refresh_scanner(id: &str) -> Result<Scanner, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .refresh_scanner(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Decides what one label means at or above one threshold.
+pub async fn set_scanner_rule(
+    scanner_id: &str,
+    label: &str,
+    threshold: f64,
+    severity: ScanSeverity,
+) -> Result<ScannerRule, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .set_scanner_rule(scanner_id, label, threshold, severity)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Forgets a rule.
+pub async fn delete_scanner_rule(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_scanner_rule(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The content sets this instance holds.
+pub async fn scanner_assets() -> Result<Vec<ScannerAsset>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .scanner_assets()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Uploads a content set.
+pub async fn upload_scanner_asset(asset: &AssetUpload) -> Result<ScannerAsset, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .upload_scanner_asset(asset)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Deletes a content set no scanner points at.
+pub async fn delete_scanner_asset(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_scanner_asset(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The bytes of one content set.
+pub async fn download_scanner_asset(id: &str) -> Result<Vec<u8>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .download_scanner_asset(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Scan results a moderator has to judge; `None` asks for all of them.
+pub async fn scan_flags(state: Option<FlagState>) -> Result<Vec<ScanFlag>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .scan_flags(state, PAGE)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Records a moderator's verdict on a flag.
+pub async fn resolve_scan_flag(id: &str, state: FlagState) -> Result<ScanFlag, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .resolve_scan_flag(id, state)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Scans waiting, running or finished.
+pub async fn scan_queue(state: Option<&str>) -> Result<Vec<Scan>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .scan_queue(state, PAGE)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Queues a subject by hand.
+pub async fn enqueue_scan(request: &ScanRequest) -> Result<u64, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .enqueue_scan(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Warnings a moderator can reuse.
+pub async fn warning_presets() -> Result<Vec<WarningPreset>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .warning_presets()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Saves a new warning preset.
+pub async fn create_warning_preset(title: &str, text: &str) -> Result<WarningPreset, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .create_warning_preset(title, text)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Replaces a preset's title and text.
+pub async fn update_warning_preset(
+    id: &str,
+    title: &str,
+    text: &str,
+) -> Result<WarningPreset, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_warning_preset(id, title, text)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Deletes a preset.
+pub async fn delete_warning_preset(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .delete_warning_preset(id)
         .await
         .map_err(|error| error.to_string())
 }
