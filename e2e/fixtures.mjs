@@ -430,3 +430,33 @@ export function notification({ id = '5001', type = 'favourite' } = {}) {
     status: status(),
   }
 }
+
+/**
+ * Records every chart specification the page hands to the Chart.js wrapper.
+ *
+ * The wrapper reads properties (`labels`, `series`), so handing it JSON text draws an empty
+ * axis and still counts as a canvas — the dashboard shipped that way once.
+ */
+export async function captureChartSpecs(page) {
+  await page.addInitScript(() => {
+    window.__chartSpecs = []
+    let wrapper
+    Object.defineProperty(window, 'nodusCharts', {
+      configurable: true,
+      get: () => wrapper,
+      set: (value) => {
+        wrapper = {
+          mount: (element, spec) => {
+            window.__chartSpecs.push(spec)
+            return value.mount(element, spec)
+          },
+        }
+      },
+    })
+  })
+}
+
+/** The chart specifications recorded so far, newest last. */
+export function chartSpecs(page) {
+  return page.evaluate(() => window.__chartSpecs || [])
+}

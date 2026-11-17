@@ -10,6 +10,8 @@ import {
   ACCOUNT_ID,
   adminAccount,
   adminApi,
+  captureChartSpecs,
+  chartSpecs,
   granted,
   hydrated,
   report,
@@ -19,23 +21,25 @@ import {
   stubApi,
 } from '../fixtures.mjs'
 
-/** A day of measures, so the dashboard has something to draw. */
+/** A week of measures, one row per key, the way the API answers. */
 function measures(days = 7) {
-  const rows = []
+  const dates = []
   for (let day = 0; day < days; day += 1) {
-    const date = new Date(Date.UTC(2026, 10, 1 + day)).toISOString().slice(0, 10)
-    for (const key of [
-      'new_users',
-      'active_user_count',
-      'interactions',
-      'opened_reports',
-      'resolved_reports',
-      'open_reports',
-    ]) {
-      rows.push({ key, total: String(day + 1), previous_total: '1', data: [{ date, value: String(day + 1) }] })
-    }
+    dates.push(new Date(Date.UTC(2026, 10, 1 + day)).toISOString().slice(0, 10))
   }
-  return rows
+  return [
+    'new_users',
+    'active_user_count',
+    'interactions',
+    'opened_reports',
+    'resolved_reports',
+    'open_reports',
+  ].map((key) => ({
+    key,
+    total: String(days),
+    previous_total: '1',
+    data: dates.map((date, index) => ({ date, value: String(index % 3) })),
+  }))
 }
 
 /**
@@ -57,6 +61,7 @@ async function sent(calls, match) {
 }
 
 async function consoleAs(page, options = {}) {
+  await captureChartSpecs(page)
   await stubApi(page)
   const calls = await adminApi(page, options)
   await signedIn(page)
@@ -75,6 +80,20 @@ test('the dashboard counts what the server reports', async ({ page }) => {
   // The graphs are canvases: a spec that never reached Chart.js would leave the panel
   // showing its empty-state caption instead.
   await expect(page.locator('canvas')).toHaveCount(4)
+
+  // A canvas is not a graph. The wrapper reads properties off the spec, so a spec sent as
+  // text draws an empty axis and still counts as a canvas — which is how an empty
+  // dashboard shipped green. Assert the data, and the two series of the report chart.
+  const specs = await chartSpecs(page)
+  expect(specs).toHaveLength(4)
+  for (const spec of specs) {
+    expect(spec.labels.length).toBeGreaterThan(0)
+    expect(spec.series.some((series) => series.values.length > 0)).toBe(true)
+  }
+  const reports = specs.find((spec) =>
+    spec.series.some((series) => series.label === 'Opened'),
+  )
+  expect(reports.series.map((series) => series.label)).toEqual(['Opened', 'Resolved'])
 })
 
 test('a report is resolved with the note the moderator wrote', async ({ page }) => {

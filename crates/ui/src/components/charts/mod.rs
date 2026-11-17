@@ -208,9 +208,15 @@ fn mount(
             set_failed.set(true);
             return;
         };
+        // The wrapper reads properties, not text: handing it the JSON string would leave
+        // `labels` and `series` undefined and draw an empty axis.
+        let Ok(object) = js_sys::JSON::parse(&json) else {
+            web_sys::console::error_1(&"nodus: a chart spec could not be parsed".into());
+            set_failed.set(true);
+            return;
+        };
         if let Some(mounted) = handle.get_value() {
-            if crate::script::call_method(&mounted, "update", &[JsValue::from_str(&json)]).is_some()
-            {
+            if crate::script::call_method(&mounted, "update", &[object.clone()]).is_some() {
                 set_failed.set(false);
                 return;
             }
@@ -251,11 +257,9 @@ fn mount(
                 return;
             };
             let target: web_sys::Element = node.unchecked_into();
-            let Some(mounted) = crate::script::call_method(
-                &charts,
-                "mount",
-                &[target.into(), JsValue::from_str(&json)],
-            ) else {
+            let Some(mounted) =
+                crate::script::call_method(&charts, "mount", &[target.into(), object])
+            else {
                 set_failed.set(true);
                 return;
             };
