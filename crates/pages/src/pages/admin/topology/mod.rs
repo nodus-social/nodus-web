@@ -155,6 +155,9 @@ pub fn TopologyPage(
     /// The lowest level the drawer shows.
     #[prop(into)]
     min_level: Signal<String>,
+    /// Whether the drawer keeps reading.
+    #[prop(into)]
+    live: Signal<bool>,
     /// Whether a read is in flight.
     #[prop(into)]
     busy: Signal<bool>,
@@ -173,6 +176,9 @@ pub fn TopologyPage(
     /// Change the level filter.
     #[prop(optional)]
     on_level: Option<Callback<String>>,
+    /// Start or stop following the log.
+    #[prop(optional)]
+    on_follow: Option<Callback<bool>>,
 ) -> impl IntoView {
     let refresh = on_refresh;
     let level_button = move |level: &'static str, label: &'static str| {
@@ -236,6 +242,18 @@ pub fn TopologyPage(
                             {move || selected.get().map(|name| format!("{name} log")).unwrap_or_default()}
                         </span>
                         <div class="flex items-center gap-1">
+                            <button
+                                class="btn btn-xs"
+                                class:btn-active=move || live.get()
+                                title="Read the drawer again every couple of seconds while it is open"
+                                on:click=move |_| {
+                                    if let Some(follow) = on_follow {
+                                        follow.run(!live.get_untracked());
+                                    }
+                                }
+                            >
+                                {move || if live.get() { "Following" } else { "Follow" }}
+                            </button>
                             {level_button("info", "Info")}
                             {level_button("warn", "Warnings")}
                             {level_button("error", "Errors")}

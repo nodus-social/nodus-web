@@ -1,5 +1,6 @@
 //! The instance's own processes, asked on mount and when a button says so.
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_client_core::model::{NodeLog, Topology};
@@ -11,6 +12,9 @@ use crate::state::bridge::{admin, revision};
 /// How many entries a log drawer reads at a time.
 const LOG_LIMIT: u16 = 200;
 
+/// How long a following drawer waits between reads.
+const FOLLOW_GAP_MS: u32 = 2_000;
+
 #[component]
 pub fn System() -> impl IntoView {
     let revision = revision();
@@ -21,6 +25,7 @@ pub fn System() -> impl IntoView {
     let (busy, set_busy) = signal(false);
     let (error, set_error) = signal(None::<String>);
     let (asked, set_asked) = signal(0_u64);
+    let (live, set_live) = signal(false);
 
     Effect::new(move |_| {
         revision.get();
@@ -56,12 +61,39 @@ pub fn System() -> impl IntoView {
         });
     });
 
+    Effect::new(move |_| {
+        if !live.get() {
+            return;
+        }
+        let Some(name) = selected.get() else {
+            return;
+        };
+        let level = min_level.get();
+        spawn_local(async move {
+            loop {
+                TimeoutFuture::new(FOLLOW_GAP_MS).await;
+                if !live.get_untracked() || selected.get_untracked().as_deref() != Some(name.as_str()) {
+                    break;
+                }
+                match admin::node_logs(&name, &level, LOG_LIMIT).await {
+                    Ok(list) => set_logs.set(list),
+                    Err(message) => {
+                        set_error.set(Some(message));
+                        set_live.set(false);
+                        break;
+                    }
+                }
+            }
+        });
+    });
+
     view! {
         <TopologyPage
             topology=topology
             logs=logs
             selected=selected
             min_level=min_level
+            live=live
             busy=busy
             error=error
             on_refresh=Callback::new(move |()| {
@@ -71,7 +103,11 @@ pub fn System() -> impl IntoView {
                 set_logs.set(Vec::new());
                 set_selected.set(Some(name));
             })
-            on_close=Callback::new(move |()| set_selected.set(None))
+            on_close=Callback::new(move |()| {
+                set_live.set(false);
+                set_selected.set(None);
+            })
+            on_follow=Callback::new(move |follow: bool| set_live.set(follow))
             on_level=Callback::new(move |level: String| {
                 set_logs.set(Vec::new());
                 set_min_level.set(level);

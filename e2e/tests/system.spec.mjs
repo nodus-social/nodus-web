@@ -55,6 +55,28 @@ test.describe('system health', () => {
       .toBeGreaterThan(0)
   })
 
+  test('following a log keeps reading it and stops when the drawer closes', async ({ page }) => {
+    const calls = await consoleAs(page, {
+      logs: [
+        { timestamp: '2026-05-01T10:00:01Z', level: 'info', target: 'nodus_server', message: 'started' },
+      ],
+    })
+    await open(page, '/admin/system')
+
+    await page.getByRole('button', { name: 'Logs' }).first().click()
+    await page.getByRole('button', { name: 'Follow', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Following' })).toBeVisible()
+
+    const reads = () => calls.filter((call) => call.url.includes('/topology/api/logs')).length
+    await expect.poll(reads, { timeout: 15_000 }).toBeGreaterThan(1)
+
+    await page.getByRole('button', { name: 'Close' }).click()
+    await expect(page.getByRole('button', { name: 'Following' })).toHaveCount(0)
+    const settled = reads()
+    await page.waitForTimeout(5_000)
+    expect(reads()).toBe(settled)
+  })
+
   test('asking again reads the topology a second time', async ({ page }) => {
     const calls = await consoleAs(page)
     await open(page, '/admin/system')
