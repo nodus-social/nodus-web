@@ -37,6 +37,7 @@ mod overview;
 mod protocol;
 mod replies;
 mod scanners;
+mod topology;
 
 /// The administration area for one section.
 #[expect(
@@ -122,6 +123,7 @@ pub fn Admin(section: String) -> impl IntoView {
                 Section::Replies => view! { <Replies/> }.into_any(),
                 Section::Announcements => view! { <Announcements/> }.into_any(),
                 Section::Audit => view! { <Audit/> }.into_any(),
+                Section::Topology => view! { <topology::System/> }.into_any(),
                 Section::Protocol => view! { <Protocol/> }.into_any(),
             }}
         </AdminPage>

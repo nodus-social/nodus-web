@@ -21,6 +21,7 @@ const ADMINISTRATION = [
   'Canned replies',
   'Announcements',
   'Audit log',
+  'System',
   'Protocol',
 ]
 

@@ -22,7 +22,15 @@ BINARY="${ROOT}/target-bookworm/release/nodus-web-server"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "==> building the bundle in ${ROOT}"
-  ( cd "${ROOT}" && node js/build.mjs && node js/css.mjs && trunk build --release )
+  # trunk and the wasm target live in the development container; a host without them asks
+  # the container to build, which keeps one copy of the toolchain.
+  if command -v trunk >/dev/null 2>&1; then
+    ( cd "${ROOT}" && node js/build.mjs && node js/css.mjs && trunk build --release )
+  else
+    devcontainer exec \
+      --workspace-folder "$(cd "${ROOT}/.." && pwd)" \
+      bash -lc 'cd web && node js/build.mjs && node js/css.mjs && trunk build --release'
+  fi
 
   echo "==> building the SSR shell for bookworm"
   docker run --rm \

@@ -6,8 +6,8 @@ use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
     DomainAllow, DomainBlock, DomainImportOutcome, DomainSeverity, EmailDomainBlock, FlagState,
-    ModerationAction, NewScanner, Report, ReportFilter, ReportState, ScanFlag, ScanSeverity,
-    Scanner, ScannerAsset, ScannerRule, WarningPreset,
+    ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ReportState, ScanFlag,
+    ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, WarningPreset,
 };
 
 /// How many rows a moderation screen asks for.
@@ -469,6 +469,28 @@ pub async fn acknowledge_alert(id: &str) -> Result<AdminAlert, String> {
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .acknowledge_alert(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Every process this instance knows about, asked just now.
+pub async fn topology() -> Result<Topology, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .topology()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The last entries one node kept in memory.
+pub async fn node_logs(name: &str, min_level: &str, limit: u16) -> Result<Vec<NodeLog>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .node_logs(name, min_level, limit)
         .await
         .map_err(|error| error.to_string())
 }

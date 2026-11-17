@@ -24,6 +24,7 @@ pub mod overview;
 pub mod protocol;
 pub mod replies;
 pub mod scanners;
+pub mod topology;
 
 /// One section of the administration area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,13 +43,15 @@ pub enum Section {
     Announcements,
     /// What staff have done.
     Audit,
+    /// What the instance's own processes are doing.
+    Topology,
     /// What API this server publishes.
     Protocol,
 }
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Overview,
         Self::Scanners,
         Self::Domains,
@@ -56,6 +59,7 @@ impl Section {
         Self::Replies,
         Self::Announcements,
         Self::Audit,
+        Self::Topology,
         Self::Protocol,
     ];
 
@@ -70,6 +74,7 @@ impl Section {
             Self::Replies => "replies",
             Self::Announcements => "announcements",
             Self::Audit => "audit",
+            Self::Topology => "system",
             Self::Protocol => "protocol",
         }
     }
@@ -94,6 +99,7 @@ impl Section {
             Self::Replies => "Canned replies",
             Self::Announcements => "Announcements",
             Self::Audit => "Audit log",
+            Self::Topology => "System",
             Self::Protocol => "Protocol",
         }
     }
@@ -109,6 +115,7 @@ impl Section {
             Self::Replies => "The sentences a moderator can send",
             Self::Announcements => "What the instance is telling everyone",
             Self::Audit => "Administrative actions recorded by this server",
+            Self::Topology => "What each process is doing, and what it just said",
             Self::Protocol => "The client API the SDK selects for this server",
         }
     }
@@ -124,6 +131,7 @@ impl Section {
             Self::Replies => Icon::Pen,
             Self::Announcements => Icon::Bell,
             Self::Audit => Icon::List,
+            Self::Topology => Icon::List,
         }
     }
 

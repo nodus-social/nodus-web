@@ -303,9 +303,35 @@ export async function adminApi(
     overview = {},
     measures = [],
     meta = {},
+    topology = null,
+    logs = [],
   } = {},
 ) {
   const calls = []
+  const node = (name, status, extra = {}) => ({
+    name,
+    transport: 'unix',
+    endpoint: `/var/lib/nodus/run/${name}.sock`,
+    status,
+    version: '0.1.0',
+    uptime_seconds: 10_925,
+    cpu_usage_percent: 1.5,
+    rss_bytes: 24 * 1024 * 1024,
+    queue_depth: null,
+    latency_ms: 3,
+    last_seen_at: null,
+    last_error: null,
+    version_mismatch: false,
+    ...extra,
+  })
+  const nodes = topology ?? [node('api', 'healthy'), node('scan', 'dead', {
+        latency_ms: 250,
+        uptime_seconds: 0,
+        cpu_usage_percent: 0,
+        rss_bytes: 0,
+        last_error: 'connection refused',
+        last_seen_at: '2026-05-01T00:00:00Z',
+      })]
   const record = (route) => calls.push({ method: route.request().method(), url: route.request().url(), body: route.request().postData() })
   const json = (route, body, status = 200) => {
     record(route)
@@ -317,6 +343,8 @@ export async function adminApi(
     json(route, reports[0] ?? report()),
   )
   await page.route(/\/api\/v1\/admin\/reports\/[^/]+$/, (route) => json(route, reports[0] ?? report()))
+  await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/logs/, (route) => json(route, logs))
+  await page.route(/\/api\/v1\/admin\/topology$/, (route) => json(route, { version: '0.1.0', nodes }))
   await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
   await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))
   await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/action$/, (route) => json(route, accounts[0] ?? adminAccount()))
