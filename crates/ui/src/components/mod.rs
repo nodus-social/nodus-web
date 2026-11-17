@@ -6,6 +6,7 @@
 
 pub mod anchor;
 pub mod card_renderer;
+pub mod charts;
 pub mod chrome;
 pub mod composer_card;
 pub mod field_box;

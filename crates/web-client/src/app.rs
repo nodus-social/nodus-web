@@ -408,7 +408,7 @@ fn StaffRail() -> impl IntoView {
     });
 
     view! {
-        <Show when=move || !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No))>
+        <Show when=move || !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No(_)))>
             <RailItem
                 label="Moderation"
                 icon=Icon::Shield

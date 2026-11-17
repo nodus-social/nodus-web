@@ -9,6 +9,7 @@ pub mod blurhash;
 pub mod components;
 pub mod html;
 pub mod mfm;
+pub mod script;
 pub mod session_style;
 
 pub use session_style::*;

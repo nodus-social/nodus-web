@@ -87,7 +87,12 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
         return Err("An instance host and an access token are both required.".to_owned());
     }
 
-    let instance = Instance::parse(host).map_err(|error| error.to_string())?;
+    // One canonical address for the probe, the SDK record and the admin grant; storing
+    // the raw input is what made a `https://`-prefixed sign-in invisible to
+    // `admin_transport`.
+    let endpoint = crate::state::oauth::normalise_host(host)?;
+    let instance =
+        Instance::parse(&endpoint.url("")).map_err(|error| error.to_string())?;
     let probe = BrowserInstance::new(&instance, token);
     probe
         .verify_credentials()
@@ -102,16 +107,16 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
     let ui = feed_ui();
     ui.error.set(None);
     let session = sdk
-        .sign_in(host, scopes())
+        .sign_in(&endpoint.host, scopes())
         .await
         .map_err(|error| error.to_string())?;
     // After `sign_in`, because the account handle it returns is what a restored
     // session needs to display before its first request.
-    save_session(host, token, &session);
+    save_session(&endpoint.host, token, &session);
     // Tell the SSR host, so its documents can be painted for this account. Failure is
     // not an error the reader needs: the client works without a server session.
-    announce_to_server(host, token);
-    super::style::on_account_activated(host, &session.account_id);
+    announce_to_server(&endpoint.host, token);
+    super::style::on_account_activated(&endpoint.host, &session.account_id);
 
     ui.refreshing.set(true);
     load_first_page(&sdk, ui).await;

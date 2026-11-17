@@ -32,6 +32,7 @@ fn main() {
         "js/editor.mjs",
         "js/picker.mjs",
         "js/schema.mjs",
+        "js/charts.mjs",
         "package.json",
         "package-lock.json",
         "crates/web-shared/style/app.css",
@@ -47,6 +48,7 @@ fn main() {
     let outputs = [
         web.join("crates/web-client/public/vendor/editor.js"),
         web.join("crates/web-client/public/vendor/picker.js"),
+        web.join("crates/web-client/public/vendor/charts.js"),
         web.join("crates/web-client/public/vendor/emoji-data.json"),
         web.join("crates/web-client/style/tailwind.css"),
     ];
@@ -82,6 +84,7 @@ fn stale(web: &Path, outputs: &[PathBuf]) -> bool {
         web.join("js/editor.mjs"),
         web.join("js/picker.mjs"),
         web.join("js/schema.mjs"),
+        web.join("js/charts.mjs"),
         web.join("js/build.mjs"),
         web.join("js/css.mjs"),
         web.join("crates/web-shared/style/app.css"),

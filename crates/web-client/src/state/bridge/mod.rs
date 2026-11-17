@@ -32,6 +32,8 @@ use nodus_mastodon::BrowserInstance;
 use nodus_web::shared::account_state::{AccountKey, AccountMeta, AccountRegistry};
 use url::Url;
 
+use crate::state::oauth;
+
 pub mod accounts;
 pub mod actions;
 #[cfg_attr(
@@ -480,47 +482,76 @@ fn handle() -> Option<Rc<WebSdk>> {
     SDK.with_borrow(std::clone::Clone::clone)
 }
 
-/// Keeps an admin grant for `host`, after proving the token can moderate.
+/// Keeps an admin grant for `account` on `host`, after proving the token can moderate.
 ///
 /// The probe is the point: a token that cannot open the report queue would leave the
 /// Administration tab claiming a permission it does not have, and the operator would
 /// see an empty screen instead of "the grant did not work".
-pub async fn keep_admin_token(host: &str, token: &str) -> Result<(), String> {
-    let instance = Instance::parse(host).map_err(|error| error.to_string())?;
+///
+/// The canonical host is stored, not the callback's spelling, so the grant is found by
+/// the same key the sign-in record and the request builder use.
+pub async fn keep_admin_token(host: &str, account: &str, token: &str) -> Result<(), String> {
+    let account = account.trim();
+    if account.is_empty() {
+        return Err(
+            "This browser does not know which account the grant belongs to. Sign in again \
+             and retry."
+                .to_owned(),
+        );
+    }
+    let endpoint = oauth::normalise_host(host)?;
+    let instance = instance_for(&endpoint)?;
     let transport = BrowserInstance::new(&instance, token);
     transport
         .reports(nodus_client_core::model::ReportState::Open, 1)
         .await
         .map_err(|error| {
-            format!("That account cannot moderate on {host}, so the grant was not kept: {error}")
+            format!(
+                "That account cannot moderate on {}, so the grant was not kept: {error}",
+                endpoint.host
+            )
         })?;
-    admin_token::store(host, token);
+    admin_token::store(&endpoint.host, account, token);
     Ok(())
 }
 
-/// The admin transport for the signed-in instance, when a grant was kept.
+/// The admin transport for the signed-in account, when a grant was kept.
 ///
 /// Moderation calls go through this one; everything else keeps the ordinary session
 /// transport, which is what makes a leaked grant a narrower loss than a leaked session.
 pub fn admin_transport() -> Option<BrowserInstance> {
-    let host = with_sdk(|sdk| sdk.state().session.get().map(|session| session.host))?;
-    let token = admin_token::load(&host)?;
-    let base = api_base()?;
-    let _ = base;
-    let instance = Instance::parse(&host).ok()?;
+    let (host, account) = admin_scope()?;
+    let endpoint = oauth::normalise_host(&host).ok()?;
+    let token = admin_token::load(&endpoint.host, &account)?;
+    let instance = instance_for(&endpoint).ok()?;
     Some(BrowserInstance::new(&instance, &token))
 }
 
-/// The instance whose grant would be used, if any is held.
-pub fn admin_host() -> Option<String> {
-    with_sdk(|sdk| sdk.state().session.get().map(|session| session.host))
+/// The `(host, account_id)` an admin grant would be used for, if signed in.
+///
+/// Granting needs both: the instance address decides where the token is sent, and the
+/// account id decides whose grant a later transport may read.
+pub fn admin_scope() -> Option<(String, String)> {
+    with_sdk(|sdk| {
+        sdk.state()
+            .session
+            .get()
+            .map(|session| (session.host, session.account_id))
+    })
 }
 
-/// Forgets the admin grant for the signed-in instance.
+/// Forgets the signed-in account's admin grant.
 pub fn forget_admin_token() {
-    if let Some(host) = admin_host() {
-        admin_token::clear(&host);
+    if let Some((host, account)) = admin_scope() {
+        if let Ok(endpoint) = oauth::normalise_host(&host) {
+            admin_token::clear(&endpoint.host, &account);
+        }
     }
+}
+
+/// Builds an [`Instance`] from a canonical endpoint.
+fn instance_for(endpoint: &oauth::Endpoint) -> Result<Instance, String> {
+    Instance::parse(&endpoint.url("")).map_err(|error| error.to_string())
 }
 
 /// The instance transport, when a session has installed one.

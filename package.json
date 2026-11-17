@@ -9,6 +9,7 @@
     "css": "node js/css.mjs"
   },
   "dependencies": {
+    "chart.js": "^4.5.0",
     "emoji-picker-element": "^1.29.1",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-history": "^1.5.0",

@@ -10,6 +10,7 @@ use gloo_net::http::{Headers, Request};
 use wasm_bindgen::JsValue;
 
 use super::pending::Pending;
+use super::Endpoint;
 
 /// Name the instance shows on its "authorized applications" page.
 const CLIENT_NAME: &str = "nodus";
@@ -28,14 +29,14 @@ pub(super) struct App {
     pub(super) client_secret: String,
 }
 
-/// Registers the app with `host` and returns its credentials.
+/// Registers the app with `endpoint` and returns its credentials.
 pub(super) async fn register_app(
-    host: &str,
+    endpoint: &Endpoint,
     origin: &str,
     redirect_uri: &str,
     scopes: &str,
 ) -> Result<App, String> {
-    let url = endpoint(host, "/api/v1/apps");
+    let url = endpoint.url("/api/v1/apps");
     let json = post_form(
         &url,
         &[
@@ -69,7 +70,8 @@ pub(super) async fn exchange_code(
     code: &str,
     scopes: &str,
 ) -> Result<String, String> {
-    let url = endpoint(&record.host, "/oauth/token");
+    let endpoint = super::normalise_host(&record.host)?;
+    let url = endpoint.url("/oauth/token");
     let form = token_exchange_form(record, code, scopes);
     let json = post_form(&url, &form).await?;
     string_field(&json, "access_token")
@@ -92,13 +94,6 @@ pub(super) fn token_exchange_form<'a>(
         ("code_verifier", record.verifier.as_str()),
         ("scope", scopes),
     ]
-}
-
-/// `https://` is hard-coded: the client id, the code and the token travel on these
-/// requests, and Mastodon's OAuth endpoints are https-only in practice. An instance
-/// reachable only over plain http is what the token fallback is for.
-pub(super) fn endpoint(host: &str, path: &str) -> String {
-    format!("https://{host}{path}")
 }
 
 /// `POST`s a form-encoded body and returns the parsed JSON response.
@@ -164,6 +159,16 @@ mod tests {
             state: "state-value".to_owned(),
             redirect_uri: "https://nodus.example/oauth/callback".to_owned(),
             purpose,
+            account_id: if purpose == Purpose::Admin {
+                "account-1".to_owned()
+            } else {
+                String::new()
+            },
+            return_to: if purpose == Purpose::Admin {
+                "/moderation/reports".to_owned()
+            } else {
+                String::new()
+            },
         }
     }
 

@@ -24,3 +24,4 @@ node_modules/
 
 # Debian-target build output; never committed.
 /target-bookworm
+/target-bookworm/

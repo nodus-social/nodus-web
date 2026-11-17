@@ -1951,6 +1951,7 @@ version = "0.1.0"
 name = "nodus-web-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "console_error_panic_hook",
  "gloo-net",
  "gloo-timers",
