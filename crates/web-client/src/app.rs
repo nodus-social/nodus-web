@@ -203,7 +203,9 @@ pub(crate) fn App() -> impl IntoView {
                                 view! { <SignIn note="Sign in to arrange your page."/> }
                                     .into_any()
                             }
-                            Route::Admin(_) | Route::Moderation(_) => {
+                            // The console itself is drawn by `RouteView`, which knows each
+                            // section; only a signed-out visitor is sent to sign in.
+                            Route::Admin(_) | Route::Moderation(_) if !signed_in => {
                                 view! { <SignIn note="Sign in to moderate."/> }.into_any()
                             }
                             // A shared link works without a session: the address names the

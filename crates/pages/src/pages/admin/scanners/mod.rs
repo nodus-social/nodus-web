@@ -150,9 +150,8 @@ pub fn ScannersPage(
                         );
                         let manifest = scanner
                             .manifest_at
-                            .clone()
-                            .map(|at| format!("manifest read {at}"))
-                            .unwrap_or_else(|| "no manifest read yet".to_owned());
+                            .as_deref()
+                            .map_or_else(|| "no manifest read yet".to_owned(), |at| format!("manifest read {at}"));
                         let labels = StoredValue::new(scanner.labels.clone());
                         let rules = StoredValue::new(scanner.rules.clone());
                         let has_rules = !scanner.rules.is_empty();

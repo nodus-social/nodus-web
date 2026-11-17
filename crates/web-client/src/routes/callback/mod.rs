@@ -66,7 +66,7 @@ pub fn Callback() -> impl IntoView {
     view! {
         <nodus_ui::Screen width=nodus_ui::Width::Narrow>
             <nodus_pages::pages::signing_in::SigningIn
-                error=error.get()
+                error=error
                 back=Some(Route::Feed.path())
                 on_back=Callback::new(move |()| navigate(Route::Feed))
             />

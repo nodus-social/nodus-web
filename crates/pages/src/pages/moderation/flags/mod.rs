@@ -100,13 +100,13 @@ pub fn FlagsPage(
                         let shown_status = status.clone();
                         let score = flag
                             .score
-                            .map(|score| format!("{score:.2}"))
-                            .unwrap_or_else(|| "—".to_owned());
+                            .map_or_else(|| "—".to_owned(), |score| format!("{score:.2}"));
                         let severity = severity_label(flag.severity);
                         let state = state_label(flag.state);
-                        let age = age_of
-                            .map(|age_of| age_of.run(flag.created_at.clone()))
-                            .unwrap_or_else(|| flag.created_at.clone());
+                        let age = age_of.map_or_else(
+                            || flag.created_at.clone(),
+                            |age_of| age_of.run(flag.created_at.clone()),
+                        );
                         let open = flag.state == FlagState::Open;
                         view! {
                             <li class="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3">

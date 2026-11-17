@@ -103,17 +103,6 @@ pub async fn reopen_report(id: &str) -> Result<Report, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Accounts the instance knows about.
-pub async fn accounts(local: bool) -> Result<Vec<AdminAccount>, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .admin_accounts(local, PAGE)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Applies a decision to one account.
 pub async fn moderate(id: &str, action: ModerationAction) -> Result<AdminAccount, String> {
     let transport = admin_transport()
@@ -390,20 +379,6 @@ pub async fn purge_account(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// Replaces a block's domain, severity and flags.
-pub async fn update_domain_block(
-    id: &str,
-    draft: &DomainBlockDraft,
-) -> Result<DomainBlock, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .update_domain_block(id, draft)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Blocks many domains at one severity.
 pub async fn import_domain_blocks(
     domains: &[&str],
@@ -613,17 +588,6 @@ pub async fn delete_scanner_asset(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// The bytes of one content set.
-pub async fn download_scanner_asset(id: &str) -> Result<Vec<u8>, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .download_scanner_asset(id)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Scan results a moderator has to judge; `None` asks for all of them.
 pub async fn scan_flags(state: Option<FlagState>) -> Result<Vec<ScanFlag>, String> {
     let transport = admin_transport()
@@ -646,28 +610,6 @@ pub async fn resolve_scan_flag(id: &str, state: FlagState) -> Result<ScanFlag, S
         .map_err(|error| error.to_string())
 }
 
-/// Scans waiting, running or finished.
-pub async fn scan_queue(state: Option<&str>) -> Result<Vec<Scan>, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .scan_queue(state, PAGE)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-/// Queues a subject by hand.
-pub async fn enqueue_scan(request: &ScanRequest) -> Result<u64, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .enqueue_scan(request)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Warnings a moderator can reuse.
 pub async fn warning_presets() -> Result<Vec<WarningPreset>, String> {
     let transport = admin_transport()
@@ -686,21 +628,6 @@ pub async fn create_warning_preset(title: &str, text: &str) -> Result<WarningPre
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .create_warning_preset(title, text)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-/// Replaces a preset's title and text.
-pub async fn update_warning_preset(
-    id: &str,
-    title: &str,
-    text: &str,
-) -> Result<WarningPreset, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .update_warning_preset(id, title, text)
         .await
         .map_err(|error| error.to_string())
 }

@@ -1,70 +1,113 @@
-//! Moderation and administration are separate areas, each addressable per section.
+//! Moderation and administration: what a staff account sees, and what it is asked for.
+//!
+//! The panels are behind a second token with `admin:read`, so the interesting states are
+//! the ones before that token exists. A grant is stored per instance **and per account**:
+//! a token acts as the account that consented, so one account's grant must never open the
+//! panels for another.
 
 import { expect, test } from '@playwright/test'
 
-import { HOST, signedIn, stubApi, hydrated } from '../fixtures.mjs'
+import { ACCOUNT_ID, GRANT_KEY, granted, grantRecord, hydrated, signedIn, stubApi, adminApi } from '../fixtures.mjs'
 
-const MODERATION = ['Reports', 'Accounts', 'Registrations', 'Federation']
-const ADMINISTRATION = ['Overview', 'Relays', 'Announcements']
+/** The sections the moderation screen offers, in reading order. */
+const MODERATION = ['Reports', 'Scans', 'Accounts', 'Registrations', 'Federation']
 
-/** Answer everything the probes touch, as a moderator would see it. */
-async function moderator(page) {
-  await page.route('**/api/v1/admin/reports**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v2/admin/accounts**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v2/admin/measures**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/admin/relays**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/admin/domain_allows**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/admin/domain_blocks**', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/announcements**', (route) => route.fulfill({ json: [] }))
+/** The sections the administration screen offers, in reading order. */
+const ADMINISTRATION = [
+  'Overview',
+  'Scanners',
+  'Allowed domains',
+  'Mail domains',
+  'Canned replies',
+  'Announcements',
+  'Audit log',
+  'Protocol',
+]
+
+/** The strip's labels, without the icons beside them. */
+async function sections(page) {
+  return page
+    .locator('[role="tablist"] [role="tab"] span')
+    .allInnerTexts()
+    .then((labels) => labels.map((label) => label.trim()).filter(Boolean))
 }
 
-// FIXME: the grant below is no longer picked up by the area's probe, so this spec asserts a
-// gate the app draws on purpose. It needs the probe's request list and the grant's lookup
-// compared, then either the fixture or the probe fixed — not a weaker expectation.
-test.fixme('moderation and administration are separate areas, one section per address', async ({ page }) => {
-  await signedIn(page)
+test('a moderator without a grant is asked for one', async ({ page }) => {
   await stubApi(page)
-  await moderator(page)
-  // The grant is a second token, stored per instance; without it every moderation call
-  // answers 403 and the area correctly refuses to draw itself.
-  await page.addInitScript(
-    ([key, value]) => localStorage.setItem(key, value),
-    ['nodus-admin/1', `${HOST}\tstub-admin-token`],
-  )
-
+  await adminApi(page)
+  await signedIn(page)
   await page.goto('/moderation')
   await hydrated(page)
-  await expect(page.getByRole('heading', { name: 'Moderation', level: 1 })).toBeVisible()
 
-  const tabs = page.getByRole('tablist').first().getByRole('tab')
-  await expect(tabs).toHaveCount(MODERATION.length)
-  for (const section of MODERATION) {
-    await expect(page.getByRole('tab', { name: section })).toBeVisible()
-  }
+  await expect(page.getByText('This needs a moderation token')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Grant admin access' })).toBeVisible()
+  // Nothing behind the gate is painted until the probe can answer.
+  await expect(page.getByRole('tab', { name: 'Federation' })).toHaveCount(0)
+})
 
-  await page.evaluate(() => {
-    window.__marker = 'kept'
-  })
-  await page.getByRole('tab', { name: 'Registrations' }).click()
-  await expect(page).toHaveURL(`/moderation/registrations`)
-  await expect(page.getByRole('heading', { name: 'Invitations' })).toBeVisible()
-  expect(await page.evaluate(() => window.__marker)).toBe('kept')
+test('a grant made by another account is not reused', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  // The same instance, the same browser — a different account consented.
+  await granted(page, { account: '2' })
+  await page.goto('/moderation')
+  await hydrated(page)
 
-  // Administration is the other half, with its own sections.
+  await expect(page.getByText('This needs a moderation token')).toBeVisible()
+})
+
+test('a per-instance grant from the old format opens nothing', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  // Version 1 stored `<host>\t<token>`; it does not name an account, so it is not a grant.
+  await page.addInitScript(
+    ([key, value]) => localStorage.setItem(key, value),
+    ['nodus-admin/1', 'stub.instance\tstub-admin-token'],
+  )
+  await page.goto('/moderation')
+  await hydrated(page)
+
+  await expect(page.getByText('This needs a moderation token')).toBeVisible()
+})
+
+test('a grant opens every moderation section', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation')
+  await hydrated(page)
+
+  await expect(page.locator('[role="tablist"] [role="tab"]').first()).toBeVisible()
+  expect(await sections(page)).toEqual(MODERATION)
+  // The queue is what the screen opens on, so the grant is proven by its contents.
+  await expect(page.getByText('Sells something.')).toBeVisible()
+})
+
+test('the administration screen lists the whole console', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
   await page.goto('/admin')
   await hydrated(page)
-  for (const section of ADMINISTRATION) {
-    await expect(page.getByRole('tab', { name: section })).toBeVisible()
-  }
 
-  // A deep link lands on its section, and an unknown section lands on the default rather
-  // than on an error: a stale bookmark should still be useful.
-  await page.goto('/moderation/federation')
-  await hydrated(page)
-  await expect(page.getByRole('tab', { name: 'Federation' })).toHaveClass(/tab-active/)
-  await page.goto('/moderation/not-a-section')
-  await hydrated(page)
-  await expect(page.getByRole('tab', { name: 'Reports' })).toHaveClass(/tab-active/)
+  await expect(page.locator('[role="tablist"] [role="tab"]').first()).toBeVisible()
+  expect(await sections(page)).toEqual(ADMINISTRATION)
+})
 
-  await expect(page).toHaveTitle(new RegExp(`${HOST}|Nodus`, 'i')).catch(() => {})
+test('an opted-in browser keeps the grant it was given', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page, { token: 'stub-admin-token' })
+  await page.goto('/moderation/accounts')
+  await hydrated(page)
+
+  // The grant is read back from storage, not re-asked for on every visit.
+  await expect(page.getByText('This needs a moderation token')).toHaveCount(0)
+  const stored = await page.evaluate((key) => localStorage.getItem(key), GRANT_KEY)
+  expect(stored).toBe(grantRecord({ account: ACCOUNT_ID }))
 })

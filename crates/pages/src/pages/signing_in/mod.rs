@@ -13,19 +13,21 @@ use crate::components::panel::Panel;
 #[component]
 pub fn SigningIn(
     /// The failure message, or `None` while the handshake is still in flight.
-    #[prop(optional_no_strip)]
-    error: Option<String>,
+    ///
+    /// Reactive: the exchange finishes after this card is on screen, so the message has to
+    /// arrive later rather than be read once.
+    #[prop(into)]
+    error: Signal<Option<String>>,
     /// Where "Back to sign-in" points. Absent when nobody can navigate (the server).
     #[prop(optional_no_strip)]
     back: Option<String>,
     #[prop(optional)] on_back: Option<Callback<()>>,
 ) -> impl IntoView {
-    let error = StoredValue::new(error);
     let back = StoredValue::new(back);
 
     view! {
         <Panel title="Signing in">
-            {move || match error.get_value() {
+            {move || match error.get() {
                 None => view! {
                     <div class="flex items-center gap-2 text-sm opacity-70">
                         <span class="loading loading-spinner loading-xs"></span>

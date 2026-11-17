@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use nodus_client_core::model::{Report, ReportState};
 
 /// What the list is filtered by. Empty strings mean "no restriction".
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportQuery {
     /// `open`, `resolved`, or empty for both.
     pub state: String,
@@ -16,6 +16,18 @@ pub struct ReportQuery {
     pub category: String,
     /// The account id reports are assigned to, verbatim.
     pub assignee: String,
+}
+
+impl Default for ReportQuery {
+    /// Opens on what still needs a decision: a queue that started on every report ever
+    /// filed would bury the open ones under the closed ones.
+    fn default() -> Self {
+        Self {
+            state: "open".to_owned(),
+            category: String::new(),
+            assignee: String::new(),
+        }
+    }
 }
 
 impl ReportQuery {

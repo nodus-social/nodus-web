@@ -80,6 +80,19 @@ const CORS = {
   'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
 }
 
+/** An empty recommendation feed, in the envelope the discovery API uses. */
+export function emptyFeed() {
+  return {
+    feed_id: 'stub-feed',
+    generated_at: '2026-11-07T12:00:00.000Z',
+    contract: '0.1.0',
+    model_version: 1,
+    similarity_age_hours: 0,
+    items: [],
+    next_cursor: null,
+  }
+}
+
 export async function stubApi(
   page,
   { statuses = [status()], status: single, notifications = [] } = {},
@@ -119,6 +132,12 @@ export async function stubApi(
       },
     }),
   )
+  // The recommendation feed is its own service behind the same origin, so it is stubbed on
+  // this origin rather than on the instance's.
+  await page.route('**/api/v1/feed/accounts**', (route) => route.fulfill({ headers: CORS, json: emptyFeed() }))
+  await page.route('**/api/v1/feed/posts**', (route) => route.fulfill({ headers: CORS, json: emptyFeed() }))
+  await page.route('**/api/v1/events**', (route) => route.fulfill({ status: 204, headers: CORS }))
+  await page.route('**/api/v1/sync/token**', (route) => route.fulfill({ status: 204, headers: CORS }))
   await page.route('**/api/v1/blocks**', (route) => route.fulfill({ headers: CORS, json: [] }))
   await page.route('**/api/v1/mutes**', (route) => route.fulfill({ headers: CORS, json: [] }))
   // Registered last: Playwright consults handlers newest-first, so this sees the preflight
@@ -144,6 +163,219 @@ export async function signedIn(page, { host = HOST, id = ACCOUNT_ID, acct = 'ada
     },
     [sessionRecord({ host, id, acct }), host, id, acct],
   )
+}
+
+
+/** The grant `localStorage` record, keyed per account and instance (`nodus-admin/2`). */
+export const GRANT_KEY = 'nodus-admin/2'
+
+/** One stored grant, in the format the client reads back. */
+export function grantRecord({ host = HOST, account = ACCOUNT_ID, token = 'stub-admin-token' } = {}) {
+  return [host, account, token].join('\t')
+}
+
+/** Seed a moderator grant for the signed-in account. */
+export async function granted(page, options = {}) {
+  await page.addInitScript(
+    ([key, record]) => localStorage.setItem(key, record),
+    [GRANT_KEY, grantRecord(options)],
+  )
+}
+
+/**
+ * Stub the anonymous reads.
+ *
+ * A shared link is read through this app's own `/public-api/...` proxy, not from the
+ * instance's `/api/...`: the browser asks Nodus, and Nodus performs the one public read.
+ * Same origin, so no CORS header is needed here.
+ */
+export async function stubPublicApi(page, { status: single = status(), context = { ancestors: [], descendants: [] } } = {}) {
+  await page.route('**/public-api/status/**/context', (route) =>
+    route.fulfill({ json: context }),
+  )
+  await page.route('**/public-api/status/**', (route) => route.fulfill({ json: single }))
+  await page.route('**/public-api/account/**', (route) => route.fulfill({ json: account }))
+}
+
+
+/** An account as the moderator console receives it. */
+export function adminAccount(overrides = {}) {
+  return {
+    id: ACCOUNT_ID,
+    username: 'ada',
+    domain: null,
+    email: 'ada@example.test',
+    ip: null,
+    confirmed: true,
+    silenced: false,
+    suspended: false,
+    disabled: false,
+    approved: true,
+    admin: true,
+    open_reports: 0,
+    notes_count: 1,
+    lossless_images: false,
+    lossless_videos: false,
+    created_at: '2026-11-01T00:00:00.000Z',
+    account,
+    ...overrides,
+  }
+}
+
+/** A report as the moderator console receives it, with the account it is about. */
+export function report(overrides = {}) {
+  return {
+    id: '7001',
+    state: 'open',
+    action_taken: false,
+    category: 'spam',
+    comment: 'Sells something.',
+    rule_ids: [],
+    action_taken_note: '',
+    action_taken_at: null,
+    action_taken_by: null,
+    assigned_account_id: null,
+    assigned_account: null,
+    reporter: account,
+    created_at: '2026-11-07T12:00:00.000Z',
+    updated_at: '2026-11-07T12:00:00.000Z',
+    target_account: otherAccount,
+    statuses: [],
+    ...overrides,
+  }
+}
+
+/** A scanner as the console receives it. */
+export function scanner(overrides = {}) {
+  return {
+    id: '9001',
+    name: 'nsfw',
+    kind: 'image',
+    endpoint: 'https://scanner.example',
+    enabled: true,
+    asset_id: null,
+    contract: 1,
+    labels: ['nsfw', 'gore'],
+    manifest: { contract: 1 },
+    manifest_at: '2026-11-07T12:00:00.000Z',
+    timeout_ms: 5000,
+    rules: [],
+    ...overrides,
+  }
+}
+
+/** A flag as the moderator console receives it. */
+export function scanFlag(overrides = {}) {
+  return {
+    id: '8001',
+    scan_id: '8000',
+    status_id: '100',
+    account_id: ACCOUNT_ID,
+    reason: 'nsfw scored 0.82',
+    score: 0.82,
+    labels: ['nsfw (0.82)'],
+    severity: 'flag',
+    state: 'open',
+    created_at: '2026-11-07T12:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/**
+ * Stub the moderation and administration endpoints, and record what the console asked.
+ *
+ * Register this AFTER `stubApi`: Playwright consults handlers newest-first, so these win
+ * over its catch-all. The returned `calls` array is the assertion surface for the screens
+ * that write — a POST the console never sent cannot be faked by a stub.
+ */
+export async function adminApi(
+  page,
+  {
+    reports = [report()],
+    accounts = [adminAccount()],
+    scanners = [],
+    assets = [],
+    flags = [scanFlag()],
+    blocks = [],
+    mail = [],
+    presets = [],
+    alerts = [],
+    overview = {},
+    measures = [],
+    meta = {},
+  } = {},
+) {
+  const calls = []
+  const record = (route) => calls.push({ method: route.request().method(), url: route.request().url(), body: route.request().postData() })
+  const json = (route, body, status = 200) => {
+    record(route)
+    return route.fulfill({ status, headers: CORS, json: body })
+  }
+
+  await page.route(/\/api\/v1\/admin\/reports(\?|$)/, (route) => json(route, reports))
+  await page.route(/\/api\/v1\/admin\/reports\/[^/]+\/(resolve|reopen|assign)$/, (route) =>
+    json(route, reports[0] ?? report()),
+  )
+  await page.route(/\/api\/v1\/admin\/reports\/[^/]+$/, (route) => json(route, reports[0] ?? report()))
+  await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
+  await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/action$/, (route) => json(route, accounts[0] ?? adminAccount()))
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/notes$/, (route) => json(route, { body: 'Noted.' }))
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+$/, (route) => {
+    if (route.request().method() === 'DELETE') return json(route, {})
+    return json(route, { ...(accounts[0] ?? adminAccount()), notes: [], flags: [], reports_against: 0 })
+  })
+  await page.route(/\/api\/v1\/admin\/scanners$/, (route) => json(route, scanners))
+  await page.route(/\/api\/v1\/admin\/scanners\/[^/]+\/(refresh|rules)$/, (route) => json(route, scanners[0] ?? scanner()))
+  await page.route(/\/api\/v1\/admin\/scanners\/[^/]+$/, (route) =>
+    json(route, scanners[0] ?? scanner()),
+  )
+  await page.route(/\/api\/v1\/admin\/scanner_assets/, (route) => json(route, assets))
+  await page.route(/\/api\/v1\/admin\/flags\?/, (route) => json(route, flags))
+  await page.route(/\/api\/v1\/admin\/flags\/[^/]+\/resolve$/, (route) => json(route, flags[0] ?? scanFlag()))
+  await page.route(/\/api\/v1\/admin\/domain_blocks/, (route) => json(route, blocks))
+  await page.route(/\/api\/v1\/admin\/domain_blocks\/import$/, (route) => json(route, { blocked: 2, skipped: ['not a domain'] }))
+  await page.route(/\/api\/v1\/admin\/domain_allows/, (route) => json(route, []))
+  await page.route(/\/api\/v1\/admin\/email_domain_blocks/, (route) => json(route, mail))
+  await page.route(/\/api\/v1\/admin\/warning_presets/, (route) => json(route, presets))
+  await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))
+  await page.route(/\/api\/v1\/admin\/measures/, (route) => json(route, measures))
+  await page.route(/\/api\/v1\/admin\/overview$/, (route) =>
+    json(route, {
+      accounts: 12,
+      local_accounts: 9,
+      active_accounts: 4,
+      statuses: 31,
+      open_reports: 3,
+      resolved_reports: 7,
+      unassigned_reports: 2,
+      pending_accounts: 1,
+      silences: 0,
+      suspensions: 1,
+      domain_blocks: 2,
+      email_domain_blocks: 0,
+      staff: 1,
+      ...overview,
+    }),
+  )
+  await page.route(/\/api\/v1\/admin\/meta$/, (route) =>
+    json(route, {
+      account,
+      staff: true,
+      scopes: ['read', 'write', 'follow', 'admin:read', 'admin:write'],
+      counts: { open_reports: 3, unassigned_reports: 2, pending_accounts: 1, open_flags: 1 },
+      domain: HOST,
+      base_url: `https://${HOST}`,
+      version: '4.3.0',
+      scanning: { scanners: 1, enabled: 1, rules: 2, assets: 0, queued: 0 },
+      severities: [],
+      ...meta,
+    }),
+  )
+  for (const path of ['audit']) {
+    await page.route(new RegExp(`/api/v1/admin/${path}`), (route) => json(route, []))
+  }
+  return calls
 }
 
 /** One notification, shaped like the wire's. */

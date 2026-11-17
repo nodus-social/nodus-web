@@ -36,9 +36,12 @@ test('the rail groups reading, finding and library, with the feeds under Feed', 
   // Ascending positions: the groups are in reading order, not insertion order.
   expect([...positions].sort((left, right) => left - right)).toEqual(positions)
 
-  // The section titles are `hidden xl:block`, so on a narrow window they are present but
-  // not visible; presence is what this test is about, the responsive rule is Tailwind's.
-  await expect(page.locator('nav li.menu-title')).toHaveText(['Read', 'Find', 'Library'])
+  // The rail is a column of category cards, each with its own heading.
+  await expect(page.locator('[data-rail="left"] [data-nav-rail] > p')).toHaveText([
+    'Read',
+    'Find',
+    'Library',
+  ])
 })
 
 test('a rail click is a client-side navigation, not a page load', async ({ page }) => {
