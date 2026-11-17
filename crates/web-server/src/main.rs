@@ -24,7 +24,6 @@ mod session;
 mod translate;
 mod validate;
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -132,6 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     prepare_render();
 
     let listen = std::env::var("NODUS_LISTEN").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+    let listen = nodus_server_transport::parse(&listen).map_err(std::io::Error::other)?;
     let asset_dir = std::env::var("NODUS_ASSET_DIR").unwrap_or_else(|_| "/srv/nodus".to_owned());
     let sessions_path = std::env::var("NODUS_SESSIONS")
         .unwrap_or_else(|_| "/var/lib/nodus/sessions.json".to_owned());
@@ -148,12 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let router = router(app);
 
-    let address: SocketAddr = listen.parse()?;
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(%address, "listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    nodus_server_transport::serve_http(&listen, router, shutdown()).await?;
     Ok(())
 }
 
