@@ -26,6 +26,7 @@ pub fn System() -> impl IntoView {
     let (error, set_error) = signal(None::<String>);
     let (asked, set_asked) = signal(0_u64);
     let (live, set_live) = signal(false);
+    let (notice, set_notice) = signal(None::<String>);
 
     Effect::new(move |_| {
         revision.get();
@@ -106,6 +107,19 @@ pub fn System() -> impl IntoView {
             on_close=Callback::new(move |()| {
                 set_live.set(false);
                 set_selected.set(None);
+            })
+            notice=notice
+            on_trigger=Callback::new(move |(name, work): (String, String)| {
+                spawn_local(async move {
+                    match admin::trigger(&name, &work).await {
+                        Ok(answer) if answer.accepted => set_notice.set(Some(format!(
+                            "{name} took the request: {}",
+                            answer.detail,
+                        ))),
+                        Ok(answer) => set_notice.set(Some(format!("{name} said no: {}", answer.detail))),
+                        Err(message) => set_notice.set(Some(format!("{name} could not be asked: {message}"))),
+                    }
+                });
             })
             on_follow=Callback::new(move |follow: bool| set_live.set(follow))
             on_level=Callback::new(move |level: String| {

@@ -344,6 +344,9 @@ export async function adminApi(
   )
   await page.route(/\/api\/v1\/admin\/reports\/[^/]+$/, (route) => json(route, reports[0] ?? report()))
   await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/logs/, (route) => json(route, logs))
+  await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/trigger$/, (route) =>
+    json(route, { accepted: true, detail: 'a pass is queued' }),
+  )
   await page.route(/\/api\/v1\/admin\/topology$/, (route) => json(route, { version: '0.1.0', nodes }))
   await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
   await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))

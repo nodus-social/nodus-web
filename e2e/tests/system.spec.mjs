@@ -77,6 +77,53 @@ test.describe('system health', () => {
     expect(reads()).toBe(settled)
   })
 
+  test('a worker can be asked to run its pass now', async ({ page }) => {
+    const calls = await consoleAs(page, {
+      topology: [
+        {
+          name: 'api',
+          transport: 'unix',
+          endpoint: '/var/lib/nodus/run/api.sock',
+          status: 'healthy',
+          version: '0.1.0',
+          uptime_seconds: 600,
+          cpu_usage_percent: 1,
+          rss_bytes: 1024,
+          queue_depth: null,
+          latency_ms: 3,
+          last_seen_at: null,
+          last_error: null,
+          version_mismatch: false,
+        },
+        {
+          name: 'prune',
+          transport: 'unix',
+          endpoint: '/var/lib/nodus/run/prune.sock',
+          status: 'healthy',
+          version: '0.1.0',
+          uptime_seconds: 600,
+          cpu_usage_percent: 1,
+          rss_bytes: 1024,
+          queue_depth: 4,
+          latency_ms: 3,
+          last_seen_at: null,
+          last_error: null,
+          version_mismatch: false,
+        },
+      ],
+    })
+    await open(page, '/admin/system')
+
+    // The API answers requests and has nothing to run early, so only a worker offers this.
+    await expect(page.getByRole('button', { name: 'Do it now' })).toHaveCount(1)
+    await page.getByRole('button', { name: 'Do it now' }).click()
+
+    await expect(page.getByText(/prune took the request: a pass is queued/)).toBeVisible()
+    const asked = calls.filter((call) => call.url.endsWith('/topology/prune/trigger'))
+    expect(asked).toHaveLength(1)
+    expect(JSON.parse(asked[0].body)).toEqual({ work: 'prune' })
+  })
+
   test('asking again reads the topology a second time', async ({ page }) => {
     const calls = await consoleAs(page)
     await open(page, '/admin/system')

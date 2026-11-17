@@ -7,7 +7,8 @@ use nodus_client_core::model::{
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
     DomainAllow, DomainBlock, DomainImportOutcome, DomainSeverity, EmailDomainBlock, FlagState,
     ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ReportState, ScanFlag,
-    ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, WarningPreset,
+    ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, TriggerOutcome,
+    WarningPreset,
 };
 
 /// How many rows a moderation screen asks for.
@@ -480,6 +481,16 @@ pub async fn topology() -> Result<Topology, String> {
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .topology()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Asks one process to do its pass now instead of on its next tick.
+pub async fn trigger(name: &str, work: &str) -> Result<TriggerOutcome, String> {
+    admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?
+        .trigger_node(name, work)
         .await
         .map_err(|error| error.to_string())
 }

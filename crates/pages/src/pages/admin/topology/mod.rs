@@ -71,12 +71,30 @@ fn fact(label: &str, value: String) -> impl IntoView {
     }
 }
 
+/// The pass a node can be asked to do now, if it has one.
+///
+/// The API and the shell answer requests and have nothing to run early; a worker has a
+/// queue it drains on a tick, and an operator watching a backlog should not have to wait.
+fn work_of(name: &str) -> Option<&'static str> {
+    match name {
+        "scan" => Some("scan"),
+        "prune" => Some("prune"),
+        "calc" => Some("calc"),
+        _ => None,
+    }
+}
+
 fn node_card(
     node: TopologyNode,
     on_open: Option<Callback<String>>,
+    on_trigger: Option<Callback<(String, String)>>,
 ) -> impl IntoView {
     let name = node.name.clone();
     let open = on_open;
+    let trigger = on_trigger;
+    let work = work_of(&node.name);
+    let triggerable = work.is_some() && node.status != NodeStatus::Dead;
+    let trigger_name = StoredValue::new(node.name.clone());
     let detail = match (&node.last_error, node.last_seen_at.as_deref()) {
         (Some(error), Some(seen)) => {
             Some(format!("{error} — it last answered {}", &seen[..seen.len().min(19)]))
@@ -95,16 +113,31 @@ fn node_card(
                         <span class="badge badge-warning badge-sm">"Another build"</span>
                     </Show>
                 </div>
-                <button
-                    class="btn btn-ghost btn-xs"
-                    on:click=move |_| {
-                        if let Some(open) = open {
-                            open.run(name.clone());
+                <div class="flex items-center gap-1">
+                    <Show when=move || triggerable>
+                        <button
+                            class="btn btn-ghost btn-xs"
+                            title="Ask this process to drain its queue now instead of on its next tick"
+                            on:click=move |_| {
+                                if let (Some(trigger), Some(work)) = (trigger, work) {
+                                    trigger.run((trigger_name.get_value(), work.to_owned()));
+                                }
+                            }
+                        >
+                            "Do it now"
+                        </button>
+                    </Show>
+                    <button
+                        class="btn btn-ghost btn-xs"
+                        on:click=move |_| {
+                            if let Some(open) = open {
+                                open.run(name.clone());
+                            }
                         }
-                    }
-                >
-                    "Logs"
-                </button>
+                    >
+                        "Logs"
+                    </button>
+                </div>
             </div>
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {fact("Uptime", uptime(node.uptime_seconds))}
@@ -179,6 +212,12 @@ pub fn TopologyPage(
     /// Start or stop following the log.
     #[prop(optional)]
     on_follow: Option<Callback<bool>>,
+    /// What the last on-demand pass answered.
+    #[prop(into)]
+    notice: Signal<Option<String>>,
+    /// Ask one node to do its pass now.
+    #[prop(optional)]
+    on_trigger: Option<Callback<(String, String)>>,
 ) -> impl IntoView {
     let refresh = on_refresh;
     let level_button = move |level: &'static str, label: &'static str| {
@@ -203,6 +242,9 @@ pub fn TopologyPage(
             title="System health"
             description="Each process answers about itself: its own CPU and memory, and the last log lines it kept in memory. Nothing here is stored."
         >
+            <Show when=move || notice.get().is_some()>
+                <p class="text-xs opacity-70">{move || notice.get().unwrap_or_default()}</p>
+            </Show>
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <p class="text-xs opacity-60">
                     {move || topology.get().map_or_else(
@@ -227,7 +269,7 @@ pub fn TopologyPage(
             </Show>
             <ul class="flex flex-col gap-2">
                 <For each=move || topology.get().map(|topology| topology.nodes).unwrap_or_default() key=|node| node.name.clone() let:node>
-                    {node_card(node, on_open)}
+                    {node_card(node, on_open, on_trigger)}
                 </For>
             </ul>
             <Show when=move || topology.get().is_some_and(|topology| topology.nodes.is_empty())>
