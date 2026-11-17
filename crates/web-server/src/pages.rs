@@ -471,21 +471,54 @@ pub(crate) async fn read_entity(
     path: &str,
     style: Option<&SessionStyle>,
 ) -> Option<String> {
-    if let Some(id) = path.strip_prefix("/accounts/") {
-        if !id.is_empty() && !id.contains('/') {
-            let account = client.account(id).await.ok()?;
-            let (statuses, cursor) = client.account_statuses(id, PAGE).await.ok()?;
-            return Some(render_account_with_style(
-                assets,
-                acct,
-                staff,
-                &account,
-                &statuses,
-                cursor.as_deref(),
-                style,
-            ));
+    if let Some(rest) = path.strip_prefix("/accounts/") {
+        if rest.is_empty() {
+            return None;
         }
-        return None;
+        // `/accounts/{host}/{name|id}` is the permanent address; `/accounts/{id}` is the
+        // older one. The host has to be the reader's own instance, because `client` speaks
+        // for the session: another instance's profile is a public read, not this page.
+        let (host, segment) = rest
+            .split_once('/')
+            .map_or((None, rest), |(host, segment)| (Some(host), segment));
+        let instance_host = acct.split_once('@').map_or("", |(_, host)| host);
+        if let Some(host) = host
+            && !host.eq_ignore_ascii_case(instance_host)
+        {
+            return None;
+        }
+        let id = if segment.chars().all(|c| c.is_ascii_digit())
+            || (segment.len() == 26 && segment.chars().all(|c| c.is_ascii_alphanumeric()))
+        {
+            segment.to_owned()
+        } else {
+            let wanted = segment.to_owned();
+            client
+                .search(&format!("@{segment}@{instance_host}"))
+                .await
+                .ok()?
+                .accounts
+                .into_iter()
+                .find(|account| {
+                    let (name, host) = match account.acct.split_once('@') {
+                        Some((name, host)) => (name, host),
+                        None => (account.acct.as_str(), instance_host),
+                    };
+                    name.eq_ignore_ascii_case(&wanted) && host.eq_ignore_ascii_case(instance_host)
+                })?
+                .id
+        };
+        let account = client.account(&id).await.ok()?;
+        let (statuses, cursor) = client.account_statuses(&id, PAGE).await.ok()?;
+        return Some(render_account_with_style(
+            assets,
+            acct,
+            staff,
+            &account,
+            &statuses,
+            cursor.as_deref(),
+            style,
+        ));
     }
     let id = path.strip_prefix("/status/")?;
     if id.is_empty() || id.contains('/') {

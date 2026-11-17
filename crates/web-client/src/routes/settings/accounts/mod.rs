@@ -12,6 +12,7 @@ use nodus_pages::pages::settings::account::{AccountItem, AccountsCard as SharedA
 
 use crate::state::alive::Alive;
 use crate::state::bridge;
+use crate::state::oauth;
 
 #[component]
 pub fn AccountsCard() -> impl IntoView {
@@ -63,6 +64,31 @@ pub fn AccountsCard() -> impl IntoView {
         });
     };
 
+    // Adding an account is a full sign-in round trip on the instance the caller named, or on
+    // the one on screen when they asked for an alt. The browser leaves this page either way,
+    // so the busy flag is never lowered on success -- there is nothing to lower it on.
+    let add = move |host: String| {
+        set_busy.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            let host = host.trim().to_owned();
+            let target = if host.is_empty() {
+                bridge::session_host().unwrap_or_default()
+            } else {
+                host
+            };
+            if target.trim().is_empty() {
+                set_error.set(Some("Sign in first.".to_owned()));
+                set_busy.set(false);
+                return;
+            }
+            if let Err(message) = oauth::begin(&target).await {
+                set_error.set(Some(message));
+                set_busy.set(false);
+            }
+        });
+    };
+
     view! {
         <SharedAccountsCard
             accounts=accounts
@@ -70,6 +96,7 @@ pub fn AccountsCard() -> impl IntoView {
             error=Signal::derive(move || error.get())
             on_switch=Some(Callback::new(choose))
             on_sign_out=Some(Callback::new(sign_out))
+            on_add=Some(Callback::new(add))
         />
     }
 }

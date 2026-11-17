@@ -18,6 +18,9 @@ pub fn start() {
     crate::state::bridge::install_reactive_root();
     crate::state::clock_format::install();
     crate::state::feeds::install();
+    // The rail cards' contents are read by components that mount and unmount as the rail
+    // does, so the signal holding them must not belong to any of them.
+    crate::state::bridge::sidebar::install();
     // The expander's signal, created with no owner for the same reason.
     crate::media::install();
     // The operating system decides light or dark, and may change its mind while the tab

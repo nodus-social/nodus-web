@@ -44,6 +44,10 @@ pub fn PublicAccountScreen(
     let statuses = RwSignal::new(runtime.get_value().public_account_statuses(&host, &id));
     let followers = RwSignal::new(runtime.get_value().public_account_followers(&host, &id));
     let following = RwSignal::new(runtime.get_value().public_account_following(&host, &id));
+    // The address may name the account rather than number it. Once the first read comes
+    // back the account's own id is known, and every further read uses that: a name is an
+    // address, an id is what the graph endpoints take.
+    let resolved = RwSignal::new(id.clone());
     let tab = RwSignal::new(Tab::Posts);
     let error = RwSignal::new(None::<String>);
     let alive = crate::Alive::new();
@@ -72,6 +76,7 @@ pub fn PublicAccountScreen(
                             found.acct.split('@').next().unwrap_or(&found.acct)
                         )),
                     );
+                    resolved.set(found.id.clone());
                     account.set(Some(found));
                 }
                 Err(message) => error.set(Some(message)),
@@ -88,13 +93,13 @@ pub fn PublicAccountScreen(
                 });
             },
         );
+        let wanted = resolved.get_untracked();
         runtime
             .get_value()
-            .load_public_account_statuses(load_host.clone(), load_id.clone(), done);
+            .load_public_account_statuses(load_host.clone(), wanted, done);
     });
 
     let graph_host = host.clone();
-    let graph_id = id.clone();
     Effect::new(move |_| match tab.get() {
         Tab::Posts => {}
         Tab::Followers => {
@@ -109,7 +114,7 @@ pub fn PublicAccountScreen(
             });
             runtime.get_value().load_public_account_followers(
                 graph_host.clone(),
-                graph_id.clone(),
+                resolved.get_untracked(),
                 done,
             );
         }
@@ -125,7 +130,7 @@ pub fn PublicAccountScreen(
             });
             runtime.get_value().load_public_account_following(
                 graph_host.clone(),
-                graph_id.clone(),
+                resolved.get_untracked(),
                 done,
             );
         }

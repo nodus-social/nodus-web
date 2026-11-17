@@ -121,8 +121,60 @@ fn external_client() -> Result<reqwest::Client, reqwest::Error> {
     public_http_client(std::time::Duration::from_secs(12))
 }
 
+/// A sentence that names the real reason, not just "error sending request".
+///
+/// `reqwest::Error`'s own `Display` hides its source, which turns every failure — a DNS
+/// refusal, a refused connection, a rejected certificate — into the same useless line in an
+/// operator's log and in the reader's error page.
+fn error_detail(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = std::error::Error::source(error);
+    while let Some(source) = cause {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    message
+}
+
 fn valid_target(host: &str, id: &str) -> bool {
     host_valid(host) && id_valid(id)
+}
+
+/// Whether a path segment is an instance's own numbering rather than a name.
+///
+/// Mastodon prints decimal ids and nodus prints ULIDs; nothing else is a valid id, so any
+/// other segment is treated as the account's name. Names are what the site links with,
+/// ids are what the API answers with, and both have to keep working.
+fn looks_like_id(segment: &str) -> bool {
+    segment.chars().all(|c| c.is_ascii_digit())
+        || (segment.len() == 26 && segment.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// The id of the account a path segment names.
+///
+/// A segment that is already an id is passed straight through; anything else is asked of
+/// the instance the address named, through its own `accounts/lookup`, so a name is
+/// resolved by the instance that owns it rather than guessed here.
+pub(crate) async fn resolve_account_ref(
+    host: &str,
+    segment: &str,
+    token: Option<&str>,
+) -> Option<String> {
+    if looks_like_id(segment) {
+        return Some(segment.to_owned());
+    }
+    let acct = format!("{segment}@{host}");
+    let url = format!(
+        "https://{host}/api/v1/accounts/lookup?acct={}",
+        urlencoding(&acct)
+    );
+    let account = json(&url, token).await?;
+    account
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(std::borrow::ToOwned::to_owned)
 }
 
 async fn json(url: &str, token: Option<&str>) -> Option<Value> {
@@ -142,7 +194,7 @@ async fn relay(url: String, token: Option<&str>) -> Response {
     let client = match external_client() {
         Ok(client) => client,
         Err(error) => {
-            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+            return (StatusCode::BAD_GATEWAY, error_detail(&error)).into_response();
         }
     };
     let mut request = client.get(&url);
@@ -152,14 +204,14 @@ async fn relay(url: String, token: Option<&str>) -> Response {
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
-            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+            return (StatusCode::BAD_GATEWAY, error_detail(&error)).into_response();
         }
     };
     let status = response.status();
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            return (StatusCode::BAD_GATEWAY, error.to_string()).into_response();
+            return (StatusCode::BAD_GATEWAY, error_detail(&error)).into_response();
         }
     };
     (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
@@ -326,7 +378,11 @@ pub async fn account(
     if !valid_target(&host, &id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let (target, id, token) = account_target(&app, &headers, &host, &id).await;
+    // The address may carry the account's name; the read endpoint wants its id.
+    let Some(resolved) = resolve_account_ref(&host, &id, None).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let (target, id, token) = account_target(&app, &headers, &host, &resolved).await;
     relay(
         format!("https://{target}/api/v1/accounts/{id}"),
         token.as_deref(),

@@ -22,6 +22,7 @@ pub mod popover;
 pub mod rail;
 pub mod screen;
 pub mod shell;
+pub mod sidebar;
 pub mod status;
 pub mod timeline_tabs;
 

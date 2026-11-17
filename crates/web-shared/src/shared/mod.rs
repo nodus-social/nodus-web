@@ -5,5 +5,6 @@
 //! admission rule, and it is what makes this folder build under `hydrate` and `ssr` alike.
 
 pub mod account_state;
+pub mod handles;
 pub mod router;
 pub mod screens;

@@ -197,6 +197,19 @@ fn chrome_with_style(
             }),
             on_home: None,
             style: style_prop,
+            // The browser fills the rail card in from the session it holds; a server render
+            // has the cookie but not the account it names.
+            profile: None,
+            // The editor belongs to the browser: a server render has no draft to arrange and
+            // no way to save it, so the painted page carries no handles.
+            editor: None,
+            on_pick: None,
+            notice: None,
+            on_save: None,
+            on_cancel: None,
+            // The rail's cards are reads the browser makes; the painted rail is the
+            // navigation it already knows, and the card list arrives with hydration.
+            sidebar: nodus_ui::components::sidebar::SidebarData::default().into(),
             extra: (signed_in && staff).then(move || {
                 std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
             }),

@@ -34,8 +34,8 @@ impl Client {
         let instance = Instance::parse(host).map_err(|error| error.to_string())?;
         crate::validate::validate_instance_url(&instance.base)?;
         let normalized = crate::validate::normalized_host(&instance.base);
-        let http = crate::validate::public_http_client(std::time::Duration::from_secs(20))
-            .map_err(|error| error.to_string())?;
+        let http =
+            crate::validate::shared_public_http_client().map_err(|error| error.to_string())?;
         Ok(Self {
             instance: HttpInstance::with_client(&instance, token.to_owned(), http),
             host: normalized,
@@ -291,5 +291,25 @@ mod tests {
         assert_eq!(style.top.slots.len(), 1);
         assert_eq!(style.top.slots[0].url, "https://cdn.example/banner.png");
         assert_eq!(style.nav.items_in(NavPlacement::Right).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn home_transport_error_preserves_root_cause_beyond_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let client = Client::for_test(&format!("http://{addr}"), "test-token");
+        let err = client.home(20).await.unwrap_err();
+        assert!(
+            err.contains("error sending request for url"),
+            "expected reqwest transport prefix, got: {err}"
+        );
+        assert!(
+            err.contains("client error (Connect)")
+                || err.contains("Connection refused")
+                || err.contains("os error"),
+            "expected root cause to be preserved in transport error, got: {err}"
+        );
     }
 }

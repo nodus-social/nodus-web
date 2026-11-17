@@ -53,6 +53,7 @@ mod posts;
 mod runtime;
 pub mod seed;
 pub mod session;
+pub mod sidebar;
 pub mod style;
 pub mod timeline;
 
@@ -511,9 +512,19 @@ pub fn admin_transport() -> Option<BrowserInstance> {
     Some(BrowserInstance::new(&instance, &token))
 }
 
+/// The instance the active session was signed in on, when there is one.
+///
+/// A profile link from another instance carries that instance's id, so the router needs to
+/// know whether the reader holds a session at all before it can decide to resolve the link
+/// to the account this instance knows.
+#[must_use]
+pub fn session_host() -> Option<String> {
+    with_sdk(|sdk| sdk.state().session.get().map(|session| session.host))
+}
+
 /// The instance whose grant would be used, if any is held.
 pub fn admin_host() -> Option<String> {
-    with_sdk(|sdk| sdk.state().session.get().map(|session| session.host))
+    session_host()
 }
 
 /// Forgets the admin grant for the signed-in instance.

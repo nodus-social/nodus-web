@@ -18,5 +18,4 @@ pub mod lists;
 pub mod nav;
 pub mod page;
 pub mod profile;
-pub mod styling;
 pub mod sync;

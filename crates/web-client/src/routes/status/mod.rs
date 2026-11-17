@@ -77,8 +77,13 @@ pub fn StatusCard(status: Status) -> impl IntoView {
     let signed_in = crate::state::bridge::with_sdk(|sdk| sdk.state().session.get()).is_some();
     let age = super::format::relative_time(&header.created_at);
     let (author_path, thread_path) = if signed_in {
+        // The post may have been read from another instance, but the author link has to
+        // name the instance that minted that id, or it points at a different account here.
         (
-            Route::Account(header.account.id.clone()).path(),
+            nodus_web::shared::handles::profile_path_for(
+                &header.account.acct,
+                crate::state::bridge::session_host().as_deref(),
+            ),
             thread_route(&header.id).path(),
         )
     } else if let Some(host) = public_host(&header) {

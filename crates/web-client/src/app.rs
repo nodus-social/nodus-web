@@ -44,17 +44,115 @@ pub(crate) fn App() -> impl IntoView {
         with_sdk(|sdk| sdk.state().session.get().is_some())
     });
 
+    // Who is signed in, as the rail card shows them. Held here rather than read from the
+    // store, because the store only holds accounts some page has already drawn: the reader's
+    // own profile is otherwise fetched by the screen that shows it.
+    let profile = RwSignal::new(None::<nodus_ui::components::rail::ProfileCardData>);
+
+    // One fetch per session: `asked` remembers which account the rail has already asked
+    // about, so a revision that changes nothing does not become another request.
+    let asked = RwSignal::new(None::<String>);
+    Effect::new(move |_| {
+        revision.get();
+        let Some(session) = with_sdk(|sdk| sdk.state().session.get()) else {
+            profile.set(None);
+            return;
+        };
+        let stored = with_sdk(|sdk| sdk.read_account(&session.account_id));
+        if let Some(account) = stored {
+            profile.set(Some(profile_card(&account, &session.host)));
+            return;
+        }
+        if asked.get_untracked().as_deref() == Some(session.account_id.as_str()) {
+            return;
+        }
+        asked.set(Some(session.account_id.clone()));
+        let host = session.host.clone();
+        let account_id = session.account_id.clone();
+        leptos::task::spawn_local(async move {
+            use crate::state::bridge::{actions, dispatch};
+            let Ok(account) = actions::account(&account_id).await else {
+                return;
+            };
+            // Uppercase the account so every screen that shows this reader sees one copy
+            // of them; the rail card is simply the first reader of that fact.
+            dispatch(nodus_client_sdk::Command::AccountsUpserted {
+                accounts: vec![account.clone()],
+            });
+            profile.set(Some(profile_card(&account, &host)));
+        });
+    });
+
     let card: CardRenderer = std::sync::Arc::new(|status| {
         view! { <crate::routes::status::StatusCard status/> }.into_any()
     });
 
+    // The cards are a read, so they fill once per document and then only on refresh: a rail
+    // that re-asked on every navigation would be a request per click for something that
+    // changes slower than a conversation does.
+    Effect::new(move |_| {
+        if signed_in.get() {
+            crate::state::bridge::sidebar::ensure_loaded();
+        }
+    });
+
+    // The editor is a page, so the address decides whether it is open: arriving starts a
+    // draft of the style the site is showing, and every other address throws the draft
+    // away. A mode that a back button can leave while the mode itself stays on would be a
+    // page that lies about where the reader is.
+    Effect::new(move |_| {
+        if route.get() == Route::StyleEditor {
+            crate::state::bridge::style::begin_edit();
+        } else {
+            crate::state::bridge::style::cancel_edit();
+        }
+    });
+
+    // Whether this reader has staff doors decides whether the tray offers to move them.
+    let has_staff = extra_doors().is_some();
     view! {
         <nodus_ui::Frame
             signed_in=Signal::derive(move || signed_in.get())
             path=Signal::derive(move || router::route().get().path())
             extra=extra_doors()
             on_home=Callback::new(|()| router::navigate(Route::Home))
-            style=crate::state::bridge::style::active_style_signal()
+            // While the editor is open the shell paints the draft, so the page being
+            // arranged is the page itself, not a copy of it in a settings card.
+            style=Signal::derive(move || {
+                if crate::state::bridge::style::editing().get() {
+                    crate::state::bridge::style::draft().get()
+                } else {
+                    crate::state::bridge::style::active_style_signal().get()
+                }
+            })
+            profile=Signal::derive(move || profile.get())            // The rail's cards read the stores the rest of the app already filled; the
+            // first visit asks for the two the site itself does not need.
+            sidebar=Signal::derive(move || crate::state::bridge::sidebar::data())
+            editor=Some(crate::state::bridge::style::editor())
+            on_save=Some(Callback::new(|()| {
+                leptos::task::spawn_local(async {
+                    // Back to the screen the editor was opened from, and only once the
+                    // arrangement is really stored: a save that failed leaves the reader
+                    // in the editor with the draft still on screen.
+                    if crate::state::bridge::style::save_edit().await.is_ok() {
+                        router::navigate(Route::Settings(
+                            nodus_pages::pages::settings::nav::SettingsSection::Account
+                                .slug()
+                                .to_owned(),
+                        ));
+                    }
+                });
+            }))
+            on_cancel=Some(Callback::new(|()| {
+                crate::state::bridge::style::cancel_edit();
+                router::navigate(Route::Home);
+            }))
+            // Asking for a picture is the browser's job; the draft is ours. This keeps the
+            // reader in the editor: the empty side column becomes the picture they chose.
+            on_pick=Some(Callback::new(|kind: nodus_ui::session_style::BannerRegionKind| {
+                crate::state::bridge::style::pick_picture_for(kind);
+            }))
+            notice=Some(Signal::derive(move || crate::state::bridge::style::notice().get()))
             inner=std::sync::Arc::new(move || {
                         // The callback comes first, before the signed-in gate: the
                         // instance redirects here while the app is still signed out, and
@@ -80,197 +178,31 @@ pub(crate) fn App() -> impl IntoView {
                                 }.into_any()
                             },
                             Route::Home if signed_in => view! { <HomeTimeline/> }.into_any(),
-                            Route::Local if signed_in => view! { <LocalTimeline/> }.into_any(),
-                            Route::Federated if signed_in => view! { <FederatedTimeline/> }.into_any(),
-                            Route::Messages if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Messages
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Notifications if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Notifications
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Search if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Search
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Directory if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Directory
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Saved(shelf) if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Saved(shelf)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Scheduled if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Scheduled
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Compose if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Compose
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::ComposeEdit(id) if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::ComposeEdit(id)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Mutes if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Mutes
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Blocks if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Blocks
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Lists if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Lists
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::More if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::More
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Moderation(section) if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Moderation(section)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Admin(section) if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Admin(section)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Settings(section) if signed_in => view! {
-                                <nodus_route::route::RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Settings(section)
-                                    card=card.clone()
-                                />
-                            }.into_any(),
-                            Route::Thread { id, .. } if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Thread { host: String::new(), id }
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Account(id) if signed_in => view! {
-                                <RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Account(id)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            Route::Feed => {
-                                view! { <SignIn note="Sign in to see your feed."/> }.into_any()
-                            }
-                            Route::Home => {
-                                view! { <SignIn note="Sign in to see your timeline."/> }.into_any()
-                            }
-                            Route::Local => {
-                                view! { <SignIn note="Sign in to see this instance's posts."/> }
-                                    .into_any()
-                            }
-                            Route::Federated => {
-                                view! { <SignIn note="Sign in to see what this instance received."/> }
-                                    .into_any()
-                            }
-                            Route::Messages => {
-                                view! { <SignIn note="Sign in to read your messages."/> }
-                                    .into_any()
-                            }
-                            Route::Notifications => {
+                            // The middle of the editor is not being edited: the rail and the
+                            // banners are. So it is the dumping ground — every card that
+                            // exists, with the ones on the rail marked, one click from either
+                            // side.
+                            Route::StyleEditor if signed_in => {
+                                let has_staff = extra_doors().is_some();
                                 view! {
-                                    <SignIn note="Sign in to see your notifications."/>
+                                    <nodus_ui::components::sidebar::ModuleTray
+                                        layout=Signal::derive(move || {
+                                            crate::state::bridge::style::draft().get().modules
+                                        })
+                                        nav=Signal::derive(move || {
+                                            crate::state::bridge::style::draft().get().nav
+                                        })
+                                        staff_rail=Signal::derive(move || {
+                                            crate::state::bridge::style::draft().get().staff_rail
+                                        })
+                                        has_staff=has_staff
+                                        editor=Some(crate::state::bridge::style::editor())
+                                    />
                                 }
-                                    .into_any()
+                                .into_any()
                             }
-                            Route::Search => {
-                                view! { <SignIn note="Sign in to search."/> }.into_any()
-                            }
-                            Route::Directory => {
-                                view! { <SignIn note="Sign in to find people."/> }.into_any()
-                            }
-                            Route::Saved(_) => {
-                                view! { <SignIn note="Sign in to see what you saved."/> }
-                                    .into_any()
-                            }
-                            Route::Scheduled => {
-                                view! { <SignIn note="Sign in to schedule a post."/> }.into_any()
-                            }
-                            Route::Lists => {
-                                view! { <SignIn note="Sign in to manage your lists."/> }.into_any()
-                            }
-                            Route::More => {
-                                view! { <SignIn note="Sign in to see every destination."/> }.into_any()
-                            }
-                            Route::Compose | Route::ComposeEdit(_) => {
-                                view! { <SignIn note="Sign in to write a status."/> }.into_any()
-                            }
-                            Route::Mutes | Route::Blocks => {
-                                view! { <SignIn note="Sign in to manage who you muted or blocked."/> }
-                                    .into_any()
-                            }
-                            Route::Settings(_) => {
-                                view! {
-                                    <SignIn note="Sign in to change your settings."/>
-                                }
+                            Route::StyleEditor => {
+                                view! { <SignIn note="Sign in to arrange your page."/> }
                                     .into_any()
                             }
                             Route::Admin(_) | Route::Moderation(_) => {
@@ -318,6 +250,18 @@ pub(crate) fn App() -> impl IntoView {
                                     view! { <SignIn note="Sign in to read this."/> }.into_any()
                                 }
                             }
+                            // Every remaining screen is the shared route view, which already
+                            // knows its own title, header and paging. Signing in is the only
+                            // thing it cannot do for itself.
+                            route if signed_in => view! {
+                                <nodus_route::route::RouteView
+                                    runtime=crate::state::runtime::runtime()
+                                    route=route
+                                    card=card.clone()
+                                />
+                            }
+                            .into_any(),
+                            _ => view! { <SignIn note="Sign in to read this."/> }.into_any(),
                         }
             })/>
         <Show when=move || signed_in.get()>
@@ -422,5 +366,27 @@ fn StaffRail() -> impl IntoView {
                 route=Route::Admin(crate::router::ADMIN_DEFAULT.to_owned())
             />
         </Show>
+    }
+}
+
+/// The rail's picture of the signed-in reader.
+///
+/// A named function rather than a closure: the effect uses it twice (from the store when the
+/// account is already there, and after the one fetch that puts it there), and a card built
+/// two different ways is how the two paths drift apart.
+fn profile_card(
+    account: &nodus_client_core::model::Account,
+    host: &str,
+) -> nodus_ui::components::rail::ProfileCardData {
+    let display_name = if account.display_name.trim().is_empty() {
+        account.acct.clone()
+    } else {
+        account.display_name.clone()
+    };
+    nodus_ui::components::rail::ProfileCardData {
+        display_name,
+        handle: format!("@{}@{}", account.acct, host),
+        avatar_url: account.avatar.clone(),
+        href: Route::Account(account.id.clone()).path(),
     }
 }

@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,18 +24,48 @@ pub const KEY_RIGHT_IMAGE: &str = "nodus-right-image";
 /// Metadata key for the custom navigation layout configuration.
 pub const KEY_NAV_LAYOUT: &str = "nodus-nav-layout";
 
+/// Metadata key for the right rail's card list.
+pub const KEY_RAIL_MODULES: &str = "nodus-rail-modules";
+
+/// Where the staff doors sit, so an account that moved them gets them back.
+pub const KEY_STAFF_RAIL: &str = "nodus-staff-rail";
+
+/// Reads a stored rail name, treating anything unexpected as the left rail the doors start on.
+fn parse_rail_side(value: Option<&Value>) -> ModuleRail {
+    match value.and_then(Value::as_str) {
+        Some("right") => ModuleRail::Right,
+        _ => ModuleRail::Left,
+    }
+}
+
 /// All fine-grained metadata keys managed by Nodus Web for session styling.
-pub const STYLE_KEYS: [&str; 4] = [
+pub const STYLE_KEYS: [&str; 6] = [
     KEY_TOP_BANNER,
     KEY_LEFT_IMAGE,
     KEY_RIGHT_IMAGE,
     KEY_NAV_LAYOUT,
+    KEY_RAIL_MODULES,
+    KEY_STAFF_RAIL,
 ];
 
 /// Maximum number of image slots allowed inside one banner region.
 pub const MAX_SLOTS_PER_REGION: usize = 4;
 /// Maximum number of navigation items allowed in a custom layout.
 pub const MAX_NAV_ITEMS: usize = 24;
+/// Maximum number of category cards the rail's navigation may hold.
+pub const MAX_NAV_RAILS: usize = 6;
+
+/// Entries a reader may not take off the rail.
+///
+/// Settings is the way back to every other control on the site, so a layout that hides it
+/// is a layout with no way out of itself. Everything else on the rail is taste.
+pub const REQUIRED_NAV_ITEMS: [&str; 1] = ["settings"];
+
+/// Whether this entry has to stay placed.
+#[must_use]
+pub fn is_required_nav_item(id: &str) -> bool {
+    REQUIRED_NAV_ITEMS.contains(&id)
+}
 const MAX_ALT_LEN: usize = 200;
 const MAX_LABEL_LEN: usize = 48;
 const MAX_ID_LEN: usize = 48;
@@ -132,6 +163,12 @@ pub struct BannerRegion {
     pub split: SplitDirection,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<ImageSlot>,
+    /// Whether the region is hidden while keeping its pictures.
+    ///
+    /// Hiding and removing are different verbs: a reader tidying the site hides a banner and
+    /// expects to bring it back, so the pictures have to survive the round trip.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
 }
 
 impl BannerRegion {
@@ -139,6 +176,17 @@ impl BannerRegion {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    /// Whether the region holds pictures but is asked not to draw them.
+    #[must_use]
+    pub const fn is_hidden(&self) -> bool {
+        self.hidden && !self.slots.is_empty()
+    }
+
+    /// Show or hide the region, keeping its slots.
+    pub const fn set_hidden(&mut self, hidden: bool) {
+        self.hidden = hidden;
     }
 
     /// First image URL in this region, used for previews and account thumbnails.
@@ -211,6 +259,14 @@ impl BannerRegion {
     }
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if hands the field over by reference"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Where a navigation item is placed in the shell.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -238,6 +294,54 @@ impl NavPlacement {
     }
 }
 
+/// One category card of the rail's navigation.
+///
+/// Categories are the reader's, not the app's: the default layout ships three (Read,
+/// Find, Library) because a dozen links in one column is a wall, but a reader who wants
+/// one long list, or five small ones, can say so. Items name their rail by id, so moving
+/// an entry between cards never renumbers anything else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavRail {
+    pub id: String,
+    pub label: String,
+    /// Which column the card sits in. Categories are rail furniture like cards are, so a
+    /// reader can keep navigation on the left and everything else on the right, or the
+    /// other way round.
+    #[serde(default)]
+    pub rail: ModuleRail,
+}
+
+impl NavRail {
+    /// A category with an already-unique id.
+    #[must_use]
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            rail: ModuleRail::Left,
+        }
+    }
+
+    /// Id derived from a human label, so a new card arrives with a stable key.
+    #[must_use]
+    pub fn id_for(label: &str) -> String {
+        let mut id = String::new();
+        for ch in label.chars().take(MAX_ID_LEN) {
+            if ch.is_ascii_alphanumeric() {
+                id.push(ch.to_ascii_lowercase());
+            } else if !id.is_empty() && !id.ends_with('-') {
+                id.push('-');
+            }
+        }
+        let trimmed = id.trim_matches('-').to_owned();
+        if trimmed.is_empty() {
+            "rail".to_owned()
+        } else {
+            trimmed
+        }
+    }
+}
+
 /// One navigation item in the account's custom layout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavItemConfig {
@@ -248,6 +352,9 @@ pub struct NavItemConfig {
     pub pinned: bool,
     #[serde(default)]
     pub placement: NavPlacement,
+    /// Id of the [`NavRail`] card this entry is filed under; empty means unfiled.
+    #[serde(default)]
+    pub rail: String,
 }
 
 impl NavItemConfig {
@@ -264,25 +371,227 @@ impl NavItemConfig {
     }
 }
 
-/// Per-account navigation ordering, pinning, and placement layout.
+/// Per-account navigation ordering, pinning, placement, and rail categories.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavLayout {
     #[serde(default = "default_nav_items")]
     pub items: Vec<NavItemConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submenu_label: Option<String>,
+    /// The rail's category cards, in display order.
+    #[serde(default = "default_nav_rails")]
+    pub rails: Vec<NavRail>,
+}
+
+/// The category cards a layout starts with.
+#[must_use]
+pub fn default_nav_rails() -> Vec<NavRail> {
+    vec![
+        NavRail::new("read", "Read"),
+        NavRail::new("find", "Find"),
+        NavRail::new("library", "Library"),
+    ]
 }
 
 impl Default for NavLayout {
     fn default() -> Self {
-        Self {
+        let mut layout = Self {
             items: default_nav_items(),
             submenu_label: Some(String::from("More")),
-        }
+            rails: default_nav_rails(),
+        };
+        layout.normalize_rails();
+        layout
     }
 }
 
 impl NavLayout {
+    /// Drops categories with no id or a repeated one, gives them usable labels, and files
+    /// every orphaned item under the first card — so a layout written before categories
+    /// existed still opens with its links where the reader left them.
+    fn normalize_rails(&mut self) {
+        let mut seen = HashSet::new();
+        self.rails
+            .retain(|rail| !rail.id.trim().is_empty() && seen.insert(rail.id.trim().to_owned()));
+        for rail in &mut self.rails {
+            rail.id = rail.id.trim().to_owned();
+            let label = rail.label.trim();
+            rail.label = if label.is_empty() {
+                rail.id.clone()
+            } else {
+                label.chars().take(MAX_LABEL_LEN).collect()
+            };
+        }
+        self.rails.truncate(MAX_NAV_RAILS);
+        if self.rails.is_empty() {
+            self.rails = default_nav_rails();
+        }
+        let known = self
+            .rails
+            .iter()
+            .map(|rail| rail.id.clone())
+            .collect::<HashSet<_>>();
+        let first = self
+            .rails
+            .first()
+            .map(|rail| rail.id.clone())
+            .unwrap_or_default();
+        for item in &mut self.items {
+            if item.rail.trim().is_empty() || !known.contains(item.rail.trim()) {
+                item.rail.clone_from(&first);
+            } else {
+                item.rail = item.rail.trim().to_owned();
+            }
+        }
+    }
+
+    /// Id of the category card an item is filed under.
+    #[must_use]
+    pub fn rail_of(&self, item: &NavItemConfig) -> Option<&NavRail> {
+        self.rails.iter().find(|rail| rail.id == item.rail)
+    }
+
+    /// Every category in display order with its left-rail entries, pinned ones first.
+    ///
+    /// Cards with nothing in them are included: the editor has to draw the one a reader
+    /// has just added, and hiding it would look like the button did nothing.
+    #[must_use]
+    pub fn left_rails(&self) -> Vec<(&NavRail, Vec<&NavItemConfig>)> {
+        self.rails
+            .iter()
+            .map(|rail| (rail, self.items_of_rail(rail.id.as_str())))
+            .collect()
+    }
+
+    /// Left-rail entries filed under `rail_id`, pinned ones first.
+    #[must_use]
+    pub fn items_of_rail(&self, rail_id: &str) -> Vec<&NavItemConfig> {
+        let mut pinned = Vec::new();
+        let mut regular = Vec::new();
+        for item in &self.items {
+            if item.placement != NavPlacement::Left || item.rail != rail_id {
+                continue;
+            }
+            if item.pinned {
+                pinned.push(item);
+            } else {
+                regular.push(item);
+            }
+        }
+        pinned.extend(regular);
+        pinned
+    }
+
+    /// Adds a category card and returns its id (or `None` when the list is full).
+    pub fn add_rail(&mut self, label: &str) -> Option<String> {
+        if self.rails.len() >= MAX_NAV_RAILS {
+            return None;
+        }
+        let label = label.trim();
+        let base = if label.is_empty() {
+            "New rail".to_owned()
+        } else {
+            label.chars().take(MAX_LABEL_LEN).collect()
+        };
+        let mut id = NavRail::id_for(&base);
+        let mut suffix = 2;
+        while self.rails.iter().any(|rail| rail.id == id) {
+            id = format!("{}-{suffix}", NavRail::id_for(&base));
+            suffix += 1;
+        }
+        self.rails.push(NavRail::new(id.clone(), base));
+        Some(id)
+    }
+
+    /// Removes a category card, keeping its entries under the next card that remains.
+    ///
+    /// Deleting a card is a statement about the card, not about the links in it, so the
+    /// entries move instead of disappearing.
+    pub fn remove_rail(&mut self, rail_id: &str) -> bool {
+        if self.rails.len() <= 1 {
+            return false;
+        }
+        let Some(index) = self.rails.iter().position(|rail| rail.id == rail_id) else {
+            return false;
+        };
+        self.rails.remove(index);
+        let fallback = self
+            .rails
+            .first()
+            .map(|rail| rail.id.clone())
+            .unwrap_or_default();
+        for item in &mut self.items {
+            if item.rail == rail_id {
+                item.rail.clone_from(&fallback);
+            }
+        }
+        true
+    }
+
+    /// Renames a category card; blank labels fall back to the id.
+    pub fn rename_rail(&mut self, rail_id: &str, label: &str) {
+        let trimmed = label.trim();
+        if let Some(rail) = self.rails.iter_mut().find(|rail| rail.id == rail_id) {
+            rail.label = if trimmed.is_empty() {
+                rail.id.clone()
+            } else {
+                trimmed.chars().take(MAX_LABEL_LEN).collect()
+            };
+        }
+    }
+
+    /// Files an entry under another category card.
+    pub fn set_item_rail(&mut self, item_id: &str, rail_id: &str) {
+        if !self.rails.iter().any(|rail| rail.id == rail_id) {
+            return;
+        }
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == item_id) {
+            rail_id.clone_into(&mut item.rail);
+        }
+    }
+
+    /// The category cards one rail holds, in display order.
+    #[must_use]
+    pub fn rails_in(&self, rail: ModuleRail) -> Vec<&NavRail> {
+        self.rails.iter().filter(|held| held.rail == rail).collect()
+    }
+
+    /// Adds a category card to `rail` and returns its id.
+    pub fn add_rail_in(&mut self, label: &str, rail: ModuleRail) -> Option<String> {
+        let id = self.add_rail(label)?;
+        self.set_rail_side(&id, rail);
+        Some(id)
+    }
+
+    /// Puts a category card in `rail`, keeping its entries and its place.
+    pub fn set_rail_side(&mut self, rail_id: &str, rail: ModuleRail) -> bool {
+        let Some(held) = self.rails.iter_mut().find(|held| held.id == rail_id) else {
+            return false;
+        };
+        if held.rail == rail {
+            return false;
+        }
+        held.rail = rail;
+        true
+    }
+
+    /// Moves a category card earlier (`forward == false`) or later in the column.
+    pub fn move_rail(&mut self, rail_id: &str, forward: bool) -> bool {
+        let Some(index) = self.rails.iter().position(|rail| rail.id == rail_id) else {
+            return false;
+        };
+        let target = if forward {
+            index + 1
+        } else {
+            index.checked_sub(1).unwrap_or(index)
+        };
+        if target >= self.rails.len() || target == index {
+            return false;
+        }
+        self.rails.swap(index, target);
+        true
+    }
+
     /// Display title for the expandable submenu trigger.
     #[must_use]
     pub fn submenu_title(&self) -> &str {
@@ -408,6 +717,10 @@ impl NavLayout {
             } else {
                 placement
             },
+            rail: self
+                .rails
+                .first()
+                .map_or_else(|| String::from("read"), |rail| rail.id.clone()),
         });
         Ok(())
     }
@@ -439,6 +752,7 @@ impl NavLayout {
                 path,
                 pinned: item.pinned,
                 placement: item.placement,
+                rail: item.rail,
             });
             if clean.len() >= MAX_NAV_ITEMS {
                 break;
@@ -478,12 +792,196 @@ pub fn default_nav_items() -> Vec<NavItemConfig> {
         path: path.to_owned(),
         pinned: false,
         placement: NavPlacement::Left,
+        rail: default_rail_for(id).to_owned(),
     })
     .collect()
 }
 
+/// Which starter category a default destination belongs to.
+fn default_rail_for(id: &str) -> &'static str {
+    match id {
+        "home" | "messages" | "notifications" => "read",
+        "search" | "people" | "saved" => "find",
+        _ => "library",
+    }
+}
+
+/// One card a reader can place in the right rail.
+///
+/// The list is a catalogue, not a menu: every entry is a small read of the instance, so a
+/// reader builds the column they want out of parts and the ones nobody wants cost nothing
+/// because they are not there. The unpersonalised entries are deliberately in the same
+/// catalogue as the rest — "what is happening here" and "what your own feed says" are both
+/// legitimate things to want above the fold, and only the reader knows which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleKind {
+    /// The public timeline, newest first.
+    LiveFeed,
+    /// The reader's own notifications.
+    Notifications,
+    /// Tags that people on this instance are using.
+    TrendingTags,
+    /// Accounts the instance points at.
+    TrendingUsers,
+    /// Posts the instance is promoting.
+    TrendingPosts,
+    /// Links pulled out of those posts.
+    TrendingLinks,
+    /// Accounts the recommender thinks this reader will want.
+    RecommendedAccounts,
+    /// Posts the recommender picked for this reader.
+    RecommendedPosts,
+}
+
+impl ModuleKind {
+    /// Every card this build can draw, in the order the picker offers them.
+    ///
+    /// The recommender cards and the link roll are deliberately absent: the client has no
+    /// read that answers them yet, and offering a card that can only ever say "nothing here"
+    /// is worse than not offering it. The variants stay so a layout written by a build that
+    /// has them still parses, and so adding the read is a one-line change here.
+    pub const ALL: [Self; 5] = [
+        Self::LiveFeed,
+        Self::Notifications,
+        Self::TrendingTags,
+        Self::TrendingUsers,
+        Self::TrendingPosts,
+    ];
+
+    /// Stable identifier used in the stored layout and in drag targets.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::LiveFeed => "live_feed",
+            Self::Notifications => "notifications",
+            Self::TrendingTags => "trending_tags",
+            Self::TrendingUsers => "trending_users",
+            Self::TrendingPosts => "trending_posts",
+            Self::TrendingLinks => "trending_links",
+            Self::RecommendedAccounts => "recommended_accounts",
+            Self::RecommendedPosts => "recommended_posts",
+        }
+    }
+
+    /// The card's title.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::LiveFeed => "Live feed",
+            Self::Notifications => "Notifications",
+            Self::TrendingTags => "Trending tags",
+            Self::TrendingUsers => "Trending people",
+            Self::TrendingPosts => "Trending posts",
+            Self::TrendingLinks => "Trending links",
+            Self::RecommendedAccounts => "Suggested by the recommender",
+            Self::RecommendedPosts => "Picked by the recommender",
+        }
+    }
+
+    /// What the card shows, in one line, for the picker.
+    #[must_use]
+    pub const fn hint(self) -> &'static str {
+        match self {
+            Self::LiveFeed => "Everything posted publicly, as it arrives",
+            Self::Notifications => "Mentions, replies, boosts and follows aimed at you",
+            Self::TrendingTags => "Hashtags gaining users this week",
+            Self::TrendingUsers => "Accounts this instance is pointing at",
+            Self::TrendingPosts => "Posts with the most replies, boosts and favourites",
+            Self::TrendingLinks => "Links shared the most in those posts",
+            Self::RecommendedAccounts => "Who your own reading suggests you follow",
+            Self::RecommendedPosts => "From the people you follow, ranked for you",
+        }
+    }
+
+    /// Whether the card needs the recommender rather than the instance API.
+    #[must_use]
+    pub const fn nods_to_recommender(self) -> bool {
+        matches!(self, Self::RecommendedAccounts | Self::RecommendedPosts)
+    }
+
+    /// The kind behind a stored identifier.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.id() == id)
+    }
+}
+
+/// Which column a card sits in.
+///
+/// Cards are rail furniture, not page furniture: a reader who wants the trends beside the
+/// navigation puts them on the left, and one who wants them out of the reading column's way
+/// puts them on the right. The rail is chosen per card so the two columns can be as
+/// different as the reader's attention is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleRail {
+    /// The right-hand column, where cards start.
+    #[default]
+    Right,
+    /// The left rail, under the navigation.
+    Left,
+}
+
+impl ModuleRail {
+    /// Stable identifier used in the stored layout.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+        }
+    }
+
+    /// The rail as a reader would name it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Right => "right rail",
+            Self::Left => "left rail",
+        }
+    }
+}
+
+/// One card and the column it lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PlacedModule {
+    /// What the card draws.
+    pub kind: ModuleKind,
+    /// Which rail holds it.
+    #[serde(default)]
+    pub rail: ModuleRail,
+}
+
+impl PlacedModule {
+    /// A card in the right rail, which is where a card starts.
+    #[must_use]
+    pub const fn new(kind: ModuleKind) -> Self {
+        Self {
+            kind,
+            rail: ModuleRail::Right,
+        }
+    }
+
+    /// The same card in `rail`.
+    #[must_use]
+    pub const fn in_rail(kind: ModuleKind, rail: ModuleRail) -> Self {
+        Self { kind, rail }
+    }
+}
+
+/// The cards a reader starts with: the two that need no permission and no taste to be
+/// useful on a first visit.
+#[must_use]
+pub fn default_modules() -> Vec<PlacedModule> {
+    vec![
+        PlacedModule::new(ModuleKind::TrendingTags),
+        PlacedModule::new(ModuleKind::TrendingUsers),
+    ]
+}
+
 /// Full per-account session styling and navigation layout state.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStyle {
     #[serde(default)]
     pub top: BannerRegion,
@@ -493,6 +991,26 @@ pub struct SessionStyle {
     pub right: BannerRegion,
     #[serde(default)]
     pub nav: NavLayout,
+    /// Cards and the rail each one lives in, in the reader's order.
+    #[serde(default = "default_modules")]
+    pub modules: Vec<PlacedModule>,
+    /// Which column the staff doors sit in. They are furniture like everything else, so
+    /// they move like everything else.
+    #[serde(default)]
+    pub staff_rail: ModuleRail,
+}
+
+impl Default for SessionStyle {
+    fn default() -> Self {
+        Self {
+            top: BannerRegion::default(),
+            left: BannerRegion::default(),
+            right: BannerRegion::default(),
+            nav: NavLayout::default(),
+            modules: default_modules(),
+            staff_rail: ModuleRail::Left,
+        }
+    }
 }
 
 impl SessionStyle {
@@ -515,6 +1033,117 @@ impl SessionStyle {
         }
     }
 
+    /// The entries a reader may not take off the rail.
+    ///
+    /// Settings is the way back to every other control on the site, so hiding it leaves a
+    /// reader with no way to undo what they just did. Everything else is taste.
+    #[must_use]
+    pub fn unplaced_required(&self) -> Option<String> {
+        let missing: Vec<&str> = self
+            .nav
+            .items
+            .iter()
+            .filter(|item| item.placement == NavPlacement::Hidden)
+            .filter(|item| is_required_nav_item(&item.id))
+            .filter_map(|item| match item.id.as_str() {
+                "settings" => Some("Settings"),
+                _ => None,
+            })
+            .collect();
+        if missing.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{} has to stay on a rail. Put it back before saving.",
+            missing.join(", ")
+        ))
+    }
+
+    /// Whether a rail already holds this card.
+    #[must_use]
+    pub fn has_module(&self, kind: ModuleKind) -> bool {
+        self.modules.iter().any(|held| held.kind == kind)
+    }
+
+    /// Which rail holds this card, if any.
+    #[must_use]
+    pub fn module_rail(&self, kind: ModuleKind) -> Option<ModuleRail> {
+        self.modules
+            .iter()
+            .find(|held| held.kind == kind)
+            .map(|held| held.rail)
+    }
+
+    /// The cards one rail holds, in order.
+    #[must_use]
+    pub fn modules_in(&self, rail: ModuleRail) -> Vec<ModuleKind> {
+        self.modules
+            .iter()
+            .filter(|held| held.rail == rail)
+            .map(|held| held.kind)
+            .collect()
+    }
+
+    /// Add a card at the bottom of `rail`, unless a rail already holds it.
+    pub fn add_module(&mut self, kind: ModuleKind, rail: ModuleRail) {
+        if !self.has_module(kind) {
+            self.modules.push(PlacedModule::in_rail(kind, rail));
+        }
+    }
+
+    /// Put a card in `rail`, keeping its place if it is already on a rail.
+    pub fn set_module_rail(&mut self, kind: ModuleKind, rail: ModuleRail) -> bool {
+        match self.modules.iter_mut().find(|held| held.kind == kind) {
+            Some(held) => {
+                let moved = held.rail != rail;
+                held.rail = rail;
+                moved
+            }
+            None => false,
+        }
+    }
+
+    /// Take a card off its rail, answering whether it was there.
+    pub fn remove_module(&mut self, kind: ModuleKind) -> bool {
+        match self.modules.iter().position(|held| held.kind == kind) {
+            Some(index) => {
+                self.modules.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Put the cards back to the starting set.
+    pub fn reset_modules(&mut self) {
+        self.modules = default_modules();
+    }
+
+    /// Move `dragged` to `target`'s position in the rail.
+    ///
+    /// Cards are a stack, not a grid, so a drag only ever reorders: the drop target decides
+    /// where the dragged card lands, and everything after it shifts down.
+    pub fn reorder_module(&mut self, dragged: ModuleKind, target: ModuleKind) {
+        if dragged == target {
+            return;
+        }
+        let (Some(from), Some(to)) = (
+            self.modules.iter().position(|held| held.kind == dragged),
+            self.modules.iter().position(|held| held.kind == target),
+        ) else {
+            return;
+        };
+        // Only two cards in the same rail can swap places: dropping one on a card in the
+        // other column is what `set_module_rail` is for, and silently moving it here would
+        // take it out of the column the reader dropped it in.
+        if self.modules[from].rail != self.modules[to].rail {
+            return;
+        }
+        let moved = self.modules.remove(from);
+        let to = if from < to { to - 1 } else { to };
+        self.modules.insert(to.min(self.modules.len()), moved);
+    }
+
     /// Primary thumbnail image for account switchers and summaries.
     #[must_use]
     pub fn thumbnail_url(&self) -> Option<&str> {
@@ -531,6 +1160,18 @@ impl SessionStyle {
             && self.left.is_empty()
             && self.right.is_empty()
             && self.nav == NavLayout::default()
+            && self.modules == default_modules()
+    }
+
+    /// Whether the region of `kind` is hidden with its pictures kept.
+    #[must_use]
+    pub fn region_is_hidden(&self, kind: BannerRegionKind) -> bool {
+        self.region(kind).is_hidden()
+    }
+
+    /// Show or hide a region without discarding its pictures.
+    pub fn set_region_hidden(&mut self, kind: BannerRegionKind, hidden: bool) {
+        self.region_mut(kind).set_hidden(hidden);
     }
 
     /// Validate all URLs, paths, and limits inside this style.
@@ -556,6 +1197,8 @@ impl SessionStyle {
             left: parse_region(metadata.get(KEY_LEFT_IMAGE)),
             right: parse_region(metadata.get(KEY_RIGHT_IMAGE)),
             nav: parse_nav(metadata.get(KEY_NAV_LAYOUT)),
+            modules: parse_modules(metadata.get(KEY_RAIL_MODULES)),
+            staff_rail: parse_rail_side(metadata.get(KEY_STAFF_RAIL)),
         };
         style.sanitize();
         style
@@ -584,6 +1227,31 @@ impl SessionStyle {
             serde_json::to_value(&clean.nav).unwrap_or(Value::Null)
         };
         out.insert(KEY_NAV_LAYOUT.to_owned(), nav_value);
+        let modules_value = if clean.modules == default_modules() {
+            Value::Null
+        } else {
+            // `left:trending_tags` is a card in the left rail; a bare id is the right one,
+            // which keeps every layout written before cards could move readable.
+            serde_json::to_value(
+                clean
+                    .modules
+                    .iter()
+                    .map(|held| match held.rail {
+                        ModuleRail::Right => held.kind.id().to_owned(),
+                        ModuleRail::Left => format!("left:{}", held.kind.id()),
+                    })
+                    .collect::<Vec<String>>(),
+            )
+            .unwrap_or(Value::Null)
+        };
+        out.insert(KEY_RAIL_MODULES.to_owned(), modules_value);
+        // The doors start on the left, so only a move needs saying.
+        let staff_value = if clean.staff_rail == ModuleRail::Left {
+            Value::Null
+        } else {
+            Value::String(clean.staff_rail.id().to_owned())
+        };
+        out.insert(KEY_STAFF_RAIL.to_owned(), staff_value);
         out
     }
 
@@ -613,7 +1281,37 @@ fn parse_nav(value: Option<&Value>) -> NavLayout {
     if value.is_null() {
         return NavLayout::default();
     }
-    serde_json::from_value::<NavLayout>(value.clone()).unwrap_or_default()
+    let mut layout =
+        serde_json::from_value::<NavLayout>(value.clone()).unwrap_or_else(|_| NavLayout::default());
+    layout.normalize_rails();
+    layout
+}
+
+/// The cards a stored metadata value names, skipping anything this build does not know.
+///
+/// Unknown identifiers are dropped rather than rejected: a layout written by a newer client
+/// should still open here, minus the cards this one cannot draw.
+fn parse_modules(value: Option<&Value>) -> Vec<PlacedModule> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return default_modules();
+    };
+    let Ok(ids) = serde_json::from_value::<Vec<String>>(value.clone()) else {
+        return default_modules();
+    };
+    let mut modules = Vec::new();
+    for id in ids {
+        let (rail, name) = match id.split_once(':') {
+            Some(("left", name)) => (ModuleRail::Left, name),
+            Some(("right", name)) => (ModuleRail::Right, name),
+            _ => (ModuleRail::Right, id.as_str()),
+        };
+        if let Some(kind) = ModuleKind::from_id(name)
+            .filter(|kind| !modules.iter().any(|held: &PlacedModule| held.kind == *kind))
+        {
+            modules.push(PlacedModule::in_rail(kind, rail));
+        }
+    }
+    modules
 }
 
 /// Whether `path` is a safe in-app relative route path.
@@ -660,6 +1358,522 @@ fn slugify_id(label: &str) -> String {
         String::from("item")
     } else {
         trimmed.chars().take(24).collect()
+    }
+}
+
+/// Live handle an editor uses to change the draft style from inside the painted site.
+///
+/// The shell stays a painting: it reads a `SessionStyle` and draws it. An editor is the same
+/// shell plus this handle, which is why editing happens on the real site rather than on a
+/// second copy of it that could drift.
+#[derive(Clone, Copy)]
+pub struct StyleEditor {
+    draft: RwSignal<SessionStyle>,
+    active: RwSignal<bool>,
+    dragging: RwSignal<Option<EditDrag>>,
+}
+
+/// What a drag in the editor is carrying.
+///
+/// The tray in the middle and the two rails are the same arrangement seen twice: what the
+/// tray offers is what a rail can hold, so one payload type covers moving a card, a
+/// category card and the staff doors between columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditDrag {
+    /// A card, by kind.
+    Module(ModuleKind),
+    /// A navigation category card, by id.
+    Rail(String),
+    /// The staff doors, which are one card whatever they contain.
+    Staff,
+}
+
+impl std::fmt::Debug for StyleEditor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Signals have no contents worth printing beyond whether they exist.
+        f.debug_struct("StyleEditor")
+            .field("active", &self.is_active())
+            .finish_non_exhaustive()
+    }
+}
+
+impl StyleEditor {
+    /// Wrap the draft the editor writes into and the switch that turns it on.
+    ///
+    /// The switch is a signal rather than a flag read once at mount time: the editor is a
+    /// mode of the page that is already on screen, so entering and leaving it must repaint
+    /// the same components instead of rebuilding them.
+    #[must_use]
+    pub fn new(draft: RwSignal<SessionStyle>, active: RwSignal<bool>) -> Self {
+        Self {
+            draft,
+            active,
+            dragging: RwSignal::new(None),
+        }
+    }
+
+    /// Whether the editor is on, tracked so a `Show`/`Memo` around it repaints on a toggle.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self.active.get()
+    }
+
+    /// Whether the editor is on right now, without subscribing the caller.
+    ///
+    /// Used where a decision is made once while building a node (draw this picture with
+    /// handles or not), so a later toggle does not leave a stale subscription behind.
+    #[must_use]
+    pub fn is_active_now(self) -> bool {
+        self.active.get_untracked()
+    }
+
+    /// The draft signal itself, for controls that need to read it.
+    #[must_use]
+    pub const fn draft(self) -> RwSignal<SessionStyle> {
+        self.draft
+    }
+
+    /// Show or hide a region, keeping its pictures.
+    pub fn set_region_hidden(self, kind: BannerRegionKind, hidden: bool) {
+        self.draft
+            .update(|style| style.set_region_hidden(kind, hidden));
+    }
+
+    /// Drop one picture from a region.
+    pub fn remove_slot(self, kind: BannerRegionKind, index: usize) {
+        self.draft
+            .update(|style| style.region_mut(kind).remove_slot(index));
+    }
+
+    /// Move a picture within its region.
+    pub fn move_slot(self, kind: BannerRegionKind, from: usize, to: usize) {
+        self.draft
+            .update(|style| style.region_mut(kind).move_slot(from, to));
+    }
+
+    /// Flip a region between side-by-side and stacked.
+    pub fn toggle_split(self, kind: BannerRegionKind) {
+        self.draft.update(|style| {
+            let region = style.region_mut(kind);
+            region.split = match region.split {
+                SplitDirection::Horizontal => SplitDirection::Vertical,
+                SplitDirection::Vertical => SplitDirection::Horizontal,
+            };
+        });
+    }
+
+    /// Hide a navigation item without losing its position.
+    pub fn hide_nav_item(self, id: &str) -> bool {
+        if is_required_nav_item(id) {
+            return false;
+        }
+        let id = id.to_owned();
+        self.draft
+            .update(|style| style.nav.move_item_to(&id, NavPlacement::Hidden));
+        true
+    }
+
+    /// Drop `dragged` onto `target`'s position, adopting its placement.
+    pub fn reorder_nav_item(self, dragged: &str, target: &str) {
+        let (dragged, target) = (dragged.to_owned(), target.to_owned());
+        self.draft
+            .update(|style| style.nav.reorder_before(&dragged, &target));
+    }
+
+    /// Put a card on a rail.
+    pub fn add_module(self, kind: ModuleKind, rail: ModuleRail) {
+        self.draft.update(|style| style.add_module(kind, rail));
+    }
+
+    /// Move a card to the other rail, keeping its order among that rail's cards.
+    pub fn set_module_rail(self, kind: ModuleKind, rail: ModuleRail) {
+        self.draft.update(|style| {
+            style.set_module_rail(kind, rail);
+        });
+    }
+
+    /// Take a card off the rail.
+    pub fn remove_module(self, kind: ModuleKind) {
+        self.draft.update(|style| {
+            style.remove_module(kind);
+        });
+    }
+
+    /// Add a card that is absent, remove one that is present — what the tray's one button
+    /// does, so a reader does not have to know which side of the list they are looking at.
+    pub fn toggle_module(self, kind: ModuleKind) {
+        self.draft.update(|style| {
+            if !style.remove_module(kind) {
+                style.add_module(kind, ModuleRail::Right);
+            }
+        });
+    }
+
+    /// Reorder two cards on the rail.
+    pub fn reorder_module(self, dragged: ModuleKind, target: ModuleKind) {
+        self.draft
+            .update(|style| style.reorder_module(dragged, target));
+    }
+
+    /// Move a navigation item to another placement.
+    pub fn move_nav_item(self, id: &str, placement: NavPlacement) {
+        let id = id.to_owned();
+        self.draft
+            .update(|style| style.nav.move_item_to(&id, placement));
+    }
+
+    /// Flip whether a navigation item leads its placement.
+    pub fn toggle_nav_pin(self, id: &str) {
+        let id = id.to_owned();
+        self.draft.update(|style| style.nav.toggle_pin(&id));
+    }
+
+    /// Add a category card to the rail's navigation and return its id.
+    pub fn add_nav_rail(self, label: &str) -> Option<String> {
+        let label = label.to_owned();
+        let mut id = None;
+        self.draft.update(|style| {
+            id = style.nav.add_rail(&label);
+        });
+        id
+    }
+
+    /// Add a category card straight into `rail` and return its id.
+    pub fn add_nav_rail_in(self, label: &str, rail: ModuleRail) -> Option<String> {
+        let label = label.to_owned();
+        let mut id = None;
+        self.draft.update(|style| {
+            id = style.nav.add_rail_in(&label, rail);
+        });
+        id
+    }
+
+    /// Remove a category card, keeping its entries under the card that remains.
+    pub fn remove_nav_rail(self, id: &str) {
+        let id = id.to_owned();
+        self.draft.update(|style| {
+            style.nav.remove_rail(&id);
+        });
+    }
+
+    /// Rename a category card.
+    pub fn rename_nav_rail(self, id: &str, label: &str) {
+        let (id, label) = (id.to_owned(), label.to_owned());
+        self.draft
+            .update(|style| style.nav.rename_rail(&id, &label));
+    }
+
+    /// File a navigation entry under another category card.
+    pub fn set_nav_item_rail(self, item_id: &str, rail_id: &str) {
+        let (item_id, rail_id) = (item_id.to_owned(), rail_id.to_owned());
+        self.draft
+            .update(|style| style.nav.set_item_rail(&item_id, &rail_id));
+    }
+
+    /// Remember what a drag started on, so a rail can take it when it is dropped.
+    pub fn drag_module(self, kind: ModuleKind) {
+        self.dragging.set(Some(EditDrag::Module(kind)));
+    }
+
+    /// The same, for a category card.
+    pub fn drag_rail(self, id: &str) {
+        self.dragging.set(Some(EditDrag::Rail(id.to_owned())));
+    }
+
+    /// The same, for the staff doors.
+    pub fn drag_staff(self) {
+        self.dragging.set(Some(EditDrag::Staff));
+    }
+
+    /// Take the payload a drop should apply, clearing it.
+    pub fn take_drag(self) -> Option<EditDrag> {
+        self.dragging
+            .get_untracked()
+            .inspect(|_| self.dragging.set(None))
+    }
+
+    /// Apply whatever is being dragged to `rail`. Returns whether anything moved.
+    pub fn drop_on(self, rail: ModuleRail) -> bool {
+        match self.take_drag() {
+            Some(EditDrag::Module(kind)) => {
+                let mut placed = false;
+                self.draft.update(|style| {
+                    if style.has_module(kind) {
+                        placed = style.set_module_rail(kind, rail);
+                    } else {
+                        style.add_module(kind, rail);
+                        placed = true;
+                    }
+                });
+                placed
+            }
+            Some(EditDrag::Rail(id)) => {
+                let mut moved = false;
+                self.draft.update(|style| {
+                    moved = style.nav.set_rail_side(&id, rail);
+                });
+                moved
+            }
+            Some(EditDrag::Staff) => {
+                let mut moved = false;
+                self.draft.update(|style| {
+                    moved = style.staff_rail != rail;
+                    style.staff_rail = rail;
+                });
+                moved
+            }
+            None => false,
+        }
+    }
+
+    /// Put a category card in `rail` without a drag.
+    pub fn set_nav_rail_side(self, id: &str, rail: ModuleRail) {
+        let id = id.to_owned();
+        self.draft.update(|style| {
+            style.nav.set_rail_side(&id, rail);
+        });
+    }
+
+    /// Put the staff doors in `rail` without a drag.
+    pub fn set_staff_rail(self, rail: ModuleRail) {
+        self.draft.update(|style| {
+            style.staff_rail = rail;
+        });
+    }
+
+    /// Move a category card earlier or later in the column.
+    pub fn move_nav_rail(self, id: &str, forward: bool) {
+        let id = id.to_owned();
+        self.draft.update(|style| {
+            style.nav.move_rail(&id, forward);
+        });
+    }
+}
+
+#[cfg(test)]
+mod hidden_tests {
+    use super::*;
+
+    #[test]
+    fn hiding_a_banner_keeps_its_pictures_and_round_trips() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style.top.add_slot(
+                ImageSlot::new("https://cdn.example/top.png", Some("Top"), None).unwrap()
+            )
+        );
+        style.set_region_hidden(BannerRegionKind::Top, true);
+        assert!(style.region_is_hidden(BannerRegionKind::Top));
+
+        let json = serde_json::to_string(&style).unwrap();
+        assert!(json.contains("\"hidden\":true"));
+        let restored: SessionStyle = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.top.slots.len(), 1);
+        assert!(restored.region_is_hidden(BannerRegionKind::Top));
+    }
+
+    #[test]
+    fn cards_are_added_once_and_reordered_by_drag() {
+        let mut style = SessionStyle::default();
+        assert_eq!(style.modules, default_modules());
+
+        style.add_module(ModuleKind::TrendingTags, ModuleRail::Right);
+        assert_eq!(
+            style
+                .modules
+                .iter()
+                .filter(|held| held.kind == ModuleKind::TrendingTags)
+                .count(),
+            1
+        );
+
+        style.add_module(ModuleKind::Notifications, ModuleRail::Right);
+        assert_eq!(
+            style.modules.last().map(|held| held.kind),
+            Some(ModuleKind::Notifications)
+        );
+
+        // Dragging the last card onto the first puts it first, and nothing is lost.
+        style.reorder_module(ModuleKind::Notifications, ModuleKind::TrendingTags);
+        assert_eq!(
+            style.modules.first().map(|held| held.kind),
+            Some(ModuleKind::Notifications)
+        );
+        assert_eq!(style.modules.len(), 3);
+
+        assert!(style.remove_module(ModuleKind::Notifications));
+        assert!(!style.remove_module(ModuleKind::Notifications));
+        assert!(!style.has_module(ModuleKind::Notifications));
+    }
+
+    #[test]
+    fn the_rail_is_made_of_category_cards() {
+        let layout = NavLayout::default();
+        let rails = layout.left_rails();
+        assert_eq!(
+            rails
+                .iter()
+                .map(|(rail, _)| rail.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Read", "Find", "Library"]
+        );
+        assert_eq!(
+            rails[0]
+                .1
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Home", "Messages", "Notifications"]
+        );
+
+        // A card that empties out stays addressable while editing.
+        let mut layout = layout;
+        for item in layout
+            .items_of_rail("read")
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>()
+        {
+            layout.set_item_rail(&item, "find");
+        }
+        let (emptied, entries) = &layout.left_rails()[0];
+        assert_eq!(emptied.id, "read");
+        assert!(
+            entries.is_empty(),
+            "an emptied card stays addressable while editing"
+        );
+    }
+
+    #[test]
+    fn a_new_rail_gets_an_id_nobody_else_uses() {
+        let mut layout = NavLayout::default();
+        assert_eq!(
+            layout.add_rail("Watch later").as_deref(),
+            Some("watch-later")
+        );
+        assert_eq!(
+            layout.add_rail("Watch later").as_deref(),
+            Some("watch-later-2")
+        );
+        assert_eq!(layout.add_rail("  ").as_deref(), Some("new-rail"));
+        assert_eq!(layout.rails.len(), 6);
+        assert!(layout.add_rail("One more").is_none());
+    }
+
+    #[test]
+    fn removing_a_card_keeps_its_entries_in_the_rail() {
+        let mut layout = NavLayout::default();
+        assert!(layout.remove_rail("find"));
+        assert_eq!(
+            layout
+                .items_of_rail("read")
+                .iter()
+                .filter(|item| item.label == "Search")
+                .count(),
+            1
+        );
+        // The last card cannot be removed: there is nowhere for its entries to go.
+        let mut single = NavLayout::default();
+        while single.remove_rail(single.rails[0].id.clone().as_str()) {}
+        assert_eq!(single.rails.len(), 1);
+    }
+
+    #[test]
+    fn a_layout_written_before_categories_existed_still_opens() {
+        let json = serde_json::json!({
+            "items": [
+                { "id": "home", "label": "Home", "path": "/home" },
+                { "id": "lists", "label": "Lists", "path": "/lists", "pinned": true }
+            ],
+            "submenu_label": "More"
+        });
+        let layout = parse_nav(Some(&json));
+        assert_eq!(layout.rails, default_nav_rails());
+        assert!(layout.items.iter().all(|item| item.rail == "read"));
+        assert_eq!(layout.items_of_rail("read").len(), 2);
+    }
+
+    #[test]
+    fn a_card_moves_between_rails_without_leaving_the_list() {
+        let mut style = SessionStyle::default();
+        style.add_module(ModuleKind::LiveFeed, ModuleRail::Left);
+        assert_eq!(
+            style.module_rail(ModuleKind::LiveFeed),
+            Some(ModuleRail::Left)
+        );
+        assert!(
+            style
+                .modules_in(ModuleRail::Left)
+                .contains(&ModuleKind::LiveFeed)
+        );
+        assert!(
+            !style
+                .modules_in(ModuleRail::Right)
+                .contains(&ModuleKind::LiveFeed)
+        );
+
+        // A card on one rail is not dragged onto a card in the other: that is a rail move,
+        // and a drag that silently did it would move a card out of the column it was
+        // dropped in.
+        let before = style.modules.clone();
+        style.reorder_module(ModuleKind::LiveFeed, ModuleKind::TrendingTags);
+        assert_eq!(style.modules, before);
+
+        assert!(style.set_module_rail(ModuleKind::LiveFeed, ModuleRail::Right));
+        assert!(!style.set_module_rail(ModuleKind::LiveFeed, ModuleRail::Right));
+        assert_eq!(
+            style.module_rail(ModuleKind::LiveFeed),
+            Some(ModuleRail::Right)
+        );
+    }
+
+    #[test]
+    fn a_card_list_survives_metadata_but_unknown_cards_are_dropped() {
+        let style = SessionStyle {
+            modules: vec![
+                PlacedModule::new(ModuleKind::Notifications),
+                PlacedModule::in_rail(ModuleKind::LiveFeed, ModuleRail::Left),
+            ],
+            ..SessionStyle::default()
+        };
+        let patch = style.to_patch_metadata();
+        let stored = patch.get(KEY_RAIL_MODULES).cloned().unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!(["notifications", "left:live_feed"])
+        );
+
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            KEY_RAIL_MODULES.to_owned(),
+            serde_json::json!([
+                "live_feed",
+                "from_a_newer_build",
+                "live_feed",
+                "left:trending_tags"
+            ]),
+        );
+        let restored = SessionStyle::from_metadata_map(&metadata);
+        assert_eq!(
+            restored.modules,
+            vec![
+                PlacedModule::new(ModuleKind::LiveFeed),
+                PlacedModule::in_rail(ModuleKind::TrendingTags, ModuleRail::Left),
+            ]
+        );
+
+        // The starting set is not written back: a default layout stores nothing.
+        let default_patch = SessionStyle::default().to_patch_metadata();
+        assert!(default_patch.get(KEY_RAIL_MODULES).unwrap().is_null());
+    }
+
+    #[test]
+    fn an_empty_region_is_never_reported_hidden() {
+        let mut style = SessionStyle::default();
+        style.set_region_hidden(BannerRegionKind::Left, true);
+        assert!(!style.region_is_hidden(BannerRegionKind::Left));
+        let json = serde_json::to_string(&style).unwrap();
+        assert!(json.contains("\"hidden\":true"));
     }
 }
 

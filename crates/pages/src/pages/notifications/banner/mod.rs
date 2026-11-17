@@ -45,9 +45,13 @@ pub fn RequestBanner(
                             let:account
                         >
                             {
-                                let account_id = account.id.clone();
                                 let name = display_name(&account.display_name, &account.acct);
-                                let href = format!("/accounts/{account_id}");
+                                // The account names its instance when it is remote; a local
+                                // one is named by this instance's own address, which the
+                                // island's links inherit.
+                                let href =
+                                    nodus_web::shared::handles::profile_path_for(&account.acct, None);
+                                let open_id = account.id.clone();
                                 view! {
                                     <li class="flex items-center gap-2">
                                         <a class="avatar" href=href.clone()>
@@ -63,7 +67,7 @@ pub fn RequestBanner(
                                             class="min-w-0 flex-1 truncate text-sm hover:underline"
                                             href=href
                                             on:click=move |event| {
-                                                open_account(&event, account_id.clone(), on_open);
+                                                open_account(&event, open_id.clone(), on_open);
                                             }
                                         >
                                             {name}

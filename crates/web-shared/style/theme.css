@@ -201,3 +201,14 @@ body {
   width: 100%;
   --num-columns: 8;
 }
+
+/* The fullscreen style editor pins its Save/Cancel bar to the bottom of the viewport, so the
+   page needs room underneath or the last row sits behind it. */
+[data-style-editing="true"] {
+  padding-bottom: 4.5rem;
+}
+
+/* Handles are only furniture for the editor: the pointer says so before a drag starts. */
+[data-style-controls] [draggable="true"] {
+  cursor: grab;
+}

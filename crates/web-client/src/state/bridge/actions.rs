@@ -75,6 +75,30 @@ pub async fn languages() -> Vec<Language> {
     .await
 }
 
+/// Tags this instance is promoting, for the rail's card.
+#[expect(
+    clippy::future_not_send,
+    reason = "the browser transport is single-threaded; the SDK is used from one task at a time"
+)]
+pub async fn trending_tags(limit: usize) -> Result<Vec<nodus_client_core::model::Tag>, String> {
+    match instance_transport() {
+        Some(transport) => call(transport.trending_tags(limit)).await,
+        None => Err("the client is not installed".to_owned()),
+    }
+}
+
+/// Posts this instance is promoting, for the rail's card.
+#[expect(
+    clippy::future_not_send,
+    reason = "the browser transport is single-threaded; the SDK is used from one task at a time"
+)]
+pub async fn trending_statuses(limit: usize) -> Result<Vec<Status>, String> {
+    match instance_transport() {
+        Some(transport) => call(transport.trending_statuses(limit)).await,
+        None => Err("the client is not installed".to_owned()),
+    }
+}
+
 /// The signed-in account's own posting language, when it set one.
 ///
 /// This is the only truthful "default language" Mastodon exposes: an instance publishes the
@@ -481,6 +505,32 @@ pub async fn update_profile(display_name: String, note: String) -> Result<Accoun
     let transport = transport()?;
     let update = ProfileUpdate::new().display_name(display_name).note(note);
     let account = call(transport.update_profile(&update)).await?;
+    super::dispatch(nodus_client_sdk::Command::AccountsUpserted {
+        accounts: vec![account.clone()],
+    });
+    Ok(account)
+}
+
+/// Saves one of the signed-in account's profile pictures.
+///
+/// Separate from [`update_profile`] on purpose: the picture is uploaded the moment it is
+/// picked, and sending it through the same call as the text fields would save whatever was
+/// being typed at that moment along with it.
+pub async fn update_profile_images(
+    avatar: Option<String>,
+    header: Option<String>,
+) -> Result<Account, String> {
+    let mut update = ProfileUpdate::new();
+    if let Some(id) = avatar {
+        update = update.avatar(id);
+    }
+    if let Some(id) = header {
+        update = update.header(id);
+    }
+    if update.is_empty() {
+        return Err("Choose a picture first.".to_owned());
+    }
+    let account = call(transport()?.update_profile(&update)).await?;
     super::dispatch(nodus_client_sdk::Command::AccountsUpserted {
         accounts: vec![account.clone()],
     });

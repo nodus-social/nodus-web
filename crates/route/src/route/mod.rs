@@ -443,6 +443,15 @@ pub trait Runtime: Send + Sync + 'static {
         None
     }
 
+    /// The instance the reader is signed in on, when they are.
+    ///
+    /// A stateless paint has no session, which is what decides whether a profile link from
+    /// another instance can be resolved to a local account: without one there is nothing to
+    /// act with, so the visitor's page is the whole answer.
+    fn session_host(&self) -> Option<String> {
+        None
+    }
+
     /// Custom visual framing and navigation layout for the active session.
     fn session_style(&self) -> nodus_ui::session_style::SessionStyle {
         nodus_ui::session_style::SessionStyle::default()
@@ -503,11 +512,25 @@ pub fn RouteView(
         return body().into_any();
     }
     match route {
+        // The editor's middle is the card tray: the rail and the banners are what is being
+        // arranged, so the largest area is the list of what is not on the rail yet. A server
+        // render knows no draft, so the tray paints the catalogue with its buttons disabled.
+        Route::StyleEditor => view! {
+            <nodus_ui::components::sidebar::ModuleTray
+                layout=Signal::derive(Vec::new)
+                nav=Signal::derive(nodus_ui::session_style::NavLayout::default)
+                staff_rail=Signal::derive(|| nodus_ui::session_style::ModuleRail::Left)
+                editor=None
+            />
+        }
+        .into_any(),
+        // The reader's own page with the arranging tools on: the address says which page,
+        // and this says what is painted under the chrome.
         Route::Home | Route::Local | Route::Federated => {
             let kind = match route {
-                Route::Home => TimelineKind::Home,
                 Route::Local => TimelineKind::Local,
-                _ => TimelineKind::Federated,
+                Route::Federated => TimelineKind::Federated,
+                _ => TimelineKind::Home,
             };
             view! {
                 <TimelineScreen runtime kind header banner card/>
@@ -543,16 +566,43 @@ pub fn RouteView(
         }
         .into_any(),
         Route::Account(id) => match id.split_once('/') {
-            Some((host, id)) if !host.is_empty() && !id.is_empty() => view! {
-                <crate::route::screens::public_account::PublicAccountScreen
-                    runtime host=host.to_owned() id=id.to_owned() card
-                />
+            Some((host, id)) if !host.is_empty() && !id.is_empty() => {
+                let signed_in = runtime.session_host();
+                if signed_in.is_some() {
+                    // The address names an instance and a handle, so a reader resolves it
+                    // through their own instance: that keeps follows, blocks and mutes in
+                    // play, and lands on the local row every other screen links to. It also
+                    // covers the old id-shaped link, which resolves as a name and falls
+                    // through to the public view when it does not.
+                    view! {
+                        <crate::route::screens::profile::ProfileScreen
+                            runtime
+                            host=host.to_owned()
+                            name=id.to_owned()
+                            card
+                        />
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <crate::route::screens::public_account::PublicAccountScreen
+                            runtime
+                            host=host.to_owned()
+                            id=id.to_owned()
+                            card
+                        />
+                    }
+                    .into_any()
+                }
             }
-            .into_any(),
             _ => view! { <AccountScreen runtime id card/> }.into_any(),
         },
         Route::Lists => view! {
-            <ListsScreen runtime card/>
+            <ListsScreen runtime card picked=None/>
+        }
+        .into_any(),
+        Route::List(id) => view! {
+            <ListsScreen runtime card picked=Some(id)/>
         }
         .into_any(),
         Route::More => {
@@ -761,6 +811,32 @@ fn copy(kind: &TimelineKind) -> (&'static str, &'static str, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every destination the chrome offers is an address, not client state: the rail, the
+    /// settings strip and the editor all have to survive a reload and a shared link.
+    #[test]
+    fn every_destination_is_its_own_address() {
+        let mut hrefs: Vec<&str> = Vec::new();
+        for group in nodus_ui::components::rail::rail() {
+            hrefs.extend(
+                group
+                    .destinations
+                    .iter()
+                    .map(|destination| destination.href),
+            );
+        }
+        for section in SettingsSection::ALL {
+            let path = Route::Settings(section.slug().to_owned()).path();
+            // Owned strings cannot be borrowed into the list above, so they are checked
+            // where they are made: the strip builds exactly this path.
+            assert_eq!(Route::from_path(&path).path(), path);
+        }
+        hrefs.push(Route::StyleEditor.path().leak());
+        for href in hrefs {
+            let route = Route::from_path(href);
+            assert_eq!(route.path(), href, "{href} does not parse to itself");
+        }
+    }
 
     #[test]
     fn action_result_carries_voted_poll() {

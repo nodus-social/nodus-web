@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, List};
+use nodus_web::shared::router::Route;
 
 use crate::components::CardRenderer;
 use crate::pages::lists::{AddPeople, ListPickerRow, ListTimeline, ListsPage, Members};
@@ -16,17 +17,22 @@ use super::super::{Action, ActionResult, Runtime, TimelineKind, TimelineReply};
     clippy::too_many_lines,
     reason = "a route screen owns its layout and its reads"
 )]
-pub fn ListsScreen(runtime: Arc<dyn Runtime>, card: CardRenderer) -> impl IntoView {
+pub fn ListsScreen(
+    runtime: Arc<dyn Runtime>,
+    card: CardRenderer,
+    /// The list named in the address, if the reader is looking at one.
+    picked: Option<String>,
+) -> impl IntoView {
     let runtime = StoredValue::new(runtime);
     let card = StoredValue::new(card);
     let painted = runtime.get_value().lists().unwrap_or_default();
     let (lists, set_lists) = signal(painted);
-    let (selected, set_selected) = signal(
+    let (selected, set_selected) = signal(picked.clone().or_else(|| {
         lists
             .get_untracked()
             .first()
-            .map(|list: &List| list.id.clone()),
-    );
+            .map(|list: &List| list.id.clone())
+    }));
     let (title, set_title) = signal(String::new());
     let (busy, set_busy) = signal(false);
     let (error, set_error) = signal(None::<String>);
@@ -256,7 +262,12 @@ pub fn ListsScreen(runtime: Arc<dyn Runtime>, card: CardRenderer) -> impl IntoVi
                 busy=Signal::derive(move || busy.get())
                 on_rename=rename
                 on_delete=remove
-                on_select=Callback::new(move |id| set_selected.set(Some(id)))
+                on_select=Callback::new(move |id: String| {
+                    // The address is what says which list is open, so a reload or a
+                    // shared link lands on the same roster and the same timeline.
+                    runtime.get_value().navigate(Route::List(id.clone()).path());
+                    set_selected.set(Some(id));
+                })
             />
         }
         .into_any()

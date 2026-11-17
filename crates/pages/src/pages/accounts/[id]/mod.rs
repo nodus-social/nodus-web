@@ -263,8 +263,14 @@ fn default_card(status: Status, age_of: Option<Callback<String, String>>) -> Any
         .to_owned();
     let age = age_of.map_or_else(String::new, |age_of| age_of.run(created_at));
     let inner = status.reblog.as_deref().unwrap_or(&status);
-    let author_path = format!("/accounts/{}", inner.account.id);
-    let thread_path = format!("/status/{}", inner.id);
+    let host = nodus_web::shared::handles::host_of_acct(&inner.account.acct).or_else(|| {
+        inner
+            .url
+            .as_deref()
+            .and_then(nodus_web::shared::handles::host_of_url)
+    });
+    let author_path = nodus_web::shared::handles::profile_path_for(&inner.account.acct, host);
+    let thread_path = nodus_web::shared::handles::status_path(host, &inner.id);
     view! {
         <StatusCard
             status=status

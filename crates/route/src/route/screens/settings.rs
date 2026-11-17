@@ -14,13 +14,12 @@ use crate::pages::settings::account::{
     AccountItem, AccountsCard, ModerationLinks, SessionCard, SessionStyleCard,
 };
 use crate::pages::settings::feeds::{FeedItem, FeedsCard};
-use crate::pages::settings::form::ProfileFields;
+use crate::pages::settings::form::{ProfileFields, ProfileImages};
 use crate::pages::settings::instance_card::InstanceCard;
 use crate::pages::settings::lists::{FeaturedTagsCard, FilterItem, FiltersCard, TagItem};
 use crate::pages::settings::nav::SettingsSection;
 use crate::pages::settings::page::SettingsPage;
 use crate::pages::settings::profile::{ClockCard, ClockStyle, SensitiveCard};
-use crate::pages::settings::styling::StylingPage;
 use crate::pages::settings::sync::SyncRows;
 use crate::route::Runtime;
 
@@ -107,7 +106,7 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
 
     let navigator_edit = Arc::clone(&runtime);
     let on_edit_style = Some(Callback::new(move |()| {
-        navigator_edit.navigate(Route::Settings(SettingsSection::Styling.slug().to_owned()).path());
+        navigator_edit.navigate(Route::StyleEditor.path());
     }));
 
     if let Some(body) = runtime.settings_body(section) {
@@ -120,7 +119,6 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
     }
 
     let style_signal = Signal::derive(move || current_style.get_value());
-    let editable_style = RwSignal::new(current_style.get_value());
 
     view! {
         <SettingsPage section=Signal::derive(move || section) on_navigate=on_navigate>
@@ -149,6 +147,13 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                             busy=idle
                             message=no_error
                         />
+                        <ProfileImages
+                            avatar=Signal::derive(String::new)
+                            header=Signal::derive(String::new)
+                            busy=idle
+                            progress=Signal::derive(|| None::<u8>)
+                            message=no_error
+                        />
                         <ClockCard
                             selected=Signal::derive(|| ClockStyle::TwentyFour)
                             sample=Signal::derive(String::new)
@@ -156,14 +161,6 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                         />
                         <SensitiveCard automatic=Signal::derive(|| false) on_toggle=None/>
                     </div>
-                }.into_any(),
-                SettingsSection::Styling => view! {
-                    <StylingPage
-                        style=editable_style
-                        saving=idle
-                        message=no_error
-                        error=no_error
-                    />
                 }.into_any(),
                 SettingsSection::Nodus => {
                     let empty_add = empty_add.get_value();

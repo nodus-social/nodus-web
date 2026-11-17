@@ -605,6 +605,10 @@ impl Runtime for ClientRuntime {
         }))
     }
 
+    fn session_host(&self) -> Option<String> {
+        crate::state::bridge::session_host()
+    }
+
     fn now_millis(&self) -> f64 {
         js_sys::Date::now()
     }

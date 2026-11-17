@@ -177,6 +177,7 @@ fn router(app: Arc<App>) -> Router {
             get(public_api::following),
         )
         .route("/public-api/translate", post(translate::translate))
+        .route("/authorize_interaction", get(authorize_interaction))
         .route("/", get(index))
         .route("/home", get(home))
         .route(
@@ -189,6 +190,119 @@ fn router(app: Arc<App>) -> Router {
         )
         .fallback(shell)
         .with_state(app)
+}
+
+/// What `/authorize_interaction` accepts from a link somebody shared.
+#[derive(Debug, Deserialize)]
+struct AuthorizeQuery {
+    uri: Option<String>,
+}
+
+/// `GET /authorize_interaction?uri=…` — the link Mastodon apps hand out ("open this in
+/// your instance"), which arrived here as a plain 404.
+///
+/// Following is something only the reader's own account can do, and this process holds no
+/// account, so the URL is turned into the local search for that person instead: the
+/// results are the account, with the Follow button the reader already knows. A link we
+/// cannot read sends the reader to search rather than to an error page — the intent was
+/// to find somebody, and search is where that happens.
+async fn authorize_interaction(
+    axum::extract::Query(query): axum::extract::Query<AuthorizeQuery>,
+) -> Response {
+    match query.uri.as_deref().and_then(authorize_term) {
+        Some(term) => {
+            let encoded: String = url::form_urlencoded::byte_serialize(term.as_bytes()).collect();
+            Redirect::to(&format!("/search?q={encoded}")).into_response()
+        }
+        None => Redirect::to("/search").into_response(),
+    }
+}
+
+/// Reads a handle out of the shapes a shared link takes: `@user@host`, `acct:user@host`,
+/// `https://host/@user`, `https://host/users/user`.
+fn authorize_term(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(handle) = trimmed.strip_prefix("acct:") {
+        return handle_term(handle);
+    }
+    if trimmed.contains("://") {
+        let url = url::Url::parse(trimmed).ok()?;
+        let host = url.host_str()?;
+        if host.is_empty() {
+            return None;
+        }
+        let path = url.path().trim_matches('/');
+        let user = path
+            .strip_prefix('@')
+            .or_else(|| path.strip_prefix("users/"))
+            .or_else(|| path.strip_prefix("accounts/"))?;
+        let user = user.split('/').next().filter(|user| !user.is_empty())?;
+        return Some(format!("@{user}@{host}"));
+    }
+    handle_term(trimmed)
+}
+
+fn handle_term(raw: &str) -> Option<String> {
+    let handle = raw.trim_start_matches('@');
+    let (user, host) = handle.rsplit_once('@')?;
+    if user.is_empty() || host.is_empty() || !host.contains('.') {
+        return None;
+    }
+    Some(format!("@{user}@{host}"))
+}
+
+#[cfg(test)]
+mod authorize_tests {
+    use super::authorize_term;
+
+    #[test]
+    fn shared_links_become_a_handle_search() {
+        for (raw, expected) in [
+            (
+                "https://baraag.net/@Tomostrawberry",
+                "@Tomostrawberry@baraag.net",
+            ),
+            (
+                "https://baraag.net/@Tomostrawberry/",
+                "@Tomostrawberry@baraag.net",
+            ),
+            (
+                "https://mastodon.social/users/Gargron",
+                "@Gargron@mastodon.social",
+            ),
+            ("@Tomostrawberry@baraag.net", "@Tomostrawberry@baraag.net"),
+            ("Tomostrawberry@baraag.net", "@Tomostrawberry@baraag.net"),
+            ("acct:Gargron@mastodon.social", "@Gargron@mastodon.social"),
+            // A status permalink elsewhere lands on its author: the post itself cannot be
+            // imported, but the person it belongs to is who the reader was looking at.
+            (
+                "https://baraag.net/@Tomostrawberry/115359056000000001",
+                "@Tomostrawberry@baraag.net",
+            ),
+            ("  @Gargron@mastodon.social  ", "@Gargron@mastodon.social"),
+        ] {
+            assert_eq!(authorize_term(raw).as_deref(), Some(expected), "{raw}");
+        }
+    }
+
+    #[test]
+    fn links_we_cannot_read_are_refused() {
+        for raw in [
+            "",
+            "   ",
+            "https://baraag.net/",
+            "https://baraag.net/@",
+            "javascript:alert(1)",
+            "just-a-word",
+            "@nobody",
+            "@user@nodot",
+        ] {
+            assert_eq!(authorize_term(raw), None, "{raw}");
+        }
+    }
 }
 
 async fn shutdown() {
@@ -407,17 +521,20 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
     let Route::Account(rest) = Route::from_path(path) else {
         return None;
     };
-    let (host, id) = rest.split_once('/')?;
-    if !validate::host_valid(host) || !validate::id_valid(id) {
+    let (host, segment) = rest.split_once('/')?;
+    if !validate::host_valid(host) || !validate::id_valid(segment) {
         return None;
     }
+    // `/accounts/{host}/{name}` is the permanent address and `/accounts/{host}/{id}` is
+    // what the API hands out; the name is resolved by the instance the address named.
+    let id = crate::public_api::resolve_account_ref(host, segment, None).await?;
     let client = Client::new(host, "").ok()?;
-    let account = client.account(id).await.ok()?;
-    let (statuses, _) = client.account_statuses(id, PAGE).await.ok()?;
+    let account = client.account(&id).await.ok()?;
+    let (statuses, _) = client.account_statuses(&id, PAGE).await.ok()?;
     Some(pages::render_public_account(
         &app.bundle(),
         host,
-        id,
+        &id,
         account,
         statuses,
     ))
@@ -962,6 +1079,7 @@ mod tests {
         });
         let mut bob_style = SessionStyle {
             top: BannerRegion {
+                hidden: false,
                 split: SplitDirection::Vertical,
                 slots: vec![
                     ImageSlot::new("https://cdn.example/bob-top.png", Some("Bob"), None).unwrap(),

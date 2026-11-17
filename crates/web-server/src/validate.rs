@@ -5,7 +5,7 @@
 //! internal/loopback/metadata addresses and path traversal in relayed endpoints.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use reqwest::Url;
@@ -203,17 +203,129 @@ pub(crate) fn id_valid(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
+fn normalize_domain(raw: &str) -> String {
+    raw.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn extract_host_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains("://") {
+        return Url::parse(trimmed)
+            .ok()
+            .and_then(|url| url.host_str().map(normalize_domain));
+    }
+    let without_brackets = trimmed.trim_start_matches('[');
+    if let Some((v6, _)) = without_brackets.split_once(']') {
+        let normalized = normalize_domain(v6);
+        return (!normalized.is_empty()).then_some(normalized);
+    }
+    let host_only = trimmed.split(':').next()?;
+    let normalized = normalize_domain(host_only);
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn parse_hosts_ips_for_host(contents: &str, normalized_host: &str) -> Vec<IpAddr> {
+    if !is_public_domain(normalized_host) {
+        return Vec::new();
+    }
+    let mut ips = Vec::new();
+    for line in contents.lines() {
+        let effective = line.split('#').next().unwrap_or("").trim();
+        if effective.is_empty() {
+            continue;
+        }
+        let mut parts = effective.split_whitespace();
+        let Some(ip_str) = parts.next() else {
+            continue;
+        };
+        let ip_str = ip_str.split('%').next().unwrap_or(ip_str);
+        let Ok(ip) = ip_str.parse::<IpAddr>() else {
+            continue;
+        };
+        if parts.any(|alias| normalize_domain(alias) == normalized_host) {
+            ips.push(ip);
+        }
+    }
+    ips
+}
+
+fn configured_trusted_private_hosts() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(raw) = std::env::var("NODUS_INSTANCE_HOST")
+        && let Some(host) = extract_host_name(&raw)
+        && is_public_domain(&host)
+    {
+        out.push(host);
+    }
+    if let Ok(raw) = std::env::var("NODUS_ALLOW_PRIVATE_HOSTS") {
+        for entry in raw.split(',') {
+            if let Some(host) = extract_host_name(entry)
+                && is_public_domain(&host)
+                && !out.contains(&host)
+            {
+                out.push(host);
+            }
+        }
+    }
+    out
+}
+
+/// The same check with no hosts file and no trusted names, which is the shape the tests
+/// below read most easily.
+#[cfg(test)]
 fn validate_resolved_addrs(addrs: &[SocketAddr]) -> std::io::Result<()> {
-    if addrs.is_empty() || addrs.iter().any(|addr| !is_public_ip(addr.ip())) {
+    validate_resolved_addrs_for_host("example.com", addrs, None, &[])
+}
+
+/// Validates resolved socket addresses for `host`, allowing operator-configured
+/// `/etc/hosts` mappings and explicitly trusted instance hosts in addition to
+/// globally routable public IPs.
+fn validate_resolved_addrs_for_host(
+    host: &str,
+    addrs: &[SocketAddr],
+    hosts_contents: Option<&str>,
+    trusted_hosts: &[String],
+) -> std::io::Result<()> {
+    if addrs.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "host resolved to a non-public IP address",
         ));
     }
-    Ok(())
+    let normalized = normalize_domain(host);
+    if is_public_domain(&normalized) && trusted_hosts.iter().any(|allowed| allowed == &normalized) {
+        return Ok(());
+    }
+    let pinned_ips = hosts_contents
+        .map(|contents| parse_hosts_ips_for_host(contents, &normalized))
+        .unwrap_or_default();
+    if addrs
+        .iter()
+        .all(|addr| is_public_ip(addr.ip()) || pinned_ips.contains(&addr.ip()))
+    {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "host resolved to a non-public IP address",
+    ))
 }
 
-/// DNS resolver that rejects any host resolving to empty or non-public IP addresses.
+async fn read_system_hosts() -> Option<String> {
+    #[cfg(unix)]
+    let path = "/etc/hosts";
+    #[cfg(windows)]
+    let path = r"C:\Windows\System32\drivers\etc\hosts";
+    tokio::task::spawn_blocking(move || std::fs::read_to_string(path).ok())
+        .await
+        .ok()
+        .flatten()
+}
+
+/// DNS resolver that rejects any host resolving to empty or untrusted non-public IP addresses.
 #[derive(Debug)]
 pub(crate) struct PublicDnsResolver;
 
@@ -222,7 +334,9 @@ impl reqwest::dns::Resolve for PublicDnsResolver {
         Box::pin(async move {
             let addrs: Vec<SocketAddr> =
                 tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            validate_resolved_addrs(&addrs)
+            let hosts = read_system_hosts().await;
+            let trusted = configured_trusted_private_hosts();
+            validate_resolved_addrs_for_host(name.as_str(), &addrs, hosts.as_deref(), &trusted)
                 .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
@@ -265,6 +379,17 @@ pub(crate) fn public_http_client(timeout: Duration) -> Result<reqwest::Client, r
         .build()
 }
 
+/// Returns the shared 20s `reqwest::Client` hardened against DNS-rebinding and open-redirect SSRF.
+pub(crate) fn shared_public_http_client() -> Result<reqwest::Client, reqwest::Error> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = public_http_client(Duration::from_secs(20))?;
+    let _ = CLIENT.set(client.clone());
+    Ok(CLIENT.get().cloned().unwrap_or(client))
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, SocketAddr};
@@ -281,9 +406,10 @@ mod tests {
     use serde::Deserialize;
 
     use super::{
-        PublicDnsResolver, id_valid, is_public_ip, normalized_host, public_http_client,
-        public_redirect_policy, validate_instance_url, validate_redirect_url,
-        validate_resolved_addrs,
+        PublicDnsResolver, extract_host_name, id_valid, is_public_ip, normalized_host,
+        public_http_client, public_redirect_policy, shared_public_http_client,
+        validate_instance_url, validate_redirect_url, validate_resolved_addrs,
+        validate_resolved_addrs_for_host,
     };
 
     #[test]
@@ -509,5 +635,114 @@ mod tests {
             );
         }
         assert_eq!(canary_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn etc_hosts_allows_pinned_public_domain_while_blocking_ssrf() {
+        let hosts = "\
+# loopback hairpin for local Caddy vhost\n\
+127.0.0.1 localhost localhost.localdomain\n\
+127.0.0.1 mastodon.luxuride.eu nodus.luxuride.eu # same-box mastodon\n\
+::1 mastodon.luxuride.eu\n\
+10.0.0.5 internal.corp metadata.google.internal\n";
+
+        let loopback_v4: Vec<SocketAddr> = vec!["127.0.0.1:443".parse().unwrap()];
+        let loopback_v6: Vec<SocketAddr> = vec!["[::1]:443".parse().unwrap()];
+        let both_loopbacks: Vec<SocketAddr> = vec![
+            "127.0.0.1:443".parse().unwrap(),
+            "[::1]:443".parse().unwrap(),
+        ];
+        assert!(
+            validate_resolved_addrs_for_host(
+                "mastodon.luxuride.eu",
+                &loopback_v4,
+                Some(hosts),
+                &[],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_resolved_addrs_for_host(
+                "MASTODON.LUXURIDE.EU",
+                &loopback_v6,
+                Some(hosts),
+                &[],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_resolved_addrs_for_host(
+                "mastodon.luxuride.eu",
+                &both_loopbacks,
+                Some(hosts),
+                &[],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_resolved_addrs_for_host("nodus.luxuride.eu", &loopback_v4, Some(hosts), &[])
+                .is_ok()
+        );
+        assert!(
+            validate_resolved_addrs_for_host(
+                "nodus.luxuride.eu",
+                &both_loopbacks,
+                Some(hosts),
+                &[],
+            )
+            .is_err()
+        );
+
+        // Unpinned non-public IPs for the same domain must still be rejected.
+        let metadata: Vec<SocketAddr> = vec!["169.254.169.254:443".parse().unwrap()];
+        assert!(
+            validate_resolved_addrs_for_host("mastodon.luxuride.eu", &metadata, Some(hosts), &[],)
+                .is_err()
+        );
+
+        // Arbitrary domains not in /etc/hosts cannot resolve to loopback.
+        assert!(
+            validate_resolved_addrs_for_host("attacker.example", &loopback_v4, Some(hosts), &[])
+                .is_err()
+        );
+
+        // Non-public/reserved names remain blocked even if present in /etc/hosts.
+        let rfc1918: Vec<SocketAddr> = vec!["10.0.0.5:443".parse().unwrap()];
+        assert!(
+            validate_resolved_addrs_for_host("localhost", &loopback_v4, Some(hosts), &[]).is_err()
+        );
+        assert!(
+            validate_resolved_addrs_for_host(
+                "metadata.google.internal",
+                &rfc1918,
+                Some(hosts),
+                &[],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn explicit_trusted_hosts_allow_configured_instance_without_weakening_others() {
+        let trusted = vec!["mastodon.luxuride.eu".to_owned()];
+        let rfc1918: Vec<SocketAddr> = vec!["172.18.0.4:443".parse().unwrap()];
+        let loopback: Vec<SocketAddr> = vec!["127.0.0.1:443".parse().unwrap()];
+
+        assert!(
+            validate_resolved_addrs_for_host("mastodon.luxuride.eu", &rfc1918, None, &trusted)
+                .is_ok()
+        );
+        assert!(
+            validate_resolved_addrs_for_host("other.example", &rfc1918, None, &trusted).is_err()
+        );
+        assert!(
+            validate_resolved_addrs_for_host("localhost", &loopback, None, &["localhost".into()])
+                .is_err()
+        );
+        assert_eq!(
+            extract_host_name("https://Mastodon.Luxuride.EU:8443/"),
+            Some("mastodon.luxuride.eu".to_owned())
+        );
+        assert!(shared_public_http_client().is_ok());
     }
 }

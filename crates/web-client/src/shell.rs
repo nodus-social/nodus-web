@@ -41,6 +41,7 @@ fn under_more(route: &Route) -> bool {
             | Route::Saved(_)
             | Route::Scheduled
             | Route::Lists
+            | Route::List(_)
             | Route::Compose
             | Route::ComposeEdit(_)
             | Route::Settings(_)

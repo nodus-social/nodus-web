@@ -95,10 +95,12 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                 Callback::new(move |result: Result<Option<Relationship>, String>| {
                     alive.if_alive(|| match result {
                         Ok(found) => relationship.set(found),
+                        // A profile whose relationship could not be read has no verbs worth
+                        // drawing: three dead buttons read as "this account cannot be acted
+                        // on", which is a claim, and the wrong one. The reason is shown
+                        // instead, and the header keeps only what is true.
                         Err(message) => {
-                            if account.get_untracked().is_none() {
-                                error.set(Some(message));
-                            }
+                            error.set(Some(message));
                         }
                     });
                 });
@@ -180,6 +182,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                     relationship=relationship.get()
                     statuses=statuses
                     show_statuses=tab.get() == Tab::Posts
+                    show_verbs=relationship.get().is_some()
                     tabs=tabs.clone()
                     after=after.clone()
                     card=card.get_value()

@@ -28,7 +28,6 @@ mod moderation;
 mod profile;
 pub(crate) mod sensitive;
 mod session;
-mod styling;
 pub(crate) mod sync;
 pub(crate) mod tags;
 
@@ -41,7 +40,6 @@ use moderation::ModerationLinks;
 use profile::ProfileCard;
 use sensitive::SensitiveCard;
 use session::SessionCard;
-use styling::StylingEditor;
 use tags::FeaturedTagsCard;
 
 /// One settings section's body.
@@ -74,9 +72,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
                 <SessionStyleCard
                     style=bridge_style::active_style_signal()
                     on_edit=Some(Callback::new(move |()| {
-                        router::navigate(Route::Settings(
-                            SettingsSection::Styling.slug().to_owned(),
-                        ));
+                        router::navigate(Route::StyleEditor);
                     }))
                 />
                 <AccountsCard/>
@@ -87,10 +83,6 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
                 <ProfileCard/>
                 <ClockCard/>
                 <SensitiveCard/>
-            </Show>
-
-            <Show when=move || section == SettingsSection::Styling>
-                <StylingEditor/>
             </Show>
 
             <Show when=move || section == SettingsSection::Nodus>

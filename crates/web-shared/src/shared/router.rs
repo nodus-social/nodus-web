@@ -56,6 +56,9 @@ pub enum Route {
     Scheduled,
     /// Hand-picked accounts with a timeline each.
     Lists,
+    /// One of those lists, open. The list is in the address so a roster or a timeline can
+    /// be linked, reloaded and returned to.
+    List(String),
     /// The phone's door to everything the bottom bar does not hold.
     More,
     /// Writing a new status.
@@ -71,6 +74,10 @@ pub enum Route {
     /// Settings, with the section in the address (`/settings/privacy`). Empty is the
     /// account section, so `/settings` stays a working link.
     Settings(String),
+    /// The fullscreen styling editor. An address of its own rather than a flag on the page
+    /// that launches it: the editor is a place the reader is in, so it must be linkable,
+    /// reloadable, and left by the back button like any other screen.
+    StyleEditor,
     /// Where the instance returns the browser after authorization. The query string
     /// carries the code and `state`, so this route is matched regardless of sign-in.
     OauthCallback,
@@ -123,6 +130,7 @@ impl Route {
             Self::Saved(which) => format!("/saved/{which}"),
             Self::Scheduled => "/scheduled".to_owned(),
             Self::Lists => "/lists".to_owned(),
+            Self::List(id) => format!("/lists/{id}"),
             Self::More => "/more".to_owned(),
             Self::Compose => "/compose".to_owned(),
             Self::ComposeEdit(id) => format!("/compose/{id}"),
@@ -131,6 +139,7 @@ impl Route {
             Self::Admin(section) => format!("/admin/{section}"),
             Self::Moderation(section) => format!("/moderation/{section}"),
             Self::Settings(section) => format!("/settings/{section}"),
+            Self::StyleEditor => STYLE_EDITOR_PATH.to_owned(),
             // The OAuth flow registers this path as `redirect_uris`; sharing the
             // constant is what keeps the address bar and the registered URI identical.
             Self::OauthCallback => CALLBACK_PATH.to_owned(),
@@ -173,6 +182,16 @@ impl Route {
                 };
             }
         }
+        // The editor's own address, tested before the `/settings/` prefix so it is a screen
+        // rather than a section named `styling/editor`.
+        // The styling tab is gone; its address is the editor's, so a bookmark or a link
+        // written before the change opens the thing that replaced it.
+        if trimmed == "/settings/styling" {
+            return Self::StyleEditor;
+        }
+        if trimmed == STYLE_EDITOR_PATH {
+            return Self::StyleEditor;
+        }
         // Submenus are addresses, not client state: `/settings/privacy` and
         // `/saved/bookmarks` stay readable, shareable and back-button-friendly.
         if let Some(section) = trimmed.strip_prefix("/settings/") {
@@ -193,6 +212,11 @@ impl Route {
         if let Some(shelf) = trimmed.strip_prefix("/saved/") {
             if !shelf.is_empty() {
                 return Self::Saved(shelf.to_owned());
+            }
+        }
+        if let Some(id) = trimmed.strip_prefix("/lists/") {
+            if !id.is_empty() {
+                return Self::List(id.to_owned());
             }
         }
         if let Some(id) = trimmed.strip_prefix("/accounts/") {
@@ -236,6 +260,8 @@ impl Route {
 /// cannot point outside the mount by accident.
 /// The section `/settings` means when no section is named.
 pub const SECTION_DEFAULT: &str = "account";
+/// Where the fullscreen styling editor lives, below the screen that launches it.
+pub const STYLE_EDITOR_PATH: &str = "/settings/styling/editor";
 /// The shelf `/saved` means when no shelf is named.
 pub const SHELF_DEFAULT: &str = "favourites";
 

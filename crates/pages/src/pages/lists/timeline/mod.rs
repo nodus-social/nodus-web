@@ -87,8 +87,14 @@ pub fn ListTimeline(
 /// optional: a setter for one takes the bare value, and a panel that only has the option to
 /// forward it would have to invent one.
 fn read_only_card(status: Status, age: String) -> AnyView {
-    let author_path = format!("/accounts/{}", status.account.id);
-    let thread_path = format!("/status/{}", status.id);
+    let host = nodus_web::shared::handles::host_of_acct(&status.account.acct).or_else(|| {
+        status
+            .url
+            .as_deref()
+            .and_then(nodus_web::shared::handles::host_of_url)
+    });
+    let author_path = nodus_web::shared::handles::profile_path_for(&status.account.acct, host);
+    let thread_path = nodus_web::shared::handles::status_path(host, &status.id);
 
     StatusCard(StatusCardProps {
         status,
