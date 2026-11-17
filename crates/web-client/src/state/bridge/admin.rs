@@ -1,6 +1,6 @@
 //! Moderation calls, and the one question that decides whether to show them.
 
-use super::{admin_transport, instance_transport};
+use super::{admin_scope, admin_transport, instance_transport};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
@@ -37,15 +37,108 @@ pub enum Staff {
 /// probe that fails is the same 403 the real screens would hit. The distinction the
 /// caller needs is "no grant yet" versus "the instance said no", so a missing grant is
 /// reported as such instead of being flattened into `false`.
+///
+/// Prefer [`standing`] from anything that re-runs on a redraw: this one always asks.
 pub async fn staff() -> Staff {
-    let Some(transport) = admin_transport() else {
+    match probe().await {
+        Ok(verdict) => verdict,
+        Err(reason) => reason,
+    }
+}
+
+/// The answer [`staff`] last had, for the same session and grant.
+///
+/// The rail and each console section ask this question, and their effects re-run whenever
+/// the store notifies — which the socket and the sync loop do constantly. Asking the
+/// instance on every redraw turned a queued probe into a stream of requests, and each
+/// refusal of an ungranted token is recorded by the server as a failed authentication, so
+/// the alert list filled with the client's own polling. The answer only changes when the
+/// session or the grant does, so that is what the answer is kept against.
+///
+/// The first paint mounts several askers at once, and they arrive before any answer
+/// exists: one of them asks and the rest wait for the answer instead of asking again.
+pub async fn standing() -> Staff {
+    let Some(signature) = signature() else {
         return Staff::NeedsGrant;
     };
+    for attempt in 0..64 {
+        if let Some(verdict) = cached(&signature) {
+            return verdict;
+        }
+        let ours = CLAIM.with(|claim| {
+            let mut claim = claim.borrow_mut();
+            if claim.as_ref() == Some(&signature) {
+                false
+            } else {
+                *claim = Some(signature.clone());
+                true
+            }
+        });
+        if ours || attempt == 63 {
+            let verdict = probe().await.unwrap_or_else(|reason| reason);
+            remember(&signature, verdict.clone());
+            CLAIM.with(|claim| {
+                let mut claim = claim.borrow_mut();
+                if claim.as_ref() == Some(&signature) {
+                    *claim = None;
+                }
+            });
+            return verdict;
+        }
+        // Another asker has the question in flight; its answer lands in the cache.
+        gloo_timers::future::TimeoutFuture::new(16).await;
+    }
+    Staff::NeedsGrant
+}
+
+/// Drops the cached answer, because the session or the grant just changed.
+pub fn forget_standing() {
+    STANDING.with(|slot| slot.borrow_mut().take());
+}
+
+/// The session and grant this answer belongs to.
+///
+/// A token that is missing, or belongs to another account, would produce a different
+/// answer, so it must not share a cache entry.
+fn signature() -> Option<Signature> {
+    let (host, account) = admin_scope()?;
+    Some((host, account, admin_transport().is_some()))
+}
+
+/// Instance, account and whether a grant is held.
+type Signature = (String, String, bool);
+
+thread_local! {
+    /// The last verdict and the session it described.
+    static STANDING: std::cell::RefCell<Option<(Signature, Staff)>> =
+        const { std::cell::RefCell::new(None) };
+    /// The session whose question is currently being asked.
+    static CLAIM: std::cell::RefCell<Option<Signature>> = const { std::cell::RefCell::new(None) };
+}
+
+fn cached(signature: &Signature) -> Option<Staff> {
+    STANDING.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(cached, _)| cached == signature)
+            .map(|(_, verdict)| verdict.clone())
+    })
+}
+
+fn remember(signature: &Signature, verdict: Staff) {
+    STANDING.with(|slot| *slot.borrow_mut() = Some((signature.clone(), verdict)));
+}
+
+/// Asks the instance, keeping "no grant" apart from "refused".
+async fn probe() -> Result<Staff, Staff> {
+    let Some(transport) = admin_transport() else {
+        return Err(Staff::NeedsGrant);
+    };
     match transport.reports(ReportState::Open, 1).await {
-        Ok(_) => Staff::Yes,
-        Err(error) => Staff::No(format!(
+        Ok(_) => Ok(Staff::Yes),
+        Err(error) => Err(Staff::No(format!(
             "The instance refused access to the report queue: {error}"
-        )),
+        ))),
     }
 }
 

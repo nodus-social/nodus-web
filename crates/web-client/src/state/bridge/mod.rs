@@ -513,6 +513,7 @@ pub async fn keep_admin_token(host: &str, account: &str, token: &str) -> Result<
             )
         })?;
     admin_token::store(&endpoint.host, account, token);
+    admin::forget_standing();
     Ok(())
 }
 
@@ -558,6 +559,7 @@ pub fn forget_admin_token() {
             admin_token::clear(&endpoint.host, &account);
         }
     }
+    admin::forget_standing();
 }
 
 /// Builds an [`Instance`] from a canonical endpoint.

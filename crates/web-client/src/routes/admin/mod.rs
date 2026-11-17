@@ -61,7 +61,7 @@ pub fn Admin(section: String) -> impl IntoView {
     let probe = {
         move || {
             spawn_local(async move {
-                let verdict = admin::staff().await;
+                let verdict = admin::standing().await;
                 alive.if_alive(|| {
                     if let admin::Staff::No(reason) = &verdict {
                         set_error.set(Some(reason.clone()));

@@ -355,7 +355,7 @@ fn StaffRail() -> impl IntoView {
     Effect::new(move |_| {
         revision().get();
         spawn_local(async move {
-            let answer = crate::state::bridge::admin::staff().await;
+            let answer = crate::state::bridge::admin::standing().await;
             standing.set(Some(answer));
         });
     });

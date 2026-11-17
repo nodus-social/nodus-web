@@ -96,6 +96,20 @@ test('the dashboard counts what the server reports', async ({ page }) => {
   expect(reports.series.map((series) => series.label)).toEqual(['Opened', 'Resolved'])
 })
 
+test('the console asks the instance once, however often it redraws', async ({ page }) => {
+  const calls = await consoleAs(page, { reports: [report()] })
+  await open(page, '/admin/overview')
+  await expect(page.getByText('Accounts', { exact: true })).toBeVisible()
+
+  // The rail and the gate both ask "may this account moderate?" and both re-run on every
+  // store notification, which the socket and the sync loop produce constantly. Each ask
+  // used to be its own request — and a refusal of an ungranted token is recorded by the
+  // server as a failed authentication, so the alert list filled with the client's polling.
+  await page.waitForTimeout(2500)
+  const probes = calls.filter((call) => call.url.includes('/api/v1/admin/reports'))
+  expect(probes).toHaveLength(1)
+})
+
 test('a report is resolved with the note the moderator wrote', async ({ page }) => {
   const calls = await consoleAs(page, { reports: [report()] })
   await open(page, '/moderation/reports')
