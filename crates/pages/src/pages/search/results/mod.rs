@@ -165,9 +165,13 @@ mod tests {
                 statuses: Signal::derive(Vec::new),
                 tags: Signal::derive(|| {
                     vec![Tag {
+                        id: None,
                         name: "rust".to_owned(),
                         url: "https://example.org/tags/rust".to_owned(),
                         history: Vec::new(),
+                        following: false,
+                        statuses_count: None,
+                        following_count: None,
                     }]
                 }),
                 searched: Signal::derive(|| true),

@@ -46,6 +46,7 @@ use tags::FeaturedTagsCard;
 #[component]
 pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     let revision = revision();
+    let extensions = crate::state::bridge::supports_extensions();
 
     let host = move || {
         revision.get();
@@ -69,12 +70,14 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     view! {
             <Show when=move || section == SettingsSection::Account>
                 <SessionCard host=host acct=acct/>
-                <SessionStyleCard
-                    style=bridge_style::active_style_signal()
-                    on_edit=Some(Callback::new(move |()| {
-                        router::navigate(Route::StyleEditor);
-                    }))
-                />
+                <Show when=move || extensions.get()>
+                    <SessionStyleCard
+                        style=bridge_style::active_style_signal()
+                        on_edit=Some(Callback::new(move |()| {
+                            router::navigate(Route::StyleEditor);
+                        }))
+                    />
+                </Show>
                 <AccountsCard/>
                 <ModerationLinks/>
             </Show>
@@ -86,7 +89,9 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Nodus>
-                <SyncCard/>
+                <Show when=move || extensions.get()>
+                    <SyncCard/>
+                </Show>
                 <FeedsCard/>
             </Show>
 

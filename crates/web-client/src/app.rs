@@ -61,6 +61,9 @@ pub(crate) fn App() -> impl IntoView {
         revision.get();
         with_sdk(|sdk| sdk.state().session.get().is_some())
     });
+    // The recommendation, styling and staff surfaces are ours; a Mastodon account has no
+    // server behind them. The route arms below and the rail read the same answer.
+    let extensions = crate::state::bridge::supports_extensions();
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
@@ -119,7 +122,7 @@ pub(crate) fn App() -> impl IntoView {
     // away. A mode that a back button can leave while the mode itself stays on would be a
     // page that lies about where the reader is.
     Effect::new(move |_| {
-        if route.get() == Route::StyleEditor {
+        if route.get() == Route::StyleEditor && extensions.get() {
             crate::state::bridge::style::begin_edit();
         } else {
             crate::state::bridge::style::cancel_edit();
@@ -181,7 +184,7 @@ pub(crate) fn App() -> impl IntoView {
                         let signed_in = signed_in.get();
                         match route.get() {
                             Route::OauthCallback => view! { <Callback/> }.into_any(),
-                            Route::Feed if signed_in => {
+                            Route::Feed if signed_in && extensions.get() => {
                                 let header: ChildrenFn = std::sync::Arc::new(|| {
                                     view! { <crate::routes::home::TimelineHeader/> }.into_any()
                                 });
@@ -194,12 +197,17 @@ pub(crate) fn App() -> impl IntoView {
                                     />
                                 }.into_any()
                             },
+                            Route::Feed if signed_in => unavailable(
+                                "Recommended posts",
+                                "This instance has no recommendation engine, so there is nothing \
+                                 to rank here. Your home timeline still works.",
+                            ),
                             Route::Home if signed_in => view! { <HomeTimeline/> }.into_any(),
                             // The middle of the editor is not being edited: the rail and the
                             // banners are. So it is the dumping ground — every card that
                             // exists, with the ones on the rail marked, one click from either
                             // side.
-                            Route::StyleEditor if signed_in => {
+                            Route::StyleEditor if signed_in && extensions.get() => {
                                 let has_staff = extra_doors().is_some();
                                 view! {
                                     <nodus_ui::components::sidebar::ModuleTray
@@ -218,6 +226,11 @@ pub(crate) fn App() -> impl IntoView {
                                 }
                                 .into_any()
                             }
+                            Route::StyleEditor if signed_in => unavailable(
+                                "Session styling",
+                                "Styling is served by Nodus, and this instance does not offer \
+                                 it. The rest of your settings still work.",
+                            ),
                             Route::StyleEditor => {
                                 view! { <SignIn note="Sign in to arrange your page."/> }
                                     .into_any()
@@ -226,6 +239,14 @@ pub(crate) fn App() -> impl IntoView {
                             // section; only a signed-out visitor is sent to sign in.
                             Route::Admin(_) | Route::Moderation(_) if !signed_in => {
                                 view! { <SignIn note="Sign in to moderate."/> }.into_any()
+                            }
+                            Route::Admin(_) | Route::Moderation(_) if !extensions.get() => {
+                                unavailable(
+                                    "Staff console",
+                                    "Moderation and administration are served by Nodus, not by \
+                                     this instance. On Mastodon they live in the instance's own \
+                                     web interface.",
+                                )
                             }
                             // A shared link works without a session: the address names the
                             // host, so the post is read from there anonymously. A legacy
@@ -304,6 +325,25 @@ pub(crate) fn App() -> impl IntoView {
     }
 }
 
+/// A route the account's instance cannot serve.
+///
+/// Named rather than blank: a reader arriving from a link needs to know which screen they
+/// asked for, why it is not here, and where they can go instead — the same shape the shared
+/// route view paints for a screen the stateless render cannot serve.
+fn unavailable(title: &'static str, note: &'static str) -> AnyView {
+    view! {
+        <nodus_ui::Screen>
+            <nodus_ui::PageHeader title=title description=note/>
+            <nodus_ui::Note>
+                <a class="link link-hover" href=Route::Home.path()>
+                    "Go to the home timeline"
+                </a>
+            </nodus_ui::Note>
+        </nodus_ui::Screen>
+    }
+    .into_any()
+}
+
 /// The doors only a moderator build draws, as the shared frame wants them.
 #[cfg(feature = "admin")]
 #[expect(
@@ -358,9 +398,10 @@ fn RailItem(label: &'static str, icon: Icon, hint: &'static str, route: Route) -
 /// The moderation doors, in a build that carries the screens.
 ///
 /// Shown only once the instance has answered that this account may moderate: a rail entry
-/// that leads to "you are not a moderator" is a dead end, and `admin::staff()` is the only
-/// honest source for that answer. The check re-runs when the session or the grant changes,
-/// because both can arrive after the first paint.
+/// that leads to "you are not a moderator" is a dead end, and `admin::standing()` is the only
+/// honest source for that answer. The check re-runs when the session, the grant or the
+/// instance's extension answer changes, because any of them can arrive after the first
+/// paint.
 #[cfg(feature = "admin")]
 fn staff_rail_items() -> impl IntoView {
     view! { <StaffRail/> }
@@ -371,8 +412,13 @@ fn staff_rail_items() -> impl IntoView {
 #[component]
 fn StaffRail() -> impl IntoView {
     let standing = RwSignal::new(None);
+    let extensions = crate::state::bridge::supports_extensions();
     Effect::new(move |_| {
         revision().get();
+        if !extensions.get() {
+            standing.set(None);
+            return;
+        }
         spawn_local(async move {
             let answer = crate::state::bridge::admin::standing().await;
             standing.set(Some(answer));
@@ -380,7 +426,10 @@ fn StaffRail() -> impl IntoView {
     });
 
     view! {
-        <Show when=move || !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No(_)))>
+        <Show when=move || {
+            extensions.get()
+                && !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No(_)))
+        }>
             <RailItem
                 label="Moderation"
                 icon=Icon::Shield

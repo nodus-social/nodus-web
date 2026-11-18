@@ -144,6 +144,78 @@ test('the strip offers only the timelines the instance serves', async ({ page })
   await expect(page.getByRole('tab', { name: 'Feed', exact: true })).toHaveCount(0)
 })
 
+test('the recommendation screen is unavailable, not an empty feed', async ({ page }) => {
+  await stubMastodon(page)
+  await signedIn(page, { host: MASTODON })
+  // `/home/feed` is the recommendation tab's own address; a Mastodon account that follows
+  // a link to it must be told what is missing rather than shown an empty ranking.
+  const crashes = await open(page, '/home/feed')
+
+  await expect(page.getByRole('heading', { name: 'Recommended posts', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Go to the home timeline' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Feed', exact: true })).toHaveCount(0)
+  expect(crashes, crashes.join('\n')).toEqual([])
+})
+
+test('settings keep the cards a Mastodon instance can fill', async ({ page }) => {
+  await stubMastodon(page)
+  await signedIn(page, { host: MASTODON })
+  await open(page, '/settings')
+
+  await expect(page.getByRole('heading', { name: 'Session', exact: true })).toBeVisible()
+  // The styling summary is the style editor's front door, and the editor is ours alone.
+  await expect(page.getByRole('heading', { name: 'Session style', exact: true })).toHaveCount(0)
+  await expect(page.locator('[data-edit-session-style]')).toHaveCount(0)
+
+  await page.goto('/settings/nodus')
+  await hydrated(page)
+  await expect(page.getByRole('heading', { name: 'Background sync', exact: true })).toHaveCount(0)
+  const timelines = page
+    .locator('section.card')
+    .filter({ has: page.getByRole('heading', { name: 'Timelines', exact: true }) })
+  await expect(timelines).toBeVisible()
+  // Every other row is a browser preference and stays; the recommendation row is a switch
+  // for a screen this instance cannot serve.
+  await expect(timelines.locator('label').filter({ hasText: 'Feed' })).toHaveCount(0)
+  await expect(timelines.locator('label').filter({ hasText: 'Local' })).toHaveCount(1)
+
+  await page.goto('/settings/styling')
+  await hydrated(page)
+  await expect(page.getByRole('heading', { name: 'Session styling', exact: true })).toBeVisible()
+})
+
+test('a Nodus account keeps the recommendation and styling surfaces', async ({ page }) => {
+  await stubApi(page)
+  await signedIn(page)
+  await open(page, '/settings')
+
+  await expect(page.getByRole('heading', { name: 'Session style', exact: true })).toBeVisible()
+
+  await page.goto('/settings/nodus')
+  await hydrated(page)
+  await expect(page.getByRole('heading', { name: 'Background sync', exact: true })).toBeVisible()
+  const timelines = page
+    .locator('section.card')
+    .filter({ has: page.getByRole('heading', { name: 'Timelines', exact: true }) })
+  await expect(timelines.locator('label').filter({ hasText: 'Feed' })).toHaveCount(1)
+
+  await page.goto('/home/feed')
+  await hydrated(page)
+  await expect(page.getByRole('heading', { name: 'Feed', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Recommended posts', exact: true })).toHaveCount(0)
+})
+
+test('a Mastodon rail offers no staff doors', async ({ page }) => {
+  test.skip(test.info().project.name !== 'desktop', 'the rail is the desktop shell')
+  await stubMastodon(page)
+  await signedIn(page, { host: MASTODON })
+  await open(page, '/home')
+
+  const rail = page.locator('nav[aria-label="Primary navigation"]')
+  await expect(rail.getByRole('link', { name: 'Moderation', exact: true })).toHaveCount(0)
+  await expect(rail.getByRole('link', { name: 'Administration', exact: true })).toHaveCount(0)
+})
+
 test('a browser asks a Mastodon instance about extensions once, then remembers', async ({ page }) => {
   await stubMastodon(page)
   await signedIn(page)

@@ -146,9 +146,13 @@ mod tests {
                         accounts: Vec::new(),
                         statuses: Vec::new(),
                         hashtags: vec![Tag {
+                            id: None,
                             name: "rust".to_owned(),
                             url: "https://example.org/tags/rust".to_owned(),
                             history: Vec::new(),
+                            following: false,
+                            statuses_count: None,
+                            following_count: None,
                         }],
                     })),
                     cursor: None,
