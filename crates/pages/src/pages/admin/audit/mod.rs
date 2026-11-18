@@ -29,6 +29,9 @@ pub fn AuditPage(
     /// Reads the next page.
     #[prop(optional)]
     on_more: Option<Callback<()>>,
+    /// Saves every row the filter matches as one file, rather than another page.
+    #[prop(optional)]
+    on_export: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
         <Panel
@@ -80,6 +83,22 @@ pub fn AuditPage(
                         }
                     }
                 />
+            </div>
+            <div class="mb-3 flex flex-wrap items-center justify-end gap-2">
+                <span class="mr-auto text-xs opacity-60">
+                    "The export is every row the filter matches, not only this page."
+                </span>
+                <button
+                    class="btn btn-sm"
+                    disabled=on_export.is_none()
+                    on:click=move |_| {
+                        if let Some(on_export) = on_export {
+                            on_export.run(());
+                        }
+                    }
+                >
+                    "Export CSV"
+                </button>
             </div>
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>

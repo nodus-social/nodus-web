@@ -68,3 +68,49 @@ pub mod location {
             .unwrap_or_default()
     }
 }
+
+/// Handing bytes to the reader as a file they can keep.
+pub mod download {
+    use wasm_bindgen::JsCast;
+
+    /// How long a download's object URL outlives its click, so the browser has started
+    /// reading it before the address is released.
+    const RELEASE_AFTER_MS: i32 = 50;
+
+    /// Hands `bytes` to the browser as a file named `name`.
+    ///
+    /// Some answers are files rather than JSON this console could decode — a scanner's
+    /// content set, the audit log's own CSV. Those arrive as bytes and leave as an object
+    /// URL over those same bytes. The browser only starts reading that URL after the click
+    /// returns, so it is released on a later turn rather than in this one.
+    pub fn save_bytes(bytes: &[u8], name: &str) -> Result<(), String> {
+        let array = js_sys::Uint8Array::from(bytes);
+        let parts = js_sys::Array::new();
+        parts.push(&array.buffer());
+        let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+            .map_err(|_| "Could not build the file.".to_owned())?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob)
+            .map_err(|_| "Could not build the file's address.".to_owned())?;
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .ok_or_else(|| "There is no page to download into.".to_owned())?;
+        let anchor = document
+            .create_element("a")
+            .map_err(|_| "Could not build the link.".to_owned())?
+            .dyn_into::<web_sys::HtmlAnchorElement>()
+            .map_err(|_| "Could not build the link.".to_owned())?;
+        anchor.set_href(&url);
+        anchor.set_download(name);
+        anchor.click();
+        let release = wasm_bindgen::closure::Closure::once_into_js(move || {
+            let _ = web_sys::Url::revoke_object_url(&url);
+        });
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                release.unchecked_ref(),
+                RELEASE_AFTER_MS,
+            );
+        }
+        Ok(())
+    }
+}

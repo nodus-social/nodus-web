@@ -6,6 +6,7 @@ use nodus_client_core::model::{AuditEntry, AuditFilter};
 use nodus_pages::pages::admin::audit::AuditPage;
 use nodus_ui::Note;
 
+use crate::platform::download::save_bytes;
 use crate::state::alive::Alive;
 use crate::state::bridge::{admin, feature, revision};
 
@@ -55,6 +56,23 @@ pub fn Audit() -> impl IntoView {
         });
     });
 
+    // The export is the filter asked of the endpoint that answers a file: the bytes go to
+    // the browser as they arrived, under a name this console picks.
+    let export = Callback::new(move |()| {
+        let filter = query.get_untracked();
+        let alive = Alive::new();
+        spawn_local(async move {
+            match admin::audit_csv(&filter).await {
+                Ok(bytes) => {
+                    if let Err(message) = save_bytes(&bytes, "audit.csv") {
+                        alive.if_alive(|| set_error.set(Some(message)));
+                    }
+                }
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
     let supported = feature("admin");
     view! {
         {move || if supported.get() {
@@ -67,6 +85,7 @@ pub fn Audit() -> impl IntoView {
                     has_more=Signal::derive(move || entries.get().len() >= usize::from(PAGE))
                     on_query=Callback::new(move |next: AuditFilter| set_query.set(next))
                     on_more=more
+                    on_export=export
                 />
             }
                 .into_any()

@@ -326,6 +326,47 @@ test('the audit log is narrowed and paged by its filters', async ({ page }) => {
   await sent(calls, (call) => new URL(call.url).searchParams.get('offset') === '20')
 })
 
+test('the audit log is exported as the file the filter names', async ({ page }) => {
+  const rows = [
+    {
+      id: '1',
+      actor_id: '7',
+      action: 'resolve_report',
+      target_type: 'report',
+      target_id: '9',
+      detail: {},
+      created_at: '2026-11-01T10:00:00Z',
+    },
+  ]
+  const calls = await consoleAs(page, { audit: rows })
+  await open(page, '/admin/audit')
+
+  await page.getByPlaceholder('Action, e.g. resolve_report').fill('resolve_report')
+  await page.getByPlaceholder('Target type, e.g. report').fill('report')
+
+  // The bytes are handed to the browser as a file rather than decoded into a model, so the
+  // proof is the download itself: its name is the console's, its content from the API.
+  const arrived = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export CSV' }).click()
+  const download = await arrived
+  expect(download.suggestedFilename()).toBe('audit.csv')
+
+  const asked = await sent(calls, (call) => call.url.includes('/api/v1/admin/audit.csv'))
+  const filter = new URL(asked.url).searchParams
+  expect(filter.get('action')).toBe('resolve_report')
+  expect(filter.get('target_type')).toBe('report')
+  // An export is the whole result, so it asks for no page of it.
+  expect(filter.has('limit')).toBe(false)
+  expect(filter.has('offset')).toBe(false)
+
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  expect(Buffer.concat(chunks).toString()).toBe(
+    'action,target_type,actor_id\nresolve_report,report,\n',
+  )
+})
+
 test('a domain block changes severity without losing what it carried', async ({ page }) => {
   const calls = await consoleAs(page, {
     blocks: [

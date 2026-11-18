@@ -399,6 +399,36 @@ pub async fn audit(filter: &AuditFilter) -> Result<Vec<AuditEntry>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// The same filter, asked of the endpoint that answers a file rather than JSON.
+///
+/// The export is the log as text the instance writes, not a shape this console decodes, so
+/// it is handed back as the bytes that arrived. The filter's words are the only part the
+/// console chooses; paging is left out because an export is the whole result, not a page.
+pub async fn audit_csv(filter: &AuditFilter) -> Result<Vec<u8>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/audit.csv")
+        .map_err(|error| error.to_string())?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in [
+            ("action", filter.action.as_deref()),
+            ("target_type", filter.target_type.as_deref()),
+            ("actor_id", filter.actor_id.as_deref()),
+        ] {
+            if let Some(value) = value.filter(|text| !text.is_empty()) {
+                pairs.append_pair(key, value);
+            }
+        }
+    }
+    transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Announcements staff can see, published or not.
 pub async fn admin_announcements() -> Result<Vec<Announcement>, String> {
     let transport = admin_transport()

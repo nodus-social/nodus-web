@@ -502,6 +502,21 @@ export async function adminApi(
     }),
   )
   await page.route(/\/api\/v1\/admin\/audit/, (route) => json(route, audit))
+  // The export is a file, not JSON, and the route above matches `audit.csv` too — so this
+  // one comes later, which is the one Playwright consults first. The bytes echo the query
+  // the console asked with, so a test can read the filter off the file it was given.
+  await page.route(/\/api\/v1\/admin\/audit\.csv/, (route) => {
+    record(route)
+    const filter = new URL(route.request().url()).searchParams
+    const row = ['action', 'target_type', 'actor_id']
+      .map((key) => filter.get(key) ?? '')
+      .join(',')
+    return route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': 'text/csv' },
+      body: `action,target_type,actor_id\n${row}\n`,
+    })
+  })
   // The batch endpoints answer per id, and they are registered after the single-row routes
   // above because those match any one trailing segment — `/accounts/bulk` included.
   const bulk = (route) => {
