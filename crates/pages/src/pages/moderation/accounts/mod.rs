@@ -66,6 +66,9 @@ pub fn AccountsPage(
     /// Deletes one account for good.
     #[prop(optional)]
     on_purge: Option<Callback<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
     /// Writes a note.
     #[prop(optional)]
     on_note: Option<Callback<(String, String)>>,
@@ -73,9 +76,16 @@ pub fn AccountsPage(
     #[prop(optional)]
     on_note_delete: Option<Callback<(String, String)>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
         <Show when=move || error.get().is_some()>
             <p class="mb-2 text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+        </Show>
+
+        <Show when=move || !write.get()>
+            <crate::components::chrome::Note class="mb-2 text-sm text-warning">
+                {crate::props::NO_WRITE}
+            </crate::components::chrome::Note>
         </Show>
 
         <Panel
@@ -181,6 +191,7 @@ pub fn AccountsPage(
                     on_purge,
                     on_note,
                     on_note_delete,
+                    write,
                 ),
                 None => ().into_any(),
             }}
@@ -261,6 +272,7 @@ fn detail_panel(
     on_purge: Option<Callback<String>>,
     on_note: Option<Callback<(String, String)>>,
     on_note_delete: Option<Callback<(String, String)>>,
+    write: Signal<bool>,
 ) -> AnyView {
     let id = StoredValue::new(open.account.id.clone());
     let note = StoredValue::new(String::new());
@@ -300,7 +312,8 @@ fn detail_panel(
                     type="checkbox"
                     class="toggle toggle-sm"
                     prop:checked=staff
-                    disabled=on_staff.is_none()
+                    disabled=move || on_staff.is_none() || !write.get()
+                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                     on:change=move |event| {
                         if let Some(on_staff) = on_staff {
                             on_staff.run((id.get_value(), event_target_checked(&event)));
@@ -425,7 +438,8 @@ fn detail_panel(
                 </button>
                 <button
                     class="btn btn-error btn-sm ml-auto"
-                    disabled=on_purge.is_none()
+                    disabled=move || on_purge.is_none() || !write.get()
+                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                     on:click=move |_| {
                         if let Some(on_purge) = on_purge {
                             on_purge.run(id.get_value());

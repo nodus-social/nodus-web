@@ -17,7 +17,7 @@ pub fn PrimaryTabs() -> impl IntoView {
     let changed = feeds::revision();
     // A recommendation needs an engine, and an account on another server has none: the
     // strip offers what the instance can answer.
-    let extensions = crate::state::bridge::supports_extensions();
+    let extensions = crate::state::bridge::feature("feed_accounts");
 
     let links = Signal::derive(move || {
         if let Some(changed) = changed {

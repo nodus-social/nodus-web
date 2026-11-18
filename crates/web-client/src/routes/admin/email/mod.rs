@@ -80,6 +80,7 @@ pub fn EmailDomains() -> impl IntoView {
             on_allow_registration=Callback::new(move |value: bool| set_allow_registration.set(value))
             on_block=block
             on_withdraw=withdraw
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

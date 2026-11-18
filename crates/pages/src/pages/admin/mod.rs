@@ -159,9 +159,19 @@ pub fn AdminPage(
     active: String,
     /// What the staff probe answered, or `None` while it is out.
     standing: Signal<Option<StaffStanding>>,
+    /// The section slugs the instance advertises, or `None` for all of them.
+    ///
+    /// The `/api/v1/meta` answer arrives after the first paint, so this is a signal: a strip
+    /// frozen at the first paint would keep offering a section the instance does not serve.
+    /// The server, which has no probe, passes nothing and draws every tab.
+    #[prop(optional_no_strip)]
+    shown: Option<Signal<Vec<String>>>,
     /// Asks for the wider token, then retries the probe. Absent where nobody can ask.
     #[prop(optional_no_strip)]
     on_grant: Option<Callback<()>>,
+    /// Asks the probe again, for the arms that end on "try later" rather than on an action.
+    #[prop(optional_no_strip)]
+    on_retry: Option<Callback<()>>,
     /// The last probe or grant failure, shown beside the gate. Absent on the server.
     #[prop(optional_no_strip)]
     error: Option<Signal<Option<String>>>,
@@ -175,14 +185,18 @@ pub fn AdminPage(
     children: ChildrenFn,
 ) -> impl IntoView {
     let here = Section::of(&active);
-    // `StoredValue`: the strip is drawn inside the gate's `ChildrenFn`, which must be
-    // `Fn`, and a `Vec` moved into that closure would make it `FnOnce`.
-    let tabs = StoredValue::new(
+    // The strip itself is reactive: `children` is a `ChildrenFn` and the filter reads a
+    // signal, so a section the instance advertises later appears without a reload.
+    let tabs = Signal::derive(move || {
         Section::ALL
             .iter()
+            .filter(|section| match shown {
+                None => true,
+                Some(shown) => shown.get().iter().any(|slug| slug == section.slug()),
+            })
             .map(|section| section.tab())
-            .collect::<Vec<SectionTab>>(),
-    );
+            .collect::<Vec<SectionTab>>()
+    });
 
     view! {
         <Screen>
@@ -191,10 +205,16 @@ pub fn AdminPage(
                 description="This instance: what it counted, who it talks to, what it says."
             />
 
-            <StaffGate standing=standing on_grant=on_grant error=error granting=granting>
+            <StaffGate
+                standing=standing
+                on_grant=on_grant
+                on_retry=on_retry
+                error=error
+                granting=granting
+            >
                 <SectionStrip
                     base="/admin"
-                    tabs=tabs.get_value()
+                    tabs=tabs
                     active=here.slug()
                     on_navigate=on_navigate
                 />

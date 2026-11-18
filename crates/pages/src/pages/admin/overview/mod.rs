@@ -42,7 +42,11 @@ pub fn OverviewPage(
     /// Acknowledges one alert. Absent where this token may not write.
     #[prop(optional)]
     on_acknowledge: Option<Callback<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     let account_growth = Signal::derive(move || {
         chart_spec(
             &measures.get(),
@@ -93,6 +97,11 @@ pub fn OverviewPage(
             </Show>
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+            <Show when=move || !write.get()>
+                <crate::components::chrome::Note class="text-sm text-warning">
+                    {crate::props::NO_WRITE}
+                </crate::components::chrome::Note>
             </Show>
 
             {move || {
@@ -222,7 +231,8 @@ pub fn OverviewPage(
                                     </div>
                                     <button
                                         class="btn btn-ghost btn-xs shrink-0"
-                                        disabled=on_acknowledge.is_none()
+                                        disabled=move || on_acknowledge.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {
                                             if let Some(on_acknowledge) = on_acknowledge {
                                                 on_acknowledge.run(id.clone());

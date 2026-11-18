@@ -42,8 +42,18 @@ pub fn DomainsPage(
     /// Withdraws one allow. Absent where nothing can be sent.
     #[prop(optional)]
     on_withdraw: Option<Callback<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
+        <Show when=move || !write.get()>
+            <crate::components::chrome::Note class="mb-2 text-sm text-warning">
+                {crate::props::NO_WRITE}
+            </crate::components::chrome::Note>
+        </Show>
+
         <Panel
             title="Allowed domains"
             description="An allow lets one domain through even when this instance blocks federation generally — for a domain you trust without wanting to federate with everyone."
@@ -57,7 +67,8 @@ pub fn DomainsPage(
                             <span class="truncate">{name}</span>
                             <button
                                 class="btn btn-ghost btn-xs ml-auto"
-                                disabled=on_withdraw.is_none()
+                                disabled=move || on_withdraw.is_none() || !write.get()
+                                title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                 on:click=move |_| {
                                     if let Some(on_withdraw) = on_withdraw {
                                         on_withdraw.run(target.get_value());
@@ -98,7 +109,8 @@ pub fn DomainsPage(
                 />
                 <button
                     class="btn btn-ghost btn-sm"
-                    disabled=move || busy.get() || on_allow.is_none()
+                    disabled=move || busy.get() || on_allow.is_none() || !write.get()
+                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                 >
                     "Allow"
                 </button>
@@ -160,8 +172,18 @@ pub fn RemoteBlocksPage(
     /// Clears one host's block. Absent where nothing can be sent.
     #[prop(optional)]
     on_clear: Option<Callback<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
+        <Show when=move || !write.get()>
+            <crate::components::chrome::Note class="mb-2 text-sm text-warning">
+                {crate::props::NO_WRITE}
+            </crate::components::chrome::Note>
+        </Show>
+
         <Panel
             title="Remote blocks"
             description="A peer that blocks one of this instance's accounts is asking not to receive that account. Delivery to it stops while the block is held, and clearing it here is what lets delivery resume."
@@ -229,7 +251,8 @@ pub fn RemoteBlocksPage(
                                                 }>
                                                     <button
                                                         class="btn btn-ghost btn-xs"
-                                                        disabled=on_ask.is_none()
+                                                        disabled=move || on_ask.is_none() || !write.get()
+                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                                         on:click=move |_| {
                                                             if let Some(on_ask) = on_ask {
                                                                 on_ask.run(host.get_value());

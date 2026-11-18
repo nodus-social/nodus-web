@@ -38,11 +38,21 @@ pub fn EmailDomainsPage(
     /// Lifts one block.
     #[prop(optional)]
     on_withdraw: Option<Callback<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
         <div class="flex flex-col gap-3">
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+
+            <Show when=move || !write.get()>
+                <crate::components::chrome::Note class="text-sm text-warning">
+                    {crate::props::NO_WRITE}
+                </crate::components::chrome::Note>
             </Show>
 
             <Panel
@@ -64,7 +74,8 @@ pub fn EmailDomainsPage(
                                     <span class="text-xs opacity-60">{note}</span>
                                     <button
                                         class="btn btn-ghost btn-xs ml-auto"
-                                        disabled=on_withdraw.is_none()
+                                        disabled=move || on_withdraw.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {
                                             if let Some(on_withdraw) = on_withdraw {
                                                 on_withdraw.run(id.get_value());
@@ -115,7 +126,8 @@ pub fn EmailDomainsPage(
                     </label>
                     <button
                         class="btn btn-ghost btn-sm"
-                        disabled=move || busy.get() || on_block.is_none()
+                        disabled=move || busy.get() || on_block.is_none() || !write.get()
+                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                     >
                         "Block"
                     </button>

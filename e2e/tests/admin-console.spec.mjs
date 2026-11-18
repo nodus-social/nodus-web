@@ -104,12 +104,13 @@ test('the console asks the instance once, however often it redraws', async ({ pa
   await open(page, '/admin/overview')
   await expect(page.getByText('Accounts', { exact: true })).toBeVisible()
 
-  // The rail and the gate both ask "may this account moderate?" and both re-run on every
-  // store notification, which the socket and the sync loop produce constantly. Each ask
-  // used to be its own request — and a refusal of an ungranted token is recorded by the
+  // The rail and the gate both ask "what is this account's standing?" and both re-run on
+  // every store notification, which the socket and the sync loop produce constantly. The
+  // answer is the instance's staff metadata, cached per `(host, account, grant)`: each ask
+  // used to be its own request, and a refusal of an ungranted token is recorded by the
   // server as a failed authentication, so the alert list filled with the client's polling.
   await page.waitForTimeout(2500)
-  const probes = calls.filter((call) => call.url.includes('/api/v1/admin/reports'))
+  const probes = calls.filter((call) => call.url.includes('/api/v1/admin/meta'))
   expect(probes).toHaveLength(1)
 })
 

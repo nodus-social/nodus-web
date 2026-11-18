@@ -1,12 +1,13 @@
 //! Moderation calls, and the one question that decides whether to show them.
 
 use super::{admin_scope, admin_transport, instance_transport};
+use leptos::prelude::{Get, RwSignal, Signal, Update};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
     DomainAllow, DomainBlock, DomainImportOutcome, DomainSeverity, EmailDomainBlock, FlagState,
-    ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ReportState, ScanFlag,
+    ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ScanFlag,
     ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, TriggerOutcome,
     WarningPreset,
 };
@@ -17,18 +18,64 @@ use nodus_client_core::model::{
 /// past fifty reports has stopped reading them.
 pub const PAGE: u16 = 20;
 
-/// What the moderation screens can offer right now.
+/// Which of the two staff roles an account holds, as the instance reports it.
+///
+/// The two are not one permission with a strength dial: the instance draws the line, and a
+/// handful of its routes (role grants, scanners, block lists, topology triggers) answer only
+/// to an administrator. The console reads the role so it draws the same line instead of
+/// painting an administrator's levers for someone whose request would be refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Staff, and the narrower door: reports, accounts, registrations.
+    Moderator,
+    /// Staff, and the wider door: the instance's own levers.
+    Admin,
+}
+
+impl Role {
+    /// Reads the wire spelling of `role` in `admin/meta` and in
+    /// `GET /api/v1/nodus/account/role`. `none` — and any name this client predates — is
+    /// not a role.
+    #[must_use]
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "moderator" => Some(Self::Moderator),
+            "admin" => Some(Self::Admin),
+            _ => None,
+        }
+    }
+}
+
+/// What the console may show this account, as the instance last answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Staff {
-    /// The token opened the report queue: the panels work.
-    Yes,
-    /// The instance refused, with the probe's own reason.
+    /// A staff account holding a grant the instance accepted: the panels work.
     ///
-    /// The text is kept so a stale grant can be told apart from an account that never
-    /// had the role, and so the screen can offer a fresh grant instead of dead-ending.
-    No(String),
-    /// No admin token was granted, so nothing can be said yet.
+    /// `write` is the token's `admin:write`, not the role's. The instance issues both
+    /// scopes to staff by default, but a grant may ask for less — the role endpoint's own
+    /// documentation says a narrower token cannot write "either" — and a console that
+    /// painted write controls from the role alone would paint buttons whose request
+    /// answers 403.
+    Yes {
+        /// Which door this account walks through.
+        role: Role,
+        /// Whether the grant carries `admin:write`.
+        write: bool,
+    },
+    /// The instance says this account holds no staff role at all.
+    ///
+    /// Kept apart from [`Self::NeedsGrant`] because a grant cannot fix it: only an
+    /// administrator of the instance can give the role, and offering a consent screen that
+    /// cannot help is a fake door.
+    NotStaff,
+    /// The account is staff, and this browser holds no grant to send.
     NeedsGrant,
+    /// The account is staff, a grant is held, and the instance refused it: revoked, or
+    /// issued for another account.
+    Refused(String),
+    /// The question could not be asked or could not be read. Nothing is known, so nothing
+    /// is offered beyond a retry.
+    Unknown(String),
 }
 
 /// The answer the last probe had, for the same session and grant.
@@ -60,7 +107,7 @@ pub async fn standing() -> Staff {
             }
         });
         if ours || attempt == 63 {
-            let verdict = probe().await.unwrap_or_else(|reason| reason);
+            let verdict = probe().await;
             remember(&signature, verdict.clone());
             CLAIM.with(|claim| {
                 let mut claim = claim.borrow_mut();
@@ -76,9 +123,35 @@ pub async fn standing() -> Staff {
     Staff::NeedsGrant
 }
 
-/// Drops the cached answer, because the session or the grant just changed.
+/// Drops the cached answers, because the session or the grant just changed.
 pub fn forget_standing() {
     STANDING.with(|slot| slot.borrow_mut().take());
+    META.with(|slot| slot.borrow_mut().take());
+    standing_revision().update(|revision| *revision = revision.wrapping_add(1));
+}
+
+/// Whether the console may write at all, as a signal a control can disable itself with.
+///
+/// `false` until the answer arrives, which is the safe direction: a write control painted
+/// before the probe answers is a control whose request the instance may refuse.
+#[must_use]
+pub fn may_write() -> Signal<bool> {
+    let revision = standing_revision();
+    Signal::derive(move || {
+        revision.get();
+        STANDING.with_borrow(|held| {
+            held.as_ref()
+                .is_some_and(|(_, verdict)| matches!(verdict, Staff::Yes { write: true, .. }))
+        })
+    })
+}
+
+/// Bumped whenever the cached verdict changes, so a signal derived from it repaints.
+fn standing_revision() -> RwSignal<u64> {
+    thread_local! {
+        static REVISION: RwSignal<u64> = RwSignal::new(0);
+    }
+    REVISION.with(|revision| *revision)
 }
 
 /// The session and grant this answer belongs to.
@@ -99,6 +172,12 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// The session whose question is currently being asked.
     static CLAIM: std::cell::RefCell<Option<Signature>> = const { std::cell::RefCell::new(None) };
+    /// `admin/meta` as this session and grant last read it.
+    static META: std::cell::RefCell<Option<(Signature, MetaAnswer)>> =
+        const { std::cell::RefCell::new(None) };
+    /// The session whose `admin/meta` read is currently in flight.
+    static META_CLAIM: std::cell::RefCell<Option<Signature>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn cached(signature: &Signature) -> Option<Staff> {
@@ -112,27 +191,199 @@ fn cached(signature: &Signature) -> Option<Staff> {
 
 fn remember(signature: &Signature, verdict: Staff) {
     STANDING.with(|slot| *slot.borrow_mut() = Some((signature.clone(), verdict)));
+    standing_revision().update(|revision| *revision = revision.wrapping_add(1));
 }
 
-/// Asks the instance, keeping "no grant" apart from "refused".
+/// The scope that makes the console's buttons send anything.
+const WRITE: &str = "admin:write";
+
+/// Asks the instance what this account is, and what this browser may do with it.
 ///
-/// Not by reading a role: `role` is a field whose shape changed between versions, and a
-/// probe that fails is the same 403 the real screens would hit. The distinction the
-/// caller needs is "no grant yet" versus "the instance said no", so a missing grant is
-/// reported as such instead of being flattened into `false`.
+/// The question is `GET /api/v1/admin/meta`, whose answer names the role and lists the
+/// scopes the token carries. Reading the report queue instead — what this used to do —
+/// answered only "may I read": a moderator and an administrator were one verdict, and
+/// every ungranted browser that asked got itself recorded by the server as a failed
+/// authentication.
+///
+/// Two questions, in the order that costs least: without a grant, the role decides whether
+/// offering one is honest at all; with a grant, meta both proves the token and names the
+/// role. A refusal is not read as "not staff" on its own — the same 403 answers for a
+/// plain account and for a revoked grant, and only the role endpoint tells those apart.
 ///
 /// Private because it always asks, a request per redraw: callers go through [`standing`],
 /// which keeps the answer for the session and grant it describes.
-async fn probe() -> Result<Staff, Staff> {
-    let Some(transport) = admin_transport() else {
-        return Err(Staff::NeedsGrant);
-    };
-    match transport.reports(ReportState::Open, 1).await {
-        Ok(_) => Ok(Staff::Yes),
-        Err(error) => Err(Staff::No(format!(
-            "The instance refused access to the report queue: {error}"
-        ))),
+async fn probe() -> Staff {
+    // No grant: a staff role is worth a consent screen, and no role at all means a consent
+    // screen could not help, so it is not offered.
+    if admin_transport().is_none() {
+        return match ask_role().await {
+            Ok(Some(_role)) => Staff::NeedsGrant,
+            Ok(None) => Staff::NotStaff,
+            Err(problem) => Staff::Unknown(problem),
+        };
     }
+    match meta_answer().await {
+        Ok(answer) => Staff::Yes {
+            // A meta answer without a role comes from an instance older than the contract
+            // this console reads. The narrower door is the honest reading of an absent
+            // field: painting an administrator's levers for a moderator is a door that
+            // leads to a refusal.
+            role: answer.role.unwrap_or(Role::Moderator),
+            write: answer.meta.scopes.iter().any(|scope| scope == WRITE),
+        },
+        // Staff but refused, or not staff at all: only the role says which.
+        Err(MetaProblem::Refused) => match ask_role().await {
+            Ok(Some(_role)) => Staff::Refused(
+                "The instance refused this grant: it was revoked, or it belongs to another \
+                 account."
+                    .to_owned(),
+            ),
+            Ok(None) => Staff::NotStaff,
+            Err(problem) => Staff::Unknown(problem),
+        },
+        Err(MetaProblem::Failed(problem)) => Staff::Unknown(problem),
+    }
+}
+
+/// What `admin/meta` answered: the document the SDK already models, plus the role the
+/// console's contract adds beside it.
+#[derive(Debug, Clone)]
+struct MetaAnswer {
+    /// Who the grant belongs to, what it may do, and how much is waiting.
+    meta: AdminMeta,
+    /// `moderator` or `admin`; `None` on an instance that predates the field.
+    role: Option<Role>,
+}
+
+/// `admin/meta` as this client reads it.
+///
+/// A local envelope rather than a new field on `AdminMeta`: the SDK's model is not this
+/// crate's to change, and `flatten` leaves the rest of the document decoding exactly as it
+/// did before the role was added — an instance that never sends `role` still reads.
+#[derive(Debug, serde::Deserialize)]
+struct MetaEnvelope {
+    #[serde(flatten)]
+    meta: AdminMeta,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+/// Why `admin/meta` did not answer.
+enum MetaProblem {
+    /// The instance answered 401/403: this token is not, or is no longer, allowed in.
+    Refused,
+    /// Anything else — a network failure, a 5xx, a body that could not be read — with the
+    /// sentence the console shows for it.
+    Failed(String),
+}
+
+/// `GET /api/v1/nodus/account/role`, which any signed-in account may ask.
+#[derive(Debug, serde::Deserialize)]
+struct RoleAnswer {
+    /// `none`, `moderator` or `admin`.
+    #[serde(default)]
+    role: String,
+}
+
+/// What the instance says this account's role is, asked with the ordinary session.
+///
+/// The session's own token, not the grant: the point of the question is to learn whether a
+/// grant would help before asking for one, and a refused grant token answers 401 to it.
+/// `Ok(None)` is the instance's `none` — a plain account, told so in one request instead of
+/// being walked into a permission error only a database edit could fix.
+async fn ask_role() -> Result<Option<Role>, String> {
+    let transport = instance_transport().ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/nodus/account/role")
+        .map_err(|error| error.to_string())?;
+    let bytes = transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| format!("The instance did not say what role this account holds: {error}"))?;
+    let answer: RoleAnswer = serde_json::from_slice(&bytes).map_err(|error| {
+        format!("The instance's answer about this account's role could not be read: {error}")
+    })?;
+    Ok(Role::parse(&answer.role))
+}
+
+/// Reads `admin/meta` from `transport`, body and role together.
+async fn read_meta(transport: &nodus_mastodon::BrowserInstance) -> Result<MetaAnswer, MetaProblem> {
+    let url = transport
+        .url("/api/v1/admin/meta")
+        .map_err(|error| MetaProblem::Failed(error.to_string()))?;
+    let bytes = transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| match error {
+            nodus_client_core::Error::Unauthorized => MetaProblem::Refused,
+            other => MetaProblem::Failed(format!(
+                "The instance did not answer with the console's metadata: {other}"
+            )),
+        })?;
+    let envelope: MetaEnvelope = serde_json::from_slice(&bytes).map_err(|error| {
+        MetaProblem::Failed(format!(
+            "The instance's console metadata could not be read: {error}"
+        ))
+    })?;
+    Ok(MetaAnswer {
+        meta: envelope.meta,
+        role: envelope.role.as_deref().and_then(Role::parse),
+    })
+}
+
+/// Asks `admin/meta` once per console.
+///
+/// The probe and the dashboard both need this document, and the guard on [`standing`]
+/// covers only the probe: without a claim of its own the dashboard's read would race the
+/// probe's and the console would open on two identical requests. One answer is kept for the
+/// session and grant it describes, because the document describes the console rather than a
+/// moment — the SDK's own note is "fetched once when the console opens".
+async fn meta_answer() -> Result<MetaAnswer, MetaProblem> {
+    let Some(signature) = signature() else {
+        return Err(MetaProblem::Failed("Not signed in.".to_owned()));
+    };
+    let Some(transport) = admin_transport() else {
+        return Err(MetaProblem::Failed(
+            "No admin grant is held, so the console cannot ask.".to_owned(),
+        ));
+    };
+    for attempt in 0..64 {
+        if let Some(answer) = META.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .filter(|(cached, _)| cached == &signature)
+                .map(|(_, answer)| answer.clone())
+        }) {
+            return Ok(answer);
+        }
+        let ours = META_CLAIM.with(|claim| {
+            let mut claim = claim.borrow_mut();
+            if claim.as_ref() == Some(&signature) {
+                false
+            } else {
+                *claim = Some(signature.clone());
+                true
+            }
+        });
+        if ours || attempt == 63 {
+            let answer = read_meta(&transport).await;
+            if let Ok(answer) = &answer {
+                META.with(|slot| *slot.borrow_mut() = Some((signature.clone(), answer.clone())));
+            }
+            META_CLAIM.with(|claim| {
+                let mut claim = claim.borrow_mut();
+                if claim.as_ref() == Some(&signature) {
+                    *claim = None;
+                }
+            });
+            return answer;
+        }
+        // Another asker has the read in flight; its answer lands in the cache.
+        gloo_timers::future::TimeoutFuture::new(16).await;
+    }
+    Err(MetaProblem::Failed(
+        "The instance's console metadata could not be read.".to_owned(),
+    ))
 }
 
 /// Recent administrative actions.
@@ -575,14 +826,20 @@ pub async fn delete_email_domain_block(id: &str) -> Result<(), String> {
 }
 
 /// Who the grant belongs to, what it may do, and how much is waiting.
+///
+/// The same document [`standing`] reads, through the same cache: the probe asks it when the
+/// console opens and the dashboard asks it for the scanner counts, and two requests for one
+/// document would be two chances for the console to disagree with itself about a grant.
 pub async fn meta() -> Result<AdminMeta, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .admin_meta()
+    meta_answer()
         .await
-        .map_err(|error| error.to_string())
+        .map(|answer| answer.meta)
+        .map_err(|problem| match problem {
+            MetaProblem::Refused => {
+                "The instance refused this grant's console metadata.".to_owned()
+            }
+            MetaProblem::Failed(problem) => problem,
+        })
 }
 
 /// The flat counts behind the overview screen.

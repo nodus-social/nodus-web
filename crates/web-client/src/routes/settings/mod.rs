@@ -47,6 +47,9 @@ use tags::FeaturedTagsCard;
 pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     let revision = revision();
     let extensions = crate::state::bridge::supports_extensions();
+    // The sync card is one Nodus capability: an instance that does not keep the token does
+    // not answer for it, and the card is not drawn.
+    let sync_token = crate::state::bridge::feature("sync_token");
 
     let host = move || {
         revision.get();
@@ -89,7 +92,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Nodus>
-                <Show when=move || extensions.get()>
+                <Show when=move || sync_token.get()>
                     <SyncCard/>
                 </Show>
                 <FeedsCard/>

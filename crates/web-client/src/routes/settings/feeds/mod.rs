@@ -7,7 +7,6 @@
 use leptos::prelude::*;
 use nodus_pages::pages::settings::feeds::{FeedItem, FeedsCard as SharedFeedsCard};
 
-use crate::state::bridge::supports_extensions;
 use crate::state::feeds::{self as prefs, Feed};
 
 /// One switch per feed, each saying what it would hide.
@@ -20,7 +19,7 @@ pub fn FeedsCard() -> impl IntoView {
         .into_any();
     };
 
-    let supported = supports_extensions();
+    let supported = crate::state::bridge::feature("feed_accounts");
     let feeds = Signal::derive(move || {
         changed.get();
         // A recommendation row would be a switch for a screen this instance cannot serve.

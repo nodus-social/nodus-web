@@ -81,6 +81,7 @@ pub fn Replies() -> impl IntoView {
             on_text=Callback::new(move |value: String| set_text.set(value))
             on_create=create
             on_delete=delete
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

@@ -257,6 +257,7 @@ pub fn Scanners() -> impl IntoView {
             on_rule_delete=rule_delete
             on_asset_delete=asset_delete
             upload=upload
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

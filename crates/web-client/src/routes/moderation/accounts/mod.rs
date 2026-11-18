@@ -179,6 +179,7 @@ pub fn AccountList() -> impl IntoView {
             on_purge=purge
             on_note=write_note
             on_note_delete=drop_note
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

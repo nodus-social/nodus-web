@@ -124,11 +124,20 @@ pub fn ScannersPage(
     /// The form that uploads a content set, drawn by the caller because it reads a file.
     #[prop(optional, into)]
     upload: Option<AnyView>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
         <div class="flex flex-col gap-3">
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+            <Show when=move || !write.get()>
+                <crate::components::chrome::Note class="text-sm text-warning">
+                    {crate::props::NO_WRITE}
+                </crate::components::chrome::Note>
             </Show>
 
             <Panel
@@ -175,7 +184,8 @@ pub fn ScannersPage(
                                     <span class="text-xs opacity-60">{manifest.clone()}</span>
                                     <button
                                         class="btn btn-ghost btn-xs ml-auto"
-                                        disabled=on_toggle.is_none()
+                                        disabled=move || on_toggle.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {
                                             if let Some(on_toggle) = on_toggle {
                                                 on_toggle.run((id.get_value(), !enabled));
@@ -197,7 +207,8 @@ pub fn ScannersPage(
                                     </button>
                                     <button
                                         class="btn btn-ghost btn-xs text-error"
-                                        disabled=on_delete.is_none()
+                                        disabled=move || on_delete.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {
                                             if let Some(on_delete) = on_delete {
                                                 on_delete.run(id.get_value());
@@ -225,7 +236,8 @@ pub fn ScannersPage(
                                                         <span class="truncate">{text}</span>
                                                         <button
                                                             class="btn btn-ghost btn-xs ml-auto"
-                                                            disabled=on_rule_delete.is_none()
+                                                            disabled=move || on_rule_delete.is_none() || !write.get()
+                                                            title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                                             on:click=move |_| {
                                                                 if let Some(on_rule_delete) = on_rule_delete {
                                                                     on_rule_delete.run(rule_id.get_value());
@@ -388,7 +400,8 @@ pub fn ScannersPage(
                                     <span class="truncate">{meta}</span>
                                     <button
                                         class="btn btn-ghost btn-xs ml-auto"
-                                        disabled=on_asset_delete.is_none()
+                                        disabled=move || on_asset_delete.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {
                                             if let Some(on_asset_delete) = on_asset_delete {
                                                 on_asset_delete.run(id.get_value());

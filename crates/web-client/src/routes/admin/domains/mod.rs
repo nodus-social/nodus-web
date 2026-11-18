@@ -9,7 +9,7 @@
 //! the write and the list the two keep in step.
 //!
 //! The second panel is a Nodus extension — an inbound `Block` recorded against a host — so it
-//! is drawn only where `supports_extensions` says the instance answers for it.
+//! is drawn only where the `/api/v1/meta` features name `remote_blocks`.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -17,13 +17,13 @@ use nodus_client_core::model::DomainAllow;
 use nodus_pages::pages::admin::domains::{DomainsPage, RemoteBlockRow, RemoteBlocksPage};
 
 use crate::state::alive::Alive;
-use crate::state::bridge::{admin, revision, supports_extensions};
+use crate::state::bridge::{admin, feature, revision};
 
 /// Domains let through a general block.
 #[component]
 pub fn Domains() -> impl IntoView {
     let revision = revision();
-    let supported = supports_extensions();
+    let supported = feature("remote_blocks");
     let (items, set_items) = signal(Vec::<DomainAllow>::new());
     let (domain, set_domain) = signal(String::new());
     let (busy, set_busy) = signal(false);
@@ -128,6 +128,7 @@ pub fn Domains() -> impl IntoView {
                 on_domain=Callback::new(move |value: String| set_domain.set(value))
                 on_allow=allow
                 on_withdraw=withdraw
+                write=Some(crate::state::bridge::admin::may_write())
             />
             <Show when=move || supported.get()>
                 <RemoteBlocksPage
@@ -138,6 +139,7 @@ pub fn Domains() -> impl IntoView {
                     on_ask=ask
                     on_cancel=cancel
                     on_clear=clear
+                    write=Some(crate::state::bridge::admin::may_write())
                 />
             </Show>
         </div>

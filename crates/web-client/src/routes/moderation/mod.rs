@@ -14,10 +14,11 @@ use leptos::task::spawn_local;
 
 use nodus_pages::pages::moderation::{ModerationPage, Section};
 use nodus_ui::chrome::StaffStanding;
+use nodus_ui::Note;
 
 use crate::router::{self, Route};
 use crate::state::alive::Alive;
-use crate::state::bridge::admin;
+use crate::state::bridge::{admin, feature};
 
 use self::accounts::AccountList;
 use self::federation::Federation;
@@ -40,8 +41,9 @@ mod reports;
 pub fn Moderation(section: String) -> impl IntoView {
     let section = StoredValue::new(Section::of(&section));
     let alive = Alive::new();
-    // `None` is "not asked yet", `Some(NeedsGrant)` is "this token lacks the scope", and the
-    // gate answers each of those differently: a spinner, a grant prompt, or the screens.
+    // `None` is "not asked yet". The gate reads the rest from the verdict: no grant in this
+    // browser, no staff role at all, a refused grant, a question that did not arrive, or
+    // the panels themselves — and each of those is a different thing to say.
     let (allowed, set_allowed) = signal(None::<admin::Staff>);
     // A refused probe and a failed start both have a sentence the reader can act on; it
     // sits next to the gate rather than replacing it, so the retry stays reachable.
@@ -55,10 +57,13 @@ pub fn Moderation(section: String) -> impl IntoView {
             spawn_local(async move {
                 let verdict = admin::standing().await;
                 alive.if_alive(|| {
-                    if let admin::Staff::No(reason) = &verdict {
-                        set_error.set(Some(reason.clone()));
-                    } else {
-                        set_error.set(None);
+                    // The sentence that comes with a refused or unanswerable probe is the
+                    // only place the instance's own words appear; it stays above the gate.
+                    match &verdict {
+                        admin::Staff::Refused(reason) | admin::Staff::Unknown(reason) => {
+                            set_error.set(Some(reason.clone()));
+                        }
+                        _ => set_error.set(None),
                     }
                     set_allowed.set(Some(verdict));
                 });
@@ -99,17 +104,39 @@ pub fn Moderation(section: String) -> impl IntoView {
     // three arms are the view's vocabulary, and the probe's answer is translated once here.
     let standing = Signal::derive(move || allowed.get().as_ref().map(standing_of));
 
+    // Scans are a scanner feature: an instance that does not advertise `scanners` has no
+    // flags to show, so the tab is not drawn and the address says why.
+    let scanners = feature("scanners");
+    let shown = Signal::derive(move || {
+        Section::ALL
+            .iter()
+            .filter(|section| match section {
+                Section::Scans => scanners.get(),
+                _ => true,
+            })
+            .map(|section| section.slug().to_owned())
+            .collect::<Vec<String>>()
+    });
+
     view! {
         <ModerationPage
             active=section.get_value().slug()
+            shown=Some(shown)
             standing=standing
             error=Some(Signal::from(error))
             granting=Some(Signal::from(granting))
-            on_grant=grant
+            on_grant=Some(grant)
+            on_retry=Some(retry)
             on_navigate=Callback::new(|slug: String| router::navigate(Route::Moderation(slug)))
         >
             {move || match section.get_value() {
                 Section::Reports => view! { <ReportQueue/> }.into_any(),
+                Section::Scans if !scanners.get() => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance does not serve the scans panel: its /api/v1/meta answer does not name scanners among its features."
+                    </Note>
+                }
+                .into_any(),
                 Section::Scans => view! { <Scans/> }.into_any(),
                 Section::Accounts => view! { <AccountList/> }.into_any(),
                 Section::Registrations => view! { <Registrations/> }.into_any(),
@@ -122,8 +149,10 @@ pub fn Moderation(section: String) -> impl IntoView {
 /// The bridge's verdict, in the gate's words.
 fn standing_of(staff: &admin::Staff) -> StaffStanding {
     match staff {
-        admin::Staff::Yes => StaffStanding::Yes,
-        admin::Staff::No(_) => StaffStanding::No,
+        admin::Staff::Yes { .. } => StaffStanding::Yes,
+        admin::Staff::NotStaff => StaffStanding::NotStaff,
         admin::Staff::NeedsGrant => StaffStanding::NeedsGrant,
+        admin::Staff::Refused(_) => StaffStanding::Refused,
+        admin::Staff::Unknown(_) => StaffStanding::Unknown,
     }
 }

@@ -40,6 +40,23 @@ pub fn settled() -> Signal<bool> {
     Signal::derive(|| false)
 }
 
+/// The sentence a control carries when the browser's grant has no `admin:write`.
+///
+/// The instance decides what a token may do; the console only knows the scopes the
+/// `/api/v1/admin/meta` answer named, so a control outside them explains itself before it is
+/// pressed rather than after the refusal.
+pub const NO_WRITE: &str =
+    "This browser's staff grant does not include admin:write, so the instance would refuse this change.";
+
+/// Whether the browser's staff grant carries `admin:write`.
+///
+/// `None` means "assume yes": the server paints these pages with every verb already absent,
+/// so each control is disabled by its missing callback and needs no second reason.
+#[must_use]
+pub fn writable(write: Option<Signal<bool>>) -> Signal<bool> {
+    write.unwrap_or_else(|| Signal::derive(|| true))
+}
+
 /// The ages a page prints, measured against the clock reading the caller lends it.
 pub fn ages(now_millis: f64) -> Callback<String, String> {
     Callback::new(move |created: String| crate::relative_age(&created, now_millis))

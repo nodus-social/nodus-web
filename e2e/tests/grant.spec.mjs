@@ -125,6 +125,6 @@ test('a grant already held opens the queue without asking again', async ({ page 
   await hydrated(page)
 
   await expect(page.getByText('Sells something.')).toBeVisible()
-  const probe = calls.find((call) => call.url.includes('/admin/reports?'))
-  expect(probe, 'the grant was not used to probe').toBeTruthy()
+  const probe = calls.find((call) => call.url.includes('/admin/meta'))
+  expect(probe, 'the grant was not used to read the staff standing').toBeTruthy()
 })

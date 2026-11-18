@@ -64,6 +64,11 @@ pub(crate) fn App() -> impl IntoView {
     // The recommendation, styling and staff surfaces are ours; a Mastodon account has no
     // server behind them. The route arms below and the rail read the same answer.
     let extensions = crate::state::bridge::supports_extensions();
+    // Each surface the instance's `/api/v1/meta` features name, as its own signal: a name
+    // the answer omits is a surface this instance does not serve.
+    let feed_accounts = crate::state::bridge::feature("feed_accounts");
+    let admin_on = crate::state::bridge::feature("admin");
+    let moderation_on = crate::state::bridge::feature("moderation");
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
@@ -184,7 +189,7 @@ pub(crate) fn App() -> impl IntoView {
                         let signed_in = signed_in.get();
                         match route.get() {
                             Route::OauthCallback => view! { <Callback/> }.into_any(),
-                            Route::Feed if signed_in && extensions.get() => {
+                            Route::Feed if signed_in && extensions.get() && feed_accounts.get() => {
                                 let header: ChildrenFn = std::sync::Arc::new(|| {
                                     view! { <crate::routes::home::TimelineHeader/> }.into_any()
                                 });
@@ -240,12 +245,21 @@ pub(crate) fn App() -> impl IntoView {
                             Route::Admin(_) | Route::Moderation(_) if !signed_in => {
                                 view! { <SignIn note="Sign in to moderate."/> }.into_any()
                             }
-                            Route::Admin(_) | Route::Moderation(_) if !extensions.get() => {
+                            Route::Admin(_) if !extensions.get() || !admin_on.get() => {
                                 unavailable(
-                                    "Staff console",
-                                    "Moderation and administration are served by Nodus, not by \
-                                     this instance. On Mastodon they live in the instance's own \
-                                     web interface.",
+                                    "Administration",
+                                    "The console is served by Nodus, and this instance's \
+                                     /api/v1/meta answer does not name the admin capability. On \
+                                     Mastodon it lives in the instance's own web interface.",
+                                )
+                            }
+                            Route::Moderation(_) if !extensions.get() || !moderation_on.get() => {
+                                unavailable(
+                                    "Moderation",
+                                    "Moderation is served by Nodus, and this instance's \
+                                     /api/v1/meta answer does not name the moderation \
+                                     capability. On Mastodon it lives in the instance's own web \
+                                     interface.",
                                 )
                             }
                             // A shared link works without a session: the address names the
@@ -397,11 +411,14 @@ fn RailItem(label: &'static str, icon: Icon, hint: &'static str, route: Route) -
 
 /// The moderation doors, in a build that carries the screens.
 ///
-/// Shown only once the instance has answered that this account may moderate: a rail entry
-/// that leads to "you are not a moderator" is a dead end, and `admin::standing()` is the only
-/// honest source for that answer. The check re-runs when the session, the grant or the
-/// instance's extension answer changes, because any of them can arrive after the first
-/// paint.
+/// Both the instance and the account have to agree before a door is drawn. The instance
+/// says which surfaces it serves at all (`moderation`, `admin` in the `/api/v1/meta`
+/// features), and `admin::standing()` says what this account may do with them: a rail entry
+/// that leads to a refusal is a dead end, and painting one for a probe still in flight would
+/// promise a door nobody has opened.
+///
+/// The check re-runs when the session, the grant or the instance's extension answer changes,
+/// because any of them can arrive after the first paint.
 #[cfg(feature = "admin")]
 fn staff_rail_items() -> impl IntoView {
     view! { <StaffRail/> }
@@ -425,17 +442,30 @@ fn StaffRail() -> impl IntoView {
         });
     });
 
+    // The role the instance named, and nothing else: `None` is every answer that is not a
+    // working staff role — still asking, no grant, not staff, refused, unanswerable — and
+    // none of them is a door.
+    let role = Signal::derive(move || match standing.get() {
+        Some(crate::state::bridge::admin::Staff::Yes { role, .. }) => Some(role),
+        _ => None,
+    });
+    let moderation = crate::state::bridge::feature("moderation");
+    let admin = crate::state::bridge::feature("admin");
+
     view! {
-        <Show when=move || {
-            extensions.get()
-                && !matches!(standing.get(), Some(crate::state::bridge::admin::Staff::No(_)))
-        }>
+        <Show when=move || extensions.get() && moderation.get() && role.get().is_some()>
             <RailItem
                 label="Moderation"
                 icon=Icon::Shield
                 hint="Reports, accounts, registrations and blocked domains"
                 route=Route::Moderation(crate::router::MODERATION_DEFAULT.to_owned())
             />
+        </Show>
+        <Show when=move || {
+            extensions.get()
+                && admin.get()
+                && matches!(role.get(), Some(crate::state::bridge::admin::Role::Admin))
+        }>
             <RailItem
                 label="Administration"
                 icon=Icon::Globe

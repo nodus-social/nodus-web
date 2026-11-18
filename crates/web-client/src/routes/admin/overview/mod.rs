@@ -9,7 +9,7 @@ use nodus_client_core::model::{AdminAlert, AdminMeasure, AdminOverview, Scanning
 use nodus_pages::pages::admin::overview::{MEASURES, OverviewPage};
 
 use crate::state::alive::Alive;
-use crate::state::bridge::{admin, revision};
+use crate::state::bridge::{admin, feature, revision};
 
 /// How many days the dashboard counts over.
 const DAYS: f64 = 7.0;
@@ -24,6 +24,9 @@ pub fn Overview() -> impl IntoView {
     let (scanning, set_scanning) = signal(None::<ScanningSummary>);
     let (loading, set_loading) = signal(true);
     let (error, set_error) = signal(None::<String>);
+    // The scanner panel is one capability of the instance, not part of the dashboard: an
+    // instance whose features do not name `scanners` has no counts to show.
+    let scanners = feature("scanners");
 
     Effect::new(move |_| {
         revision.get();
@@ -79,10 +82,11 @@ pub fn Overview() -> impl IntoView {
             overview=overview
             measures=measures
             alerts=alerts
-            scanning=scanning
+            scanning=Signal::derive(move || if scanners.get() { scanning.get() } else { None })
             loading=loading
             error=error
             on_acknowledge=acknowledge
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

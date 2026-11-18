@@ -214,7 +214,14 @@ test('an answer that arrives late still opens the screen it allows', async ({ pa
     await new Promise((done) => setTimeout(done, 900))
     await route.fulfill({
       headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
-      json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features: [] },
+      json: {
+        api: '1',
+        contract: '0.1.0',
+        min_contract: '0.1.0',
+        // The capability the screen needs, so the answer that arrives late is the one that
+        // opens it — the point of the test.
+        features: ['feed_accounts'],
+      },
     })
   })
   await signedIn(page)

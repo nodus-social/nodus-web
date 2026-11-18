@@ -45,6 +45,13 @@ pub mod actions;
 // here so a view can read it synchronously — a render must not wait on a request.
 thread_local! {
     static EXTENSIONS: RefCell<Option<(String, bool)>> = const { RefCell::new(None) };
+    /// The feature names the same answer advertised, for the same host.
+    ///
+    /// Beside the yes/no rather than inside it because a view asks about one name at a
+    /// time. Deliberately **not** remembered in storage: a list kept for a month would hide
+    /// a panel the instance started serving, and a panel that never comes back is worse
+    /// than one request per visit.
+    static FEATURES: RefCell<Option<(String, Vec<String>)>> = const { RefCell::new(None) };
     /// Whether a request for the answer is already in flight.
     static ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -66,6 +73,38 @@ pub fn supports_extensions() -> Signal<bool> {
     Signal::derive(move || {
         revision.get();
         EXTENSIONS.with_borrow(|known| known.as_ref().is_some_and(|(_, known)| *known))
+    })
+}
+
+/// Whether the account's instance advertises one Nodus feature.
+///
+/// The body of `GET /api/v1/meta` is the answer, and an **absent name means unsupported**:
+/// the server publishes exactly the surfaces it serves, so a client that guessed would paint
+/// a panel whose every request can only 404. The vocabulary the server publishes today, and
+/// what each name gates in this console:
+///
+/// * `feed_accounts` — the recommendation feed;
+/// * `events` — interaction feedback is accepted;
+/// * `sync_token` — the server keeps an encrypted token and syncs follows;
+/// * `admin` — the `/admin` area;
+/// * `moderation` — the `/moderation` area;
+/// * `scanners` — the scanners section and the dashboard's scanner panel;
+/// * `topology` — the System section;
+/// * `protocol` — the Protocol section;
+/// * `remote_blocks` — the inbound-block panel of the domains screen;
+/// * `polls` — voting in a status.
+///
+/// The list is read here rather than through the SDK's `Capabilities`, which decodes four
+/// names into a closed enum and drops the rest; the SDK is not this console's to widen.
+#[must_use]
+pub fn feature(name: &'static str) -> Signal<bool> {
+    let revision = extensions_revision();
+    Signal::derive(move || {
+        revision.get();
+        FEATURES.with_borrow(|held| {
+            held.as_ref()
+                .is_some_and(|(_, names)| names.iter().any(|held| held == name))
+        })
     })
 }
 
@@ -97,18 +136,43 @@ fn remember_support(host: &str, answer: bool) {
     crate::platform::storage::set(SUPPORT_KEY, &lines.join("\n"));
 }
 
-fn settle(host: &str, answer: bool) -> bool {
+fn settle(host: &str, answer: bool, features: Vec<String>) -> bool {
     EXTENSIONS.with_borrow_mut(|known| *known = Some((host.to_owned(), answer)));
+    FEATURES.with_borrow_mut(|held| *held = Some((host.to_owned(), features)));
     remember_support(host, answer);
     extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
     answer
 }
 
-/// Asks the account's instance whether it serves the extension surface.
+/// The `features` list of a `/api/v1/meta` body.
+///
+/// Read leniently on purpose: a body without the field, a field that is not a list, and a
+/// body that is not JSON at all all mean the same thing to a caller — no feature is
+/// claimed — and none of them is worth a visible error.
+fn features_of(body: &[u8]) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        #[serde(default)]
+        features: Vec<String>,
+    }
+    serde_json::from_slice::<Meta>(body)
+        .map(|meta| meta.features)
+        .unwrap_or_default()
+}
+
+/// Asks the account's instance what it serves, and which Nodus surfaces it advertises.
 ///
 /// Called from adoption and from a sign-in, not from a render: the answer arrives later and
-/// repaints whatever read [`supports_extensions`]. A host this browser has already asked
-/// about is not asked again, and a question already in flight is not asked twice.
+/// repaints whatever read [`supports_extensions`] or [`feature`]. A question already in
+/// flight is not asked twice.
+///
+/// The body is asked for, not just the status: the status says "this is Nodus" and the
+/// `features` list says what of it is here. Both are settled together, so a panel and the
+/// rail behind it can never disagree about whether the server serves them.
+///
+/// The remembered answer is a fallback for a host that does not answer at all — a transport
+/// failure or a timeout — and it carries no feature list, so a Nodus browser that meets a
+/// dead network this visit sees the rail but not the panels rather than a blank page.
 pub async fn probe_extensions() -> bool {
     let Some(host) = session_host() else {
         return false;
@@ -118,28 +182,25 @@ pub async fn probe_extensions() -> bool {
             return known;
         }
     }
-    if let Some(known) = remembered_support(&host) {
-        return settle(&host, known);
-    }
     if ASKING.with(std::cell::Cell::get) {
-        return false;
+        return remembered_support(&host).unwrap_or(false);
     }
     let Some(transport) = instance_transport() else {
-        return false;
+        return settle(&host, remembered_support(&host).unwrap_or(false), Vec::new());
     };
     let Ok(url) = transport.url("/api/v1/meta") else {
-        return false;
+        return settle(&host, false, Vec::new());
     };
     ASKING.with(|asking| asking.set(true));
     // A host that answers slowly must not keep the question "in flight" for the rest of the
     // visit: an abandoned future has to release the claim too.
     let _claim = Claim;
-    let answering = transport.send_empty(transport.get(url));
-    let answer = match patience(answering, PATIENCE).await {
-        Some(Ok(())) => true,
-        Some(Err(_)) | None => false,
+    let answering = transport.fetch_bytes(transport.get(url));
+    let (answer, features) = match patience(answering, PATIENCE).await {
+        Some(Ok(body)) => (true, features_of(&body)),
+        Some(Err(_)) | None => (remembered_support(&host).unwrap_or(false), Vec::new()),
     };
-    settle(&host, answer)
+    settle(&host, answer, features)
 }
 
 /// How long a question waits for an answer before the surface is assumed absent.
@@ -182,6 +243,7 @@ pub(super) async fn patience<F: std::future::Future>(future: F, limit: std::time
 /// Forgets what was asked, for when the session changes under it.
 pub fn forget_extensions() {
     EXTENSIONS.with_borrow_mut(|known| *known = None);
+    FEATURES.with_borrow_mut(|held| *held = None);
     extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
 }
 
@@ -429,8 +491,6 @@ pub(super) fn forget_feed_id() {
 }
 
 /// Builds a [`WebSdk`] for `instance` and swaps it in. Replaces any previous one.
-use nodus_client_core::actions::AdminActions;
-
 fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
     let base =
         api_base().ok_or_else(|| "Could not determine the API origin for this page.".to_owned())?;
@@ -631,11 +691,13 @@ fn handle() -> Option<Rc<WebSdk>> {
     SDK.with_borrow(std::clone::Clone::clone)
 }
 
-/// Keeps an admin grant for `account` on `host`, after proving the token can moderate.
+/// Keeps an admin grant for `account` on `host`, after proving the token can open the
+/// console.
 ///
-/// The probe is the point: a token that cannot open the report queue would leave the
-/// Administration tab claiming a permission it does not have, and the operator would
-/// see an empty screen instead of "the grant did not work".
+/// The probe is the point: a token the instance refuses for `admin/meta` would leave the
+/// Administration tab claiming a permission it does not have, and the operator would see an
+/// empty screen instead of "the grant did not work". It is the same document every panel
+/// asks for first, so a grant that survives it is a grant the panels can use.
 ///
 /// The canonical host is stored, not the callback's spelling, so the grant is found by
 /// the same key the sign-in record and the request builder use.
@@ -651,15 +713,15 @@ pub async fn keep_admin_token(host: &str, account: &str, token: &str) -> Result<
     let endpoint = oauth::normalise_host(host)?;
     let instance = instance_for(&endpoint)?;
     let transport = BrowserInstance::new(&instance, token);
-    transport
-        .reports(nodus_client_core::model::ReportState::Open, 1)
-        .await
-        .map_err(|error| {
-            format!(
-                "That account cannot moderate on {}, so the grant was not kept: {error}",
-                endpoint.host
-            )
-        })?;
+    let url = transport
+        .url("/api/v1/admin/meta")
+        .map_err(|error| error.to_string())?;
+    transport.fetch_bytes(transport.get(url)).await.map_err(|error| {
+        format!(
+            "That account cannot open the console on {}, so the grant was not kept: {error}",
+            endpoint.host
+        )
+    })?;
     admin_token::store(&endpoint.host, account, token);
     admin::forget_standing();
     Ok(())

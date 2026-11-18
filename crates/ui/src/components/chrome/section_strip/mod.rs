@@ -32,7 +32,12 @@ pub fn SectionStrip(
     #[prop(into)]
     base: String,
     /// The sections, in the order they are shown.
-    tabs: Vec<SectionTab>,
+    ///
+    /// A signal rather than a `Vec` because the instance may only advertise some of them:
+    /// the `/api/v1/meta` answer lands after the first paint, and a strip frozen at that
+    /// paint would keep offering a section the instance does not serve.
+    #[prop(into)]
+    tabs: Signal<Vec<SectionTab>>,
     /// The slug of the section on screen.
     #[prop(into)]
     active: String,
@@ -46,7 +51,7 @@ pub fn SectionStrip(
 ) -> impl IntoView {
     view! {
         <div role="tablist" class="tabs tabs-box flex-wrap">
-            <For each=move || tabs.clone() key=|tab| tab.slug.clone() let:tab>
+            <For each=move || tabs.get() key=|tab| tab.slug.clone() let:tab>
                 {
                     let here = active.clone();
                     let is_active = tab.slug == here;

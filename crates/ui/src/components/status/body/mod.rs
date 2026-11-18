@@ -64,7 +64,10 @@ pub fn StatusBody(
     #[prop(optional)]
     on_open_media: Option<Callback<(Vec<Picture>, usize)>>,
     /// Sends the picked options of a poll; absent where there is nowhere to send them.
-    #[prop(optional)]
+    ///
+    /// `optional_no_strip` because the caller decides per instance whether polls exist at
+    /// all, and forwards its own `Option` unchanged rather than wrapping it.
+    #[prop(optional_no_strip)]
     on_vote: Option<Callback<(String, Vec<usize>)>>,
     /// Whether media offers a player or a gallery; false for the server paint.
     #[prop(default = true)]

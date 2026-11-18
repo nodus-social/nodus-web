@@ -80,6 +80,30 @@ const CORS = {
   'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
 }
 
+/**
+ * Every capability name the client knows, as `/api/v1/meta` publishes them.
+ *
+ * A name the answer omits is a surface the instance does not serve, so the default stub
+ * is a fully-equipped Nodus instance: a test that wants a narrower one passes `features`.
+ */
+export const FEATURES = [
+  'feed_accounts',
+  'events',
+  'sync_token',
+  'admin',
+  'moderation',
+  'scanners',
+  'topology',
+  'protocol',
+  'remote_blocks',
+  'polls',
+]
+
+/** The scopes a role carries, as the two role answers send them. */
+export function scopesOf(role) {
+  return role === 'none' ? [] : ['admin:read', 'admin:write']
+}
+
 /** An empty recommendation feed, in the envelope the discovery API uses. */
 export function emptyFeed() {
   return {
@@ -95,11 +119,10 @@ export function emptyFeed() {
 
 export async function stubApi(
   page,
-  { statuses = [status()], status: single, notifications = [] } = {},
+  { statuses = [status()], status: single, notifications = [], features = FEATURES, role = 'admin' } = {},
 ) {
   await page.route('**/api/v1/meta', (route) =>
-    route.fulfill({ headers: CORS, json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features: [] },
-    }),
+    route.fulfill({ headers: CORS, json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features } }),
   )
   await page.route('**/api/v1/accounts/verify_credentials', (route) =>
     route.fulfill({ headers: CORS, json: account }),
@@ -140,6 +163,11 @@ export async function stubApi(
   await page.route('**/api/v1/sync/token**', (route) => route.fulfill({ status: 204, headers: CORS }))
   await page.route('**/api/v1/blocks**', (route) => route.fulfill({ headers: CORS, json: [] }))
   await page.route('**/api/v1/mutes**', (route) => route.fulfill({ headers: CORS, json: [] }))
+  // Who this account is to the instance. The console asks this before it offers a grant,
+  // so a signed-in account with no staff role is told so rather than handed a button.
+  await page.route('**/api/v1/nodus/account/role', (route) =>
+    route.fulfill({ headers: CORS, json: { role, scopes: scopesOf(role) } }),
+  )
   // Registered last: Playwright consults handlers newest-first, so this sees the preflight
   // before any method-specific handler and defers everything else.
   await page.route('**/api/**', (route) =>
@@ -313,6 +341,8 @@ export async function adminApi(
     overview = {},
     measures = [],
     meta = {},
+    role = 'admin',
+    scopes = ['read', 'write', 'follow', 'admin:read', 'admin:write'],
     topology = null,
     logs = [],
     remoteBlocks = [],
@@ -407,11 +437,16 @@ export async function adminApi(
       ...overview,
     }),
   )
+  // Registered after `stubApi`, so this answer — with its role — wins over the default.
+  await page.route(/\/api\/v1\/nodus\/account\/role$/, (route) =>
+    json(route, { role, scopes: scopesOf(role) }),
+  )
   await page.route(/\/api\/v1\/admin\/meta$/, (route) =>
     json(route, {
       account,
-      staff: true,
-      scopes: ['read', 'write', 'follow', 'admin:read', 'admin:write'],
+      staff: role !== 'none',
+      role,
+      scopes,
       counts: { open_reports: 3, unassigned_reports: 2, pending_accounts: 1, open_flags: 1 },
       domain: HOST,
       base_url: `https://${HOST}`,

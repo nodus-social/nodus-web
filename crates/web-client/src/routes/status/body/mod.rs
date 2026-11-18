@@ -13,7 +13,7 @@ use nodus_ui::status_body::StatusBody as SharedBody;
 use super::sensitive;
 use crate::media;
 use crate::state::alive::Alive;
-use crate::state::bridge::actions;
+use crate::state::bridge::{actions, feature};
 
 /// Content, media and poll of one status.
 #[component]
@@ -30,6 +30,9 @@ pub fn StatusBody(shown: ReadSignal<Status>, set_shown: WriteSignal<Status>) -> 
     // Whether a veil starts open is a stored preference, so it is read once here and handed
     // to the shared body as its starting state.
     let revealed = sensitive::reveals_automatically();
+    // Voting is a Nodus capability: an instance whose `/api/v1/meta` features do not name
+    // `polls` shows the bars and the counts and no press.
+    let polls = feature("polls");
 
     view! {
         // The body reads the whole status, so an answered verb — which replaces the card's
@@ -38,7 +41,7 @@ pub fn StatusBody(shown: ReadSignal<Status>, set_shown: WriteSignal<Status>) -> 
             <SharedBody
                 status=shown.get()
                 on_open_media=on_open
-                on_vote=on_vote
+                on_vote=polls.get().then_some(on_vote)
                 revealed_init=revealed
             />
         }}
