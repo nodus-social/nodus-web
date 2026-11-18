@@ -205,6 +205,27 @@ test('a Nodus account keeps the recommendation and styling surfaces', async ({ p
   await expect(page.getByRole('heading', { name: 'Recommended posts', exact: true })).toHaveCount(0)
 })
 
+test('an answer that arrives late still opens the screen it allows', async ({ page }) => {
+  // The gates read the answer synchronously, so they are closed on the first frame. That
+  // frame is not the verdict: when the instance answers, the route arm must be asked again
+  // rather than stay on the screen it painted while the answer was unknown.
+  await stubApi(page)
+  await page.route('**/api/v1/meta', async (route) => {
+    await new Promise((done) => setTimeout(done, 900))
+    await route.fulfill({
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features: [] },
+    })
+  })
+  await signedIn(page)
+  await open(page, '/home/feed')
+
+  await expect(page.getByRole('heading', { name: 'Feed', exact: true })).toBeVisible({
+    timeout: 8000,
+  })
+  await expect(page.getByRole('heading', { name: 'Recommended posts', exact: true })).toHaveCount(0)
+})
+
 test('a Mastodon rail offers no staff doors', async ({ page }) => {
   test.skip(test.info().project.name !== 'desktop', 'the rail is the desktop shell')
   await stubMastodon(page)

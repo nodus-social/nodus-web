@@ -37,13 +37,12 @@ use crate::state::oauth;
 pub mod accounts;
 pub mod actions;
 
-/// Whether the account's instance serves the Nodus extension surface.
-///
-/// A session can live on any server, so "this deployment has a recommendation engine" is
-/// not the question a screen needs answered: an account on a Mastodon instance can read its
-/// own server's timelines and none of the surfaces built on top of ours. The answer is
-/// therefore asked of the account's instance, once per host for this browser, and recorded
-/// here so a view can read it synchronously — a render must not wait on a request.
+// Whether the account's instance serves the Nodus extension surface, as the answer for one
+// host. A session can live on any server, so "this deployment has a recommendation engine" is
+// not the question a screen needs answered: an account on a Mastodon instance can read its
+// own server's timelines and none of the surfaces built on top of ours. The answer is
+// therefore asked of the account's instance, once per host for this browser, and recorded
+// here so a view can read it synchronously — a render must not wait on a request.
 thread_local! {
     static EXTENSIONS: RefCell<Option<(String, bool)>> = const { RefCell::new(None) };
     /// Whether a request for the answer is already in flight.
@@ -172,8 +171,8 @@ pub(super) async fn patience<F: std::future::Future>(future: F, limit: std::time
         )
         .await;
     };
-    let mut answering = Box::pin(answering);
-    let mut clock = Box::pin(clock);
+    let answering = Box::pin(answering);
+    let clock = Box::pin(clock);
     match futures_util::future::select(answering, clock).await {
         futures_util::future::Either::Left((_, _)) => slot.borrow_mut().take(),
         futures_util::future::Either::Right(_) => None,

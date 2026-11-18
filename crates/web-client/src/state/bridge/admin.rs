@@ -31,22 +31,7 @@ pub enum Staff {
     NeedsGrant,
 }
 
-/// What this session may moderate, asked by trying.
-///
-/// Not by reading a role: `role` is a field whose shape changed between versions, and a
-/// probe that fails is the same 403 the real screens would hit. The distinction the
-/// caller needs is "no grant yet" versus "the instance said no", so a missing grant is
-/// reported as such instead of being flattened into `false`.
-///
-/// Prefer [`standing`] from anything that re-runs on a redraw: this one always asks.
-pub async fn staff() -> Staff {
-    match probe().await {
-        Ok(verdict) => verdict,
-        Err(reason) => reason,
-    }
-}
-
-/// The answer [`staff`] last had, for the same session and grant.
+/// The answer the last probe had, for the same session and grant.
 ///
 /// The rail and each console section ask this question, and their effects re-run whenever
 /// the store notifies — which the socket and the sync loop do constantly. Asking the
@@ -130,6 +115,14 @@ fn remember(signature: &Signature, verdict: Staff) {
 }
 
 /// Asks the instance, keeping "no grant" apart from "refused".
+///
+/// Not by reading a role: `role` is a field whose shape changed between versions, and a
+/// probe that fails is the same 403 the real screens would hit. The distinction the
+/// caller needs is "no grant yet" versus "the instance said no", so a missing grant is
+/// reported as such instead of being flattened into `false`.
+///
+/// Private because it always asks, a request per redraw: callers go through [`standing`],
+/// which keeps the answer for the session and grant it describes.
 async fn probe() -> Result<Staff, Staff> {
     let Some(transport) = admin_transport() else {
         return Err(Staff::NeedsGrant);
