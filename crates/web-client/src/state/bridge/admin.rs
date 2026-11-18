@@ -7,7 +7,8 @@ use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
     AuditFilter,
-    DomainAllow, DomainBlock, DomainImportOutcome, DomainSeverity, EmailDomainBlock, FlagState,
+    DomainAllow, DomainBlock, DomainBlockDraft, DomainImportOutcome, DomainSeverity,
+    EmailDomainBlock, FlagState,
     ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ScanFlag,
     ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, TriggerOutcome,
     WarningPreset,
@@ -431,6 +432,24 @@ pub async fn delete_announcement(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Rewrites an announcement's text in place.
+///
+/// The draft carries the row's own dates and published flag: the endpoint replaces the row,
+/// so editing the words must not silently unpublish or reschedule the announcement.
+/// Requires `admin:write`.
+pub async fn update_announcement(
+    id: &str,
+    draft: AnnouncementDraft,
+) -> Result<Announcement, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_announcement(id, draft)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Reopens a handled report.
 pub async fn reopen_report(id: &str) -> Result<Report, String> {
     let transport = admin_transport()
@@ -485,6 +504,24 @@ pub async fn delete_domain_block(id: &str) -> Result<(), String> {
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .delete_domain_block(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Changes how much of a domain is refused, keeping everything else the block carries.
+///
+/// The endpoint replaces the whole row, so a draft holding only the new severity would drop
+/// the flags and the comment that were already there: the caller passes the row back.
+/// Requires `admin:write`.
+pub async fn update_domain_block(
+    id: &str,
+    draft: &DomainBlockDraft,
+) -> Result<DomainBlock, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_domain_block(id, draft)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1074,6 +1111,22 @@ pub async fn delete_warning_preset(id: &str) -> Result<(), String> {
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
         .delete_warning_preset(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Rewrites a preset in place, so its identity — and the warnings already sent with it —
+/// stays. Requires `admin:write`.
+pub async fn update_warning_preset(
+    id: &str,
+    title: &str,
+    text: &str,
+) -> Result<WarningPreset, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .update_warning_preset(id, title, text)
         .await
         .map_err(|error| error.to_string())
 }

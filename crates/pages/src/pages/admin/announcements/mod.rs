@@ -35,7 +35,31 @@ pub fn AnnouncementsPage(
     /// Withdraws one announcement.
     #[prop(optional_no_strip)]
     on_delete: Option<Callback<String>>,
+    /// The announcement being edited, when one is.
+    #[prop(into)]
+    #[prop(optional)]
+    editing: Signal<Option<Announcement>>,
+    /// The text being edited.
+    #[prop(into)]
+    #[prop(optional)]
+    edit_content: Signal<String>,
+    /// Opens one announcement for editing.
+    #[prop(optional_no_strip)]
+    on_edit: Option<Callback<Announcement>>,
+    /// Records the text being edited.
+    #[prop(optional_no_strip)]
+    on_edit_content: Option<Callback<String>>,
+    /// Saves the edit, keeping the announcement's id and schedule.
+    #[prop(optional_no_strip)]
+    on_save_edit: Option<Callback<()>>,
+    /// Abandons the edit.
+    #[prop(optional_no_strip)]
+    on_cancel_edit: Option<Callback<()>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
         <div class="flex flex-col gap-3">
             <Panel title="Announcements" description="Messages this instance shows to its members.">
@@ -48,27 +72,90 @@ pub fn AnnouncementsPage(
                     <For each=move || items.get() key=|announcement| announcement.id.clone() let:announcement>
                         {
                             let id = announcement.id.clone();
-                            let target = StoredValue::new(id);
+                            let target = StoredValue::new(id.clone());
+                            let here = id.clone();
+                            let open = Signal::derive(move || editing.get().is_some_and(|held| held.id == here));
+                            let stored = StoredValue::new(announcement.clone());
                             let status = if announcement.published { "published" } else { "draft" };
                             view! {
-                                <li class="flex items-start justify-between gap-3 py-2">
-                                    <div class="min-w-0">
-                                        <p class="whitespace-pre-wrap text-sm">{announcement.content.clone()}</p>
-                                        <p class="mt-1 text-xs opacity-60">
-                                            {format!("{status} · {}", announcement.published_at.clone().unwrap_or_default())}
-                                        </p>
-                                    </div>
-                                    <button
-                                        class="btn btn-ghost btn-xs shrink-0"
-                                        disabled=move || busy.get() || on_delete.is_none()
-                                        on:click=move |_| {
-                                            if let Some(on_delete) = on_delete {
-                                                on_delete.run(target.get_value());
-                                            }
+                                <li class="py-2">
+                                    <Show
+                                        when=move || open.get()
+                                        fallback=move || view! {
+                                            <div class="flex items-start justify-between gap-3">
+                                                <div class="min-w-0">
+                                                    <p class="whitespace-pre-wrap text-sm">{announcement.content.clone()}</p>
+                                                    <p class="mt-1 text-xs opacity-60">
+                                                        {format!("{status} · {}", announcement.published_at.clone().unwrap_or_default())}
+                                                    </p>
+                                                </div>
+                                                <div class="flex shrink-0 gap-1">
+                                                    <button
+                                                        class="btn btn-ghost btn-xs"
+                                                        disabled=move || busy.get() || on_edit.is_none() || !write.get()
+                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        on:click=move |_| {
+                                                            if let Some(on_edit) = on_edit {
+                                                                on_edit.run(stored.get_value());
+                                                            }
+                                                        }
+                                                    >
+                                                        "Edit"
+                                                    </button>
+                                                    <button
+                                                        class="btn btn-ghost btn-xs"
+                                                        disabled=move || busy.get() || on_delete.is_none() || !write.get()
+                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        on:click=move |_| {
+                                                            if let Some(on_delete) = on_delete {
+                                                                on_delete.run(target.get_value());
+                                                            }
+                                                        }
+                                                    >
+                                                        "Delete"
+                                                    </button>
+                                                </div>
+                                            </div>
                                         }
                                     >
-                                        "Delete"
-                                    </button>
+                                        <div class="flex flex-col gap-2">
+                                            <textarea
+                                                class="textarea textarea-bordered min-h-24"
+                                                aria-label="Edited announcement"
+                                                prop:value=move || edit_content.get()
+                                                disabled=on_edit_content.is_none()
+                                                on:input=move |event| {
+                                                    if let Some(on_edit_content) = on_edit_content {
+                                                        on_edit_content.run(event_target_value(&event));
+                                                    }
+                                                }
+                                            ></textarea>
+                                            <div class="flex gap-2">
+                                                <button
+                                                    class="btn btn-primary btn-xs"
+                                                    disabled=move || busy.get() || on_save_edit.is_none() || !write.get()
+                                                    on:click=move |_| {
+                                                        if let Some(on_save_edit) = on_save_edit {
+                                                            on_save_edit.run(());
+                                                        }
+                                                    }
+                                                >
+                                                    "Save changes"
+                                                </button>
+                                                <button
+                                                    class="btn btn-ghost btn-xs"
+                                                    disabled=move || on_cancel_edit.is_none()
+                                                    on:click=move |_| {
+                                                        if let Some(on_cancel_edit) = on_cancel_edit {
+                                                            on_cancel_edit.run(());
+                                                        }
+                                                    }
+                                                >
+                                                    "Cancel"
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </Show>
                                 </li>
                             }
                         }

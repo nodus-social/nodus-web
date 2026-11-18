@@ -347,6 +347,7 @@ export async function adminApi(
     logs = [],
     remoteBlocks = [],
     audit = [],
+    announcements = [],
   } = {},
 ) {
   const calls = []
@@ -408,6 +409,14 @@ export async function adminApi(
   await page.route(/\/api\/v1\/admin\/flags\/[^/]+\/resolve$/, (route) => json(route, flags[0] ?? scanFlag()))
   await page.route(/\/api\/v1\/admin\/domain_blocks/, (route) => json(route, blocks))
   await page.route(/\/api\/v1\/admin\/domain_blocks\/import$/, (route) => json(route, { blocked: 2, skipped: ['not a domain'] }))
+  // The in-place rewrite: the row comes back with the severity the form asked for. Registered
+  // after the list route so this one answers PUT for a single block.
+  await page.route(/\/api\/v1\/admin\/domain_blocks\/[^/]+$/, (route) => {
+    const id = route.request().url().split('/').pop()
+    const held = blocks.find((block) => block.id === id) ?? blocks[0] ?? {}
+    const form = new URLSearchParams(route.request().postData() ?? '')
+    return json(route, { ...held, severity: form.get('severity') ?? held.severity })
+  })
   await page.route(/\/api\/v1\/admin\/domain_allows/, (route) => json(route, []))
   await page.route(/\/api\/v1\/admin\/federation\/remote-blocks/, (route) => {
     if (route.request().method() === 'DELETE') {
@@ -418,6 +427,23 @@ export async function adminApi(
   })
   await page.route(/\/api\/v1\/admin\/email_domain_blocks/, (route) => json(route, mail))
   await page.route(/\/api\/v1\/admin\/warning_presets/, (route) => json(route, presets))
+  await page.route(/\/api\/v1\/admin\/warning_presets\/[^/]+$/, (route) => {
+    const id = route.request().url().split('/').pop()
+    const held = presets.find((preset) => preset.id === id) ?? presets[0] ?? {}
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    return json(route, { ...held, title: body.title ?? held.title, text: body.text ?? held.text })
+  })
+  await page.route(/\/api\/v1\/admin\/announcements$/, (route) => json(route, announcements))
+  await page.route(/\/api\/v1\/admin\/announcements\/[^/]+$/, (route) => {
+    if (route.request().method() === 'DELETE') {
+      record(route)
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    const id = route.request().url().split('/').pop()
+    const held = announcements.find((item) => item.id === id) ?? announcements[0] ?? {}
+    const form = new URLSearchParams(route.request().postData() ?? '')
+    return json(route, { ...held, content: form.get('content') ?? held.content })
+  })
   await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))
   await page.route(/\/api\/v1\/admin\/measures/, (route) => json(route, measures))
   await page.route(/\/api\/v1\/admin\/overview$/, (route) =>

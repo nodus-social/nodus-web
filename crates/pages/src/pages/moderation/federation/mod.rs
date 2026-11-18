@@ -9,7 +9,7 @@
 //! and the press cannot drift apart from the list above them.
 
 use leptos::prelude::*;
-use nodus_client_core::model::DomainBlock;
+use nodus_client_core::model::{DomainBlock, DomainSeverity};
 
 /// Blocked domains, with an add form.
 #[component]
@@ -41,6 +41,9 @@ pub fn FederationPage(
     /// Lifts one block. Absent where nothing can be sent.
     #[prop(optional)]
     on_remove: Option<Callback<String>>,
+    /// Changes how much of one domain is refused. Absent where nothing can be sent.
+    #[prop(optional)]
+    on_severity: Option<Callback<(String, DomainSeverity)>>,
     /// Records the list being pasted in.
     #[prop(optional)]
     on_import: Option<Callback<String>>,
@@ -51,7 +54,11 @@ pub fn FederationPage(
     #[prop(into)]
     #[prop(optional)]
     imported: Signal<Option<String>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     view! {
         <Show when=move || error.get().is_some()>
             <p class="text-sm text-error">{move || error.get().unwrap_or_default()}</p>
@@ -61,23 +68,63 @@ pub fn FederationPage(
             <For each=move || blocks.get() key=|block| block.id.clone() let:block>
                 {
                     let target = StoredValue::new(block.id.clone());
-                    let label = format!("{} · {}", block.domain, block.severity.as_str());
+                    let domain = block.domain.clone();
+                    let severity = block.severity;
+                    let comment = block.public_comment.clone();
+                    let has_comment = !comment.is_empty();
+                    let comment_text = comment.clone();
+                    let select_label = format!("Severity for {domain}");
                     view! {
-                        <li class="flex items-center justify-between gap-2 rounded-box bg-base-100 px-3 py-2 shadow-sm">
-                            <p class="truncate text-sm">{label}</p>
-                            <button
-                                class="btn btn-ghost btn-xs"
-                                disabled=on_remove.is_none()
-                                on:click=move |_| {
-                                    // A block that could not be removed is still in force;
-                                    // the list is the record of that.
-                                    if let Some(on_remove) = on_remove {
-                                        on_remove.run(target.get_value());
+                        <li class="flex flex-wrap items-center justify-between gap-2 rounded-box bg-base-100 px-3 py-2 shadow-sm">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm">{domain}</p>
+                                <Show when=move || has_comment>
+                                    <p class="truncate text-xs opacity-60">{comment_text.clone()}</p>
+                                </Show>
+                            </div>
+                            <div class="flex shrink-0 items-center gap-2">
+                                <select
+                                    class="select select-bordered select-xs"
+                                    aria-label=select_label
+                                    disabled=move || on_severity.is_none() || !write.get()
+                                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                    on:change=move |event| {
+                                        if let Some(on_severity) = on_severity {
+                                            let next = match event_target_value(&event).as_str() {
+                                                "silence" => DomainSeverity::Silence,
+                                                "noop" => DomainSeverity::Noop,
+                                                _ => DomainSeverity::Suspend,
+                                            };
+                                            if next != severity {
+                                                on_severity.run((target.get_value(), next));
+                                            }
+                                        }
                                     }
-                                }
-                            >
-                                "Remove"
-                            </button>
+                                >
+                                    <option value="suspend" selected=severity == DomainSeverity::Suspend>
+                                        "Suspend"
+                                    </option>
+                                    <option value="silence" selected=severity == DomainSeverity::Silence>
+                                        "Silence"
+                                    </option>
+                                    <option value="noop" selected=severity == DomainSeverity::Noop>
+                                        "No-op (keep on record)"
+                                    </option>
+                                </select>
+                                <button
+                                    class="btn btn-ghost btn-xs"
+                                    disabled=on_remove.is_none()
+                                    on:click=move |_| {
+                                        // A block that could not be removed is still in force;
+                                        // the list is the record of that.
+                                        if let Some(on_remove) = on_remove {
+                                            on_remove.run(target.get_value());
+                                        }
+                                    }
+                                >
+                                    "Remove"
+                                </button>
+                            </div>
                         </li>
                     }
                 }

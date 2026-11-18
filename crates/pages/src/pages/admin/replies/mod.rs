@@ -39,6 +39,33 @@ pub fn RepliesPage(
     /// Forgets one preset.
     #[prop(optional)]
     on_delete: Option<Callback<String>>,
+    /// The id of the preset being edited, when one is.
+    #[prop(into)]
+    #[prop(optional)]
+    editing: Signal<Option<String>>,
+    /// The title being edited.
+    #[prop(into)]
+    #[prop(optional)]
+    edit_title: Signal<String>,
+    /// The text being edited.
+    #[prop(into)]
+    #[prop(optional)]
+    edit_text: Signal<String>,
+    /// Opens one preset for editing.
+    #[prop(optional)]
+    on_edit: Option<Callback<WarningPreset>>,
+    /// Records the title being edited.
+    #[prop(optional)]
+    on_edit_title: Option<Callback<String>>,
+    /// Records the text being edited.
+    #[prop(optional)]
+    on_edit_text: Option<Callback<String>>,
+    /// Saves the edit, keeping the preset's identity.
+    #[prop(optional)]
+    on_save_edit: Option<Callback<()>>,
+    /// Abandons the edit.
+    #[prop(optional)]
+    on_cancel_edit: Option<Callback<()>>,
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
@@ -63,24 +90,97 @@ pub fn RepliesPage(
                     <For each=move || presets.get() key=|preset| preset.id.clone() let:preset>
                         {
                             let id = StoredValue::new(preset.id.clone());
+                            let here = preset.id.clone();
+                            let open = Signal::derive(move || editing.get().as_deref() == Some(here.as_str()));
+                            let stored = StoredValue::new(preset.clone());
                             view! {
-                                <li class="flex items-start gap-2 rounded-box bg-base-200 p-2">
-                                    <div class="min-w-0">
-                                        <p class="truncate text-sm font-medium">{preset.title.clone()}</p>
-                                        <p class="text-xs whitespace-pre-line opacity-70">{preset.text.clone()}</p>
-                                    </div>
-                                    <button
-                                        class="btn btn-ghost btn-xs ml-auto shrink-0 text-error"
-                                        disabled=move || on_delete.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
-                                        on:click=move |_| {
-                                            if let Some(on_delete) = on_delete {
-                                                on_delete.run(id.get_value());
-                                            }
+                                <li class="rounded-box bg-base-200 p-2">
+                                    <Show
+                                        when=move || open.get()
+                                        fallback=move || view! {
+                                            <div class="flex items-start gap-2">
+                                                <div class="min-w-0">
+                                                    <p class="truncate text-sm font-medium">{preset.title.clone()}</p>
+                                                    <p class="text-xs whitespace-pre-line opacity-70">{preset.text.clone()}</p>
+                                                </div>
+                                                <div class="ml-auto flex shrink-0 gap-1">
+                                                    <button
+                                                        class="btn btn-ghost btn-xs"
+                                                        disabled=move || on_edit.is_none() || !write.get()
+                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        on:click=move |_| {
+                                                            if let Some(on_edit) = on_edit {
+                                                                on_edit.run(stored.get_value());
+                                                            }
+                                                        }
+                                                    >
+                                                        "Edit"
+                                                    </button>
+                                                    <button
+                                                        class="btn btn-ghost btn-xs text-error"
+                                                        disabled=move || on_delete.is_none() || !write.get()
+                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        on:click=move |_| {
+                                                            if let Some(on_delete) = on_delete {
+                                                                on_delete.run(id.get_value());
+                                                            }
+                                                        }
+                                                    >
+                                                        "Forget"
+                                                    </button>
+                                                </div>
+                                            </div>
                                         }
                                     >
-                                        "Forget"
-                                    </button>
+                                        <div class="flex flex-col gap-2">
+                                            <input
+                                                class="input input-bordered input-sm"
+                                                aria-label="Edited preset title"
+                                                prop:value=move || edit_title.get()
+                                                disabled=on_edit_title.is_none()
+                                                on:input=move |event| {
+                                                    if let Some(on_edit_title) = on_edit_title {
+                                                        on_edit_title.run(event_target_value(&event));
+                                                    }
+                                                }
+                                            />
+                                            <textarea
+                                                class="textarea textarea-bordered textarea-sm h-24"
+                                                aria-label="Edited preset text"
+                                                prop:value=move || edit_text.get()
+                                                disabled=on_edit_text.is_none()
+                                                on:input=move |event| {
+                                                    if let Some(on_edit_text) = on_edit_text {
+                                                        on_edit_text.run(event_target_value(&event));
+                                                    }
+                                                }
+                                            ></textarea>
+                                            <div class="flex gap-2">
+                                                <button
+                                                    class="btn btn-primary btn-xs"
+                                                    disabled=move || busy.get() || on_save_edit.is_none() || !write.get()
+                                                    on:click=move |_| {
+                                                        if let Some(on_save_edit) = on_save_edit {
+                                                            on_save_edit.run(());
+                                                        }
+                                                    }
+                                                >
+                                                    "Save changes"
+                                                </button>
+                                                <button
+                                                    class="btn btn-ghost btn-xs"
+                                                    disabled=move || on_cancel_edit.is_none()
+                                                    on:click=move |_| {
+                                                        if let Some(on_cancel_edit) = on_cancel_edit {
+                                                            on_cancel_edit.run(());
+                                                        }
+                                                    }
+                                                >
+                                                    "Cancel"
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </Show>
                                 </li>
                             }
                         }

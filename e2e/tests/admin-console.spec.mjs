@@ -325,3 +325,91 @@ test('the audit log is narrowed and paged by its filters', async ({ page }) => {
   await page.getByRole('button', { name: 'Load more' }).click()
   await sent(calls, (call) => new URL(call.url).searchParams.get('offset') === '20')
 })
+
+test('a domain block changes severity without losing what it carried', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    blocks: [
+      {
+        id: '9',
+        domain: 'example.test',
+        created_at: '2026-11-01T00:00:00Z',
+        severity: 'suspend',
+        reject_media: true,
+        reject_reports: false,
+        obfuscate: true,
+        public_comment: 'Handled by staff.',
+      },
+    ],
+  })
+  await open(page, '/moderation/federation')
+
+  await expect(page.getByText('example.test')).toBeVisible()
+  await expect(page.getByText('Handled by staff.')).toBeVisible()
+
+  // The rewrite is the row, not a new block: the severity changes and every other field
+  // — the comment above all — is sent back as it was.
+  await page.getByLabel('Severity for example.test').selectOption('silence')
+
+  const rewrite = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/domain_blocks/9'),
+  )
+  const form = new URLSearchParams(rewrite.body)
+  expect(form.get('severity')).toBe('silence')
+  expect(form.get('public_comment')).toBe('Handled by staff.')
+  expect(form.get('reject_media')).toBe('true')
+  expect(form.get('obfuscate')).toBe('true')
+  expect(form.get('domain')).toBe('example.test')
+})
+
+test('a canned reply is edited in place instead of replaced', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    presets: [
+      { id: '11', title: 'First warning', text: 'Be kind.', created_at: '2026-11-01T00:00:00Z' },
+    ],
+  })
+  await open(page, '/admin/replies')
+
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  await page.getByLabel('Edited preset title').fill('Second warning')
+  await page.getByLabel('Edited preset text').fill('Be kind, please.')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  const rewrite = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/warning_presets/11'),
+  )
+  expect(JSON.parse(rewrite.body)).toEqual({ title: 'Second warning', text: 'Be kind, please.' })
+})
+
+test('an announcement is edited in place and keeps its schedule', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    announcements: [
+      {
+        id: '12',
+        content: 'Maintenance tonight.',
+        published: true,
+        all_day: true,
+        published_at: '2026-11-01T00:00:00Z',
+        starts_at: '2026-11-02',
+        ends_at: '2026-11-03',
+      },
+    ],
+  })
+  await open(page, '/admin/announcements')
+
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  await page.getByLabel('Edited announcement').fill('Maintenance tomorrow.')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  const rewrite = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/announcements/12'),
+  )
+  const form = new URLSearchParams(rewrite.body)
+  expect(form.get('content')).toBe('Maintenance tomorrow.')
+  expect(form.get('published')).toBe('true')
+  expect(form.get('all_day')).toBe('true')
+  expect(form.get('starts_at')).toBe('2026-11-02')
+  expect(form.get('ends_at')).toBe('2026-11-03')
+})

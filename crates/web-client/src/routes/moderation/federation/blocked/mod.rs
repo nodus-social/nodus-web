@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use nodus_client_core::model::{DomainBlock, DomainSeverity};
+use nodus_client_core::model::{DomainBlock, DomainBlockDraft, DomainSeverity};
 use nodus_pages::pages::moderation::federation::FederationPage;
 
 use crate::state::alive::Alive;
@@ -71,6 +71,39 @@ pub(super) fn BlockedList() -> impl IntoView {
         });
     });
 
+    // A severity change is a rewrite of the row, not a new block: the draft carries the
+    // flags and the comment the row already had so the update does not erase them.
+    let set_severity = Callback::new(move |(id, severity): (String, DomainSeverity)| {
+        let Some(block) = blocks
+            .get_untracked()
+            .into_iter()
+            .find(|held| held.id == id)
+        else {
+            return;
+        };
+        let draft = DomainBlockDraft {
+            domain: block.domain,
+            severity,
+            reject_media: block.reject_media,
+            reject_reports: block.reject_reports,
+            obfuscate: block.obfuscate,
+            public_comment: block.public_comment,
+        };
+        spawn_local(async move {
+            match admin::update_domain_block(&id, &draft).await {
+                Ok(updated) => alive.if_alive(move || {
+                    set_blocks.update(move |held| {
+                        if let Some(slot) = held.iter_mut().find(|held| held.id == updated.id) {
+                            *slot = updated;
+                        }
+                    });
+                    set_error.set(None);
+                }),
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
     let import_now = Callback::new(move |()| {
         let pasted = import_list.get_untracked();
         let domains: Vec<String> = pasted
@@ -120,6 +153,8 @@ pub(super) fn BlockedList() -> impl IntoView {
             on_suspend=Callback::new(move |entire: bool| set_suspend.set(entire))
             on_block=add
             on_remove=remove
+            on_severity=set_severity
+            write=Some(admin::may_write())
             on_import=Callback::new(move |value: String| set_import_list.set(value))
             on_import_now=import_now
             imported=imported
