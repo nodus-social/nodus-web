@@ -15,6 +15,48 @@ use nodus_pages::pages::admin::scanners::{ScannerDraft, ScannersPage};
 use crate::state::alive::Alive;
 use crate::state::bridge::admin;
 
+/// How long a download's object URL outlives its click, so the browser has started reading
+/// it before the address is released.
+const RELEASE_AFTER_MS: i32 = 50;
+
+/// Hands `bytes` to the browser as a file named `name`.
+///
+/// The content sets are uploaded files, not JSON this console can decode, so the download is
+/// an object URL over the bytes as they arrived. The browser only starts reading that URL
+/// after the click returns, so it is released on a later turn rather than in this one.
+fn save_bytes(bytes: &[u8], name: &str) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&array.buffer());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+        .map_err(|_| "Could not build the file.".to_owned())?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| "Could not build the file's address.".to_owned())?;
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| "There is no page to download into.".to_owned())?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|_| "Could not build the link.".to_owned())?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "Could not build the link.".to_owned())?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+    anchor.click();
+    let release = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            release.unchecked_ref(),
+            RELEASE_AFTER_MS,
+        );
+    }
+    Ok(())
+}
+
 /// One scanner as the form needs it, with the entry field kept as text.
 fn draft_of(draft: &ScannerDraft) -> Result<NewScanner, String> {
     let name = draft.name.trim();
@@ -172,6 +214,19 @@ pub fn Scanners() -> impl IntoView {
         });
     });
 
+    let asset_download = Callback::new(move |(id, name): (String, String)| {
+        spawn_local(async move {
+            match admin::download_scanner_asset(&id).await {
+                Ok(bytes) => {
+                    if let Err(message) = save_bytes(&bytes, &name) {
+                        alive.if_alive(|| set_error.set(Some(message)));
+                    }
+                }
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
     let upload = {
         let alive = Alive::new();
         view! {
@@ -256,6 +311,7 @@ pub fn Scanners() -> impl IntoView {
             on_rule=rule
             on_rule_delete=rule_delete
             on_asset_delete=asset_delete
+            on_asset_download=asset_download
             upload=upload
             write=Some(crate::state::bridge::admin::may_write())
         />

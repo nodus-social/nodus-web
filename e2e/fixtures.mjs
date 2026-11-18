@@ -405,6 +405,15 @@ export async function adminApi(
     json(route, scanners[0] ?? scanner()),
   )
   await page.route(/\/api\/v1\/admin\/scanner_assets/, (route) => json(route, assets))
+  // The bytes themselves, not a description of them: this is what the scanner was handed.
+  await page.route(/\/api\/v1\/admin\/scanner_assets\/[^/]+\/download$/, (route) => {
+    record(route)
+    return route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': 'application/octet-stream' },
+      body: Buffer.from('a,b\n1,2\n'),
+    })
+  })
   await page.route(/\/api\/v1\/admin\/flags\?/, (route) => json(route, flags))
   await page.route(/\/api\/v1\/admin\/flags\/[^/]+\/resolve$/, (route) => json(route, flags[0] ?? scanFlag()))
   await page.route(/\/api\/v1\/admin\/domain_blocks/, (route) => json(route, blocks))

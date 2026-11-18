@@ -413,3 +413,33 @@ test('an announcement is edited in place and keeps its schedule', async ({ page 
   expect(form.get('starts_at')).toBe('2026-11-02')
   expect(form.get('ends_at')).toBe('2026-11-03')
 })
+
+test('a content set downloads as the bytes the scanner was given', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    assets: [
+      {
+        id: '7001',
+        name: 'hashes.txt',
+        kind: 'hashes',
+        digest: 'abc123def4567890',
+        size: 8,
+        content_type: 'text/plain',
+        created_at: '2026-11-01T00:00:00Z',
+      },
+    ],
+  })
+  await open(page, '/admin/scanners')
+
+  // The bytes are handed to the browser as a file rather than decoded into a model, so the
+  // proof is the download itself: its name comes from the asset, its content from the API.
+  const arrived = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download' }).click()
+  const download = await arrived
+  expect(download.suggestedFilename()).toBe('hashes.txt')
+
+  await sent(calls, (call) => call.url.endsWith('/api/v1/admin/scanner_assets/7001/download'))
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  expect(Buffer.concat(chunks).toString()).toBe('a,b\n1,2\n')
+})

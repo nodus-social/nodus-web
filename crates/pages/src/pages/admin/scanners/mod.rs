@@ -121,6 +121,9 @@ pub fn ScannersPage(
     /// Forgets one content set.
     #[prop(optional)]
     on_asset_delete: Option<Callback<String>>,
+    /// Fetches one content set so it can be saved and looked at.
+    #[prop(optional)]
+    on_asset_download: Option<Callback<(String, String)>>,
     /// The form that uploads a content set, drawn by the caller because it reads a file.
     #[prop(optional, into)]
     upload: Option<AnyView>,
@@ -388,6 +391,11 @@ pub fn ScannersPage(
                     <For each=move || assets.get() key=|asset| asset.id.clone() let:asset>
                         {
                             let id = StoredValue::new(asset.id.clone());
+                            let name = if asset.name.is_empty() {
+                                format!("asset-{}", asset.id)
+                            } else {
+                                asset.name.clone()
+                            };
                             let meta = format!(
                                 "{} · {} · {} bytes · {}",
                                 asset_label(asset.kind),
@@ -400,6 +408,18 @@ pub fn ScannersPage(
                                     <span class="truncate">{meta}</span>
                                     <button
                                         class="btn btn-ghost btn-xs ml-auto"
+                                        disabled=move || on_asset_download.is_none()
+                                        title="Save the bytes the scanner was given"
+                                        on:click=move |_| {
+                                            if let Some(on_asset_download) = on_asset_download {
+                                                on_asset_download.run((id.get_value(), name.clone()));
+                                            }
+                                        }
+                                    >
+                                        "Download"
+                                    </button>
+                                    <button
+                                        class="btn btn-ghost btn-xs"
                                         disabled=move || on_asset_delete.is_none() || !write.get()
                                         title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
                                         on:click=move |_| {

@@ -1060,6 +1060,17 @@ pub async fn delete_scanner_asset(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// The bytes of one content set, exactly as the scanner received them.
+pub async fn download_scanner_asset(id: &str) -> Result<Vec<u8>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    transport
+        .download_scanner_asset(id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Scan results a moderator has to judge; `None` asks for all of them.
 pub async fn scan_flags(state: Option<FlagState>) -> Result<Vec<ScanFlag>, String> {
     let transport = admin_transport()
