@@ -339,9 +339,7 @@ fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
     wasm_bindgen_futures::spawn_local({
         let sdk = Rc::clone(&sdk);
         async move {
-            if let Err(error) = sdk.load_capabilities().await {
-                web_sys::console::warn_1(&format!("capabilities unavailable: {error}").into());
-            }
+            sdk.load_capabilities().await;
         }
     });
 
