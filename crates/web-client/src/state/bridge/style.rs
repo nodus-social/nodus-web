@@ -313,6 +313,9 @@ pub fn on_signed_out() {
 
 /// Fetch the active account's custom style metadata from `nodus-backend`.
 pub async fn refresh_active() -> Result<SessionStyle, String> {
+    if !super::knows_extensions() {
+        return Err(String::from("This instance does not keep session styling."));
+    }
     let key = active_cache_key().ok_or_else(|| String::from("No active account."))?;
     let Some(transport) = instance_transport() else {
         return Err(String::from("No instance transport."));
@@ -328,6 +331,9 @@ pub async fn refresh_active() -> Result<SessionStyle, String> {
 
 /// Background-fetch thumbnails/styles for remembered accounts in the account switcher.
 pub async fn prefetch_account_thumbnails() -> bool {
+    if !super::knows_extensions() {
+        return false;
+    }
     let mut updated = false;
     for account in accounts::load() {
         let key = (account.host.clone(), account.id.clone());

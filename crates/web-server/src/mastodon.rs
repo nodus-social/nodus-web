@@ -210,11 +210,18 @@ impl Client {
     }
 
     /// Fetch Nodus session styling & nav layout from `nodus-backend` fine-grained client metadata.
+    ///
+    /// A plain Mastodon instance has no such endpoint, and this runs on every painted page,
+    /// so a host that has answered "no" once is not asked again in this process.
     pub async fn client_metadata_style(&self) -> Result<SessionStyle, String> {
         #[derive(Deserialize)]
         struct Envelope {
             #[serde(default)]
             metadata: BTreeMap<String, serde_json::Value>,
+        }
+
+        if !keeps_styling(self.host()) {
+            return Err(String::from("This instance does not keep session styling."));
         }
 
         let mut url = self
@@ -224,11 +231,14 @@ impl Client {
         url.query_pairs_mut()
             .append_pair("keys", &STYLE_KEYS.join(","));
         let req = self.instance.get(url);
-        let envelope: Envelope = self
-            .instance
-            .fetch(req)
-            .await
-            .map_err(|error| error.to_string())?;
+        let envelope: Envelope = match self.instance.fetch(req).await {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                forget_styling(self.host());
+                return Err(error.to_string());
+            }
+        };
+        remember_styling(self.host());
         Ok(SessionStyle::from_metadata_map(&envelope.metadata))
     }
 
@@ -312,4 +322,32 @@ mod tests {
             "expected root cause to be preserved in transport error, got: {err}"
         );
     }
+}
+
+/// Hosts this process has seen answer the styling endpoint.
+fn keeps_styling(host: &str) -> bool {
+    styling_table()
+        .lock()
+        .map(|known| known.get(host).copied().unwrap_or(true))
+        .unwrap_or(true)
+}
+
+fn remember_styling(host: &str) {
+    if let Ok(mut known) = styling_table().lock() {
+        known.insert(host.to_owned(), true);
+    }
+}
+
+fn forget_styling(host: &str) {
+    if let Ok(mut known) = styling_table().lock() {
+        known.insert(host.to_owned(), false);
+    }
+}
+
+/// Whether each host keeps session styling. `true` until it says otherwise, because the
+/// first page of a new host has to ask to find out.
+fn styling_table() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
+    static TABLE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }

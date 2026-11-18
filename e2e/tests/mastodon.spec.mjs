@@ -94,6 +94,21 @@ test('every screen opens when the instance only speaks Mastodon', async ({ page 
   }
 })
 
+test('a Mastodon session never asks for Nodus metadata', async ({ page }) => {
+  await stubMastodon(page)
+  await signedIn(page, { host: MASTODON })
+  const asked = []
+  page.on('request', (request) => asked.push(request.url()))
+  await open(page, '/home')
+  await expect(page.getByText('Hello from the fixture.')).toBeVisible()
+  // Styling, reactions and the account-metadata document only exist on Nodus: asking a
+  // Mastodon instance for them is a 404 in every console, and the answer is knowable
+  // before the first request because the negotiation already said so.
+  await expect
+    .poll(() => asked.filter((url) => url.includes('/api/v1/nodus/')).length, { timeout: 2_000 })
+    .toBe(0)
+})
+
 test('the composer still posts', async ({ page }) => {
   await stubMastodon(page)
   await signedIn(page, { host: MASTODON })
