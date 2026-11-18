@@ -77,6 +77,27 @@ pub fn Overview() -> impl IntoView {
         });
     });
 
+    let scan_now = Callback::new(move |()| {
+        let alive = Alive::new();
+        spawn_local(async move {
+            if let Err(problem) = admin::scan_open_queue().await {
+                alive.if_alive(|| set_error.set(Some(problem)));
+                return;
+            }
+            // The queue's size is one of the counts in the scanner panel, so read the
+            // counters again rather than guessing what the re-queue did to them. The
+            // dashboard's own read is cached, so this one asks past the cache.
+            let refreshed = admin::meta_refreshed().await;
+            alive.if_alive(|| match refreshed {
+                Ok(meta) => {
+                    set_error.set(None);
+                    set_scanning.set(Some(meta.scanning));
+                }
+                Err(problem) => set_error.set(Some(problem)),
+            });
+        });
+    });
+
     view! {
         <OverviewPage
             overview=overview
@@ -86,6 +107,7 @@ pub fn Overview() -> impl IntoView {
             loading=loading
             error=error
             on_acknowledge=acknowledge
+            on_scan_now=scan_now
             write=Some(crate::state::bridge::admin::may_write())
         />
     }

@@ -10,8 +10,8 @@ use nodus_client_core::model::{
     DomainAllow, DomainBlock, DomainBlockDraft, DomainImportOutcome, DomainSeverity,
     EmailDomainBlock, FlagState,
     ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ScanFlag,
-    ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, TriggerOutcome,
-    WarningPreset,
+    ScanRequest, ScanSeverity, Scanner, ScannerAsset, ScannerKind, ScannerRule, Topology,
+    TriggerOutcome, WarningPreset,
 };
 
 /// How many rows a moderation screen asks for.
@@ -880,6 +880,16 @@ pub async fn meta() -> Result<AdminMeta, String> {
         })
 }
 
+/// `admin/meta` read again, replacing the answer kept for this grant.
+///
+/// The document describes the console rather than a moment, which is why it is read once —
+/// but `scanning.queued` counts work in flight, so a screen that has just changed the queue
+/// asks for a fresh copy instead of painting the one the console opened with.
+pub async fn meta_refreshed() -> Result<AdminMeta, String> {
+    META.with(|slot| *slot.borrow_mut() = None);
+    meta().await
+}
+
 /// The flat counts behind the overview screen.
 pub async fn overview() -> Result<AdminOverview, String> {
     let transport = admin_transport()
@@ -1080,6 +1090,83 @@ pub async fn scan_flags(state: Option<FlagState>) -> Result<Vec<ScanFlag>, Strin
         .scan_flags(state, PAGE)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// The scanner kinds this instance has switched on, each named once.
+///
+/// A scan request names one kind and the instance queues it for the scanners of that kind
+/// only, so asking for a subject means asking once per kind the instance actually runs.
+async fn kinds_in_use() -> Result<Vec<ScannerKind>, String> {
+    let mut kinds: Vec<ScannerKind> = Vec::new();
+    for scanner in scanners().await? {
+        if scanner.enabled && !kinds.contains(&scanner.kind) {
+            kinds.push(scanner.kind);
+        }
+    }
+    Ok(kinds)
+}
+
+/// Hands one subject to each of `kinds`, answering how many scanners took it.
+async fn queue_for(
+    kinds: &[ScannerKind],
+    subject_type: &str,
+    subject_id: &str,
+) -> Result<u64, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut queued = 0;
+    for kind in kinds {
+        let request = ScanRequest {
+            subject_type: subject_type.to_owned(),
+            subject_id: subject_id.to_owned(),
+            kind: *kind,
+            url: None,
+            text: None,
+            mime: None,
+        };
+        queued += transport
+            .enqueue_scan(&request)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(queued)
+}
+
+/// Queues one post for every kind of scanner this instance runs.
+///
+/// The instance keeps one row per scanner and subject and drops a repeat, so asking again
+/// costs nothing and picks up a scanner that was registered after the post was first read.
+pub async fn scan_subject(subject_id: &str) -> Result<u64, String> {
+    let kinds = kinds_in_use().await?;
+    if kinds.is_empty() {
+        return Err("No scanner is enabled, so nothing was queued.".to_owned());
+    }
+    queue_for(&kinds, "status", subject_id).await
+}
+
+/// Queues every post on the open review queue again, answering the posts and the scans.
+///
+/// The dashboard has no subject to name, and the review queue is the one list of targets
+/// the console already holds, so its "scan now" is "hand these to the scanners again".
+pub async fn scan_open_queue() -> Result<(usize, u64), String> {
+    let kinds = kinds_in_use().await?;
+    if kinds.is_empty() {
+        return Err("No scanner is enabled, so nothing was queued.".to_owned());
+    }
+    let mut subjects: Vec<String> = Vec::new();
+    for flag in scan_flags(Some(FlagState::Open)).await? {
+        if let Some(status) = flag.status_id.filter(|id| !id.is_empty()) {
+            if !subjects.contains(&status) {
+                subjects.push(status);
+            }
+        }
+    }
+    let mut queued = 0;
+    for subject in &subjects {
+        queued += queue_for(&kinds, "status", subject).await?;
+    }
+    Ok((subjects.len(), queued))
 }
 
 /// Records a moderator's verdict on a flag.

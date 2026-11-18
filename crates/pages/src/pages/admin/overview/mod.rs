@@ -42,6 +42,10 @@ pub fn OverviewPage(
     /// Acknowledges one alert. Absent where this token may not write.
     #[prop(optional)]
     on_acknowledge: Option<Callback<String>>,
+    /// Hands the posts on the review queue to the scanners again. Absent where this token
+    /// may not write, and absent on an instance that does not serve `scanners`.
+    #[prop(optional)]
+    on_scan_now: Option<Callback<()>>,
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
@@ -189,7 +193,21 @@ pub fn OverviewPage(
                     .map(|scanning| {
                         view! {
                             <div class="rounded-box border border-base-300 bg-base-100 p-3">
-                                <h2 class="mb-2 text-sm font-semibold">"Scanners"</h2>
+                                <div class="mb-2 flex items-center justify-between gap-2">
+                                    <h2 class="text-sm font-semibold">"Scanners"</h2>
+                                    <button
+                                        class="btn btn-ghost btn-xs"
+                                        disabled=move || on_scan_now.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        on:click=move |_| {
+                                            if let Some(on_scan_now) = on_scan_now {
+                                                on_scan_now.run(());
+                                            }
+                                        }
+                                    >
+                                        "Scan now"
+                                    </button>
+                                </div>
                                 <dl class="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5">
                                     {count("Scanners", scanning.scanners)}
                                     {count("Enabled", scanning.enabled)}

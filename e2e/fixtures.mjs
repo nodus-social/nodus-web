@@ -417,15 +417,16 @@ export async function adminApi(
   await page.route(/\/api\/v1\/admin\/flags\?/, (route) => json(route, flags))
   await page.route(/\/api\/v1\/admin\/flags\/[^/]+\/resolve$/, (route) => json(route, flags[0] ?? scanFlag()))
   await page.route(/\/api\/v1\/admin\/domain_blocks/, (route) => json(route, blocks))
-  await page.route(/\/api\/v1\/admin\/domain_blocks\/import$/, (route) => json(route, { blocked: 2, skipped: ['not a domain'] }))
   // The in-place rewrite: the row comes back with the severity the form asked for. Registered
-  // after the list route so this one answers PUT for a single block.
+  // after the list route so this one answers PUT for a single block. It also matches
+  // `/domain_blocks/import`, so the import route has to come after it: the later route wins.
   await page.route(/\/api\/v1\/admin\/domain_blocks\/[^/]+$/, (route) => {
     const id = route.request().url().split('/').pop()
     const held = blocks.find((block) => block.id === id) ?? blocks[0] ?? {}
     const form = new URLSearchParams(route.request().postData() ?? '')
     return json(route, { ...held, severity: form.get('severity') ?? held.severity })
   })
+  await page.route(/\/api\/v1\/admin\/domain_blocks\/import$/, (route) => json(route, { blocked: 2, skipped: ['not a domain'] }))
   await page.route(/\/api\/v1\/admin\/domain_allows/, (route) => json(route, []))
   await page.route(/\/api\/v1\/admin\/federation\/remote-blocks/, (route) => {
     if (route.request().method() === 'DELETE') {
@@ -477,6 +478,13 @@ export async function adminApi(
   await page.route(/\/api\/v1\/nodus\/account\/role$/, (route) =>
     json(route, { role, scopes: scopesOf(role) }),
   )
+  // The re-queue endpoint: each request adds one scan per subject, and the dashboard
+  // reads its counters again afterwards, so this count has to move for the test to see it.
+  let queuedScans = 0
+  await page.route(/\/api\/v1\/admin\/scans$/, (route) => {
+    queuedScans += 1
+    return json(route, { queued: 1 })
+  })
   await page.route(/\/api\/v1\/admin\/meta$/, (route) =>
     json(route, {
       account,
@@ -487,7 +495,7 @@ export async function adminApi(
       domain: HOST,
       base_url: `https://${HOST}`,
       version: '4.3.0',
-      scanning: { scanners: 1, enabled: 1, rules: 2, assets: 0, queued: 0 },
+      scanning: { scanners: 1, enabled: 1, rules: 2, assets: 0, queued: queuedScans },
       severities: [],
       ...meta,
     }),

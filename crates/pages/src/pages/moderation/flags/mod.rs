@@ -51,6 +51,12 @@ pub fn FlagsPage(
     /// Records the judgement on one flag.
     #[prop(optional)]
     on_resolve: Option<Callback<(String, FlagState)>>,
+    /// Hands the flagged post to the scanners again. Absent where this token may not write.
+    #[prop(optional)]
+    on_scan: Option<Callback<String>>,
+    /// What the last re-queue did, said above the queue.
+    #[prop(optional)]
+    notice: Option<Signal<Option<String>>>,
 ) -> impl IntoView {
     let button = move |word: &'static str, value: Option<FlagState>| {
         let active = Signal::derive(move || filter.get() == value);
@@ -74,6 +80,11 @@ pub fn FlagsPage(
         <div class="flex flex-col gap-3">
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+            <Show when=move || notice.and_then(|notice| notice.get()).is_some()>
+                <p class="text-sm opacity-70" role="status">
+                    {move || notice.and_then(|notice| notice.get()).unwrap_or_default()}
+                </p>
             </Show>
 
             <div class="flex flex-wrap items-center gap-2">
@@ -150,6 +161,18 @@ pub fn FlagsPage(
                                         }
                                     >
                                         "Handled"
+                                    </button>
+                                    <button
+                                        class="btn btn-ghost btn-xs ml-auto"
+                                        disabled=move || !has_status || on_scan.is_none()
+                                        title="Hand this post to the scanners again"
+                                        on:click=move |_| {
+                                            if let Some(on_scan) = on_scan {
+                                                on_scan.run(status.clone());
+                                            }
+                                        }
+                                    >
+                                        "Scan now"
                                     </button>
                                 </div>
                             </li>

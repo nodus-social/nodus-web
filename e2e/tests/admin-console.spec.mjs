@@ -443,3 +443,54 @@ test('a content set downloads as the bytes the scanner was given', async ({ page
   for await (const chunk of stream) chunks.push(chunk)
   expect(Buffer.concat(chunks).toString()).toBe('a,b\n1,2\n')
 })
+
+test('the dashboard hands the review queue to the scanners again', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    scanners: [scanner(), scanner({ id: '9002', name: 'topics', kind: 'text' })],
+    flags: [
+      scanFlag(),
+      scanFlag({ id: '8002', scan_id: '8003', status_id: '101', created_at: '2026-11-07T09:00:00.000Z' }),
+    ],
+  })
+  await open(page, '/admin/overview')
+
+  // The dashboard has no subject of its own: what it hands over is the review queue.
+  const queued = page.getByText('Queued scans', { exact: true }).locator('..')
+  await expect(queued.locator('p').last()).toHaveText('0')
+
+  await page.getByRole('button', { name: 'Scan now' }).click()
+
+  // The endpoint takes one kind at a time, so two enabled kinds are two requests per post,
+  // and the two flags on the queue are the two posts: four, and no post twice.
+  await expect
+    .poll(() => calls.filter((call) => call.url.endsWith('/api/v1/admin/scans')).length)
+    .toBe(4)
+  const sentScans = calls
+    .filter((call) => call.url.endsWith('/api/v1/admin/scans'))
+    .map((call) => JSON.parse(call.body))
+  expect(sentScans.map((body) => `${body.subject_type}:${body.subject_id}`).sort()).toEqual([
+    'status:100',
+    'status:100',
+    'status:101',
+    'status:101',
+  ])
+  expect(sentScans.map((body) => body.kind).sort()).toEqual(['image', 'image', 'text', 'text'])
+
+  // The counters the panel paints are the server's, so they move only after a fresh read.
+  await expect(queued.locator('p').last()).toHaveText('4')
+})
+
+test('a flagged post is handed to the scanners again', async ({ page }) => {
+  const calls = await consoleAs(page, { flags: [scanFlag()], scanners: [scanner()] })
+  await open(page, '/moderation/scans')
+
+  await page.getByRole('button', { name: 'Scan now' }).click()
+
+  const queue = await sent(calls, (call) => call.url.endsWith('/api/v1/admin/scans'))
+  expect(JSON.parse(queue.body)).toMatchObject({
+    subject_type: 'status',
+    subject_id: '100',
+    kind: 'image',
+  })
+  await expect(page.getByText('Queued 1 scan for this post.')).toBeVisible()
+})
