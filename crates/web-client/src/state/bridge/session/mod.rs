@@ -27,6 +27,7 @@ pub(super) fn restore_saved() {
         return;
     };
     let Ok(instance) = Instance::parse(&stored.host) else {
+        super::forget_extensions();
         clear_session();
         return;
     };
@@ -131,6 +132,7 @@ pub fn sign_out() {
     };
     // Clear the active account's session record and admin grant before `forget` switches
     // to any fallback account, otherwise `clear_session` would wipe the fallback's record.
+    super::forget_extensions();
     clear_session();
     // The account being signed out is the one on screen, and it is the only one this
     // gesture may forget: the others keep their tokens and their SDKs.

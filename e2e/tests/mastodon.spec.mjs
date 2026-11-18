@@ -132,3 +132,14 @@ test('the composer still posts', async ({ page }) => {
   await expect.poll(() => published?.status).toBe('Posted from a Mastodon tab')
   expect(crashes, crashes.join('\n')).toEqual([])
 })
+
+test('the strip offers only the timelines the instance serves', async ({ page }) => {
+  await stubMastodon(page)
+  await signedIn(page)
+  await page.goto('/home')
+  await hydrated(page)
+  // The recommendation becomes a tab only once the account's instance has answered that
+  // it serves the extension surface; a Mastodon instance never does.
+  await expect(page.getByRole('tab')).toHaveText(['Home', 'Local', 'Federated'])
+  await expect(page.getByRole('tab', { name: 'Feed', exact: true })).toHaveCount(0)
+})

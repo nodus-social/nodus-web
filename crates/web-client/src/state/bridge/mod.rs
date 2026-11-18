@@ -36,6 +36,69 @@ use crate::state::oauth;
 
 pub mod accounts;
 pub mod actions;
+
+/// Whether the account's instance serves the Nodus extension surface.
+///
+/// A session can live on any server, so "this deployment has a recommendation engine" is
+/// not the question a screen needs answered: an account on a Mastodon instance can read its
+/// own server's timelines and none of the surfaces built on top of ours. The answer is
+/// therefore asked of the account's instance, once per host per page, and recorded here so
+/// that a view can read it synchronously — a render must not wait on a request.
+thread_local! {
+    static EXTENSIONS: RefCell<Option<(String, bool)>> = const { RefCell::new(None) };
+}
+
+fn extensions_revision() -> RwSignal<u64> {
+    thread_local! {
+        static REVISION: RwSignal<u64> = RwSignal::new(0);
+    }
+    REVISION.with(|revision| *revision)
+}
+
+/// What the extension question answered, as a signal a view can depend on.
+///
+/// `false` until an answer arrives: showing a surface the instance cannot serve is a worse
+/// first frame than showing it a moment late.
+#[must_use]
+pub fn supports_extensions() -> Signal<bool> {
+    let revision = extensions_revision();
+    Signal::derive(move || {
+        revision.get();
+        EXTENSIONS.with_borrow(|known| known.as_ref().is_some_and(|(_, known)| *known))
+    })
+}
+
+/// Asks the account's instance whether it serves the extension surface.
+///
+/// Called from adoption and from a sign-in, not from a render: the answer arrives later and
+/// repaints whatever read [`supports_extensions`].
+pub async fn probe_extensions() -> bool {
+    let Some(host) = session_host() else {
+        return false;
+    };
+    if let Some((known_host, known)) = EXTENSIONS.with_borrow(|known| known.clone()) {
+        if known_host == host {
+            return known;
+        }
+    }
+    let Some(transport) = instance_transport() else {
+        return false;
+    };
+    let Ok(url) = transport.url("/api/v1/meta") else {
+        return false;
+    };
+    let answer = transport.send_empty(transport.get(url)).await.is_ok();
+    EXTENSIONS.with_borrow_mut(|known| *known = Some((host, answer)));
+    extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
+    answer
+}
+
+/// Forgets what was asked, for when the session changes under it.
+pub fn forget_extensions() {
+    EXTENSIONS.with_borrow_mut(|known| *known = None);
+    extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
+}
+
 #[cfg_attr(
     not(feature = "admin"),
     allow(
@@ -340,6 +403,7 @@ fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
         let sdk = Rc::clone(&sdk);
         async move {
             sdk.load_capabilities().await;
+            probe_extensions().await;
         }
     });
 

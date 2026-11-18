@@ -15,13 +15,16 @@ use crate::state::feeds;
 pub fn PrimaryTabs() -> impl IntoView {
     let route = router::route();
     let changed = feeds::revision();
+    // A recommendation needs an engine, and an account on another server has none: the
+    // strip offers what the instance can answer.
+    let extensions = crate::state::bridge::supports_extensions();
 
     let links = Signal::derive(move || {
         if let Some(changed) = changed {
             changed.get();
         }
         let mut links = vec![link(Route::Home, "Home")];
-        if feeds::enabled(feeds::Feed::Recommended) {
+        if extensions.get() && feeds::enabled(feeds::Feed::Recommended) {
             links.push(link(Route::Feed, "Feed"));
         }
         if feeds::enabled(feeds::Feed::Local) {

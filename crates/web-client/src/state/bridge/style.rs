@@ -438,40 +438,12 @@ pub async fn reset_style() -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the account's instance keeps session styling, asked once per host.
+/// Whether the account's instance keeps session styling.
+///
+/// Session styling is one part of the extension surface, so the question is the same one
+/// the rest of the interface asks: does the instance this account lives on serve it?
 async fn keeps_styling_async() -> bool {
-    let Some(transport) = instance_transport() else {
-        return false;
-    };
-    let Some(host) = super::session_host() else {
-        return false;
-    };
-    if let Some(known) = styling_support(&host) {
-        return known;
-    }
-    let Ok(url) = transport.url("/api/v1/meta") else {
-        return false;
-    };
-    let request = transport.get(url);
-    let known = transport.send_empty(request).await.is_ok();
-    remember_styling_support(&host, known);
-    known
-}
-
-fn styling_support(host: &str) -> Option<bool> {
-    STYLING_SUPPORT.with_borrow(|known| known.get(host).copied())
-}
-
-fn remember_styling_support(host: &str, known: bool) {
-    STYLING_SUPPORT.with_borrow_mut(|support| {
-        support.insert(host.to_owned(), known);
-    });
-}
-
-thread_local! {
-    /// Hosts this page has asked about styling. `None` means not asked yet.
-    static STYLING_SUPPORT: std::cell::RefCell<std::collections::HashMap<String, bool>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    super::probe_extensions().await
 }
 
 async fn fetch_style_with(transport: &BrowserInstance) -> Result<SessionStyle, String> {
