@@ -168,3 +168,20 @@ test('a browser asks a Mastodon instance about extensions once, then remembers',
   expect(await page.evaluate(() => localStorage.getItem('nodus-extensions/1'))).toContain('no')
 })
 
+
+test('an instance that cannot confirm the session says so and leaves the rail', async ({ page }) => {
+  await stubMastodon(page)
+  // Mastodon's API answering 500 is what a broken deployment looks like from here.
+  await page.route('**/api/v1/accounts/verify_credentials', (route) =>
+    route.fulfill({ status: 500, headers: { 'access-control-allow-origin': '*' }, body: 'down' }),
+  )
+
+  await signedIn(page)
+  await page.goto('/home')
+  await hydrated(page)
+
+  const card = page.locator('[data-trouble]')
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await expect(card).toContainText('could not confirm the saved session')
+  await expect(card.getByRole('link', { name: /Switch account/ })).toBeVisible()
+})

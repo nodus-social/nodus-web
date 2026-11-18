@@ -158,7 +158,7 @@ impl Drop for Claim {
 /// Waits for `future`, or for `limit`, whichever comes first.
 ///
 /// `None` means the instance did not answer in time; the caller treats that as "no".
-async fn patience<F: std::future::Future>(future: F, limit: std::time::Duration) -> Option<F::Output> {
+pub(super) async fn patience<F: std::future::Future>(future: F, limit: std::time::Duration) -> Option<F::Output> {
     use std::cell::RefCell;
     use std::rc::Rc;
     let slot: Rc<RefCell<Option<F::Output>>> = Rc::new(RefCell::new(None));

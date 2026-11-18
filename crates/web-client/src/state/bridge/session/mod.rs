@@ -297,7 +297,17 @@ fn restore(stored: StoredSession) {
     let ui = feed_ui();
     ui.refreshing.set(true);
     wasm_bindgen_futures::spawn_local(async move {
-        match sdk.sign_in(&stored.host, scopes()).await {
+        // A host that never answers must not hold the whole app on its skeleton: the
+        // account stays signed in and the screen says which instance is at fault.
+        let asking = sdk.sign_in(&stored.host, scopes());
+        let answered = super::patience(asking, RESTORE_PATIENCE).await;
+        match answered.unwrap_or_else(|| {
+            Err(WebSdkError::Instance(
+                nodus_client_sdk::instance_api::Error::Transport(
+                    format!("{} did not answer in time", stored.host),
+                ),
+            ))
+        }) {
             Ok(session) => {
                 if super::is_current_sdk(&sdk) {
                     // Always save/register so PENDING moves into LIVE even when
@@ -330,13 +340,19 @@ fn restore(stored: StoredSession) {
                 ) {
                     clear_session();
                 }
-                ui.error
-                    .set(Some(format!("Saved session did not restore: {error}")));
+                ui.error.set(Some(format!(
+                    "{} could not confirm the saved session ({error}). Sign in again, or \
+                     switch to another account in Settings.",
+                    stored.host
+                )));
                 ui.refreshing.set(false);
             }
         }
     });
 }
+
+/// How long a stored session waits for its instance to confirm it.
+const RESTORE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The scopes a pasted token is assumed to carry.
 ///
