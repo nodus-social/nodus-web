@@ -281,6 +281,16 @@ export function scanFlag(overrides = {}) {
   }
 }
 
+/** One inbound block, as the console reads it back. */
+export function remoteBlock(overrides = {}) {
+  return {
+    actor: 'https://peer.example/users/x',
+    host: 'peer.example',
+    created_at: '2026-11-18T17:00:00Z',
+    ...overrides,
+  }
+}
+
 /**
  * Stub the moderation and administration endpoints, and record what the console asked.
  *
@@ -305,6 +315,7 @@ export async function adminApi(
     meta = {},
     topology = null,
     logs = [],
+    remoteBlocks = [],
   } = {},
 ) {
   const calls = []
@@ -367,6 +378,13 @@ export async function adminApi(
   await page.route(/\/api\/v1\/admin\/domain_blocks/, (route) => json(route, blocks))
   await page.route(/\/api\/v1\/admin\/domain_blocks\/import$/, (route) => json(route, { blocked: 2, skipped: ['not a domain'] }))
   await page.route(/\/api\/v1\/admin\/domain_allows/, (route) => json(route, []))
+  await page.route(/\/api\/v1\/admin\/federation\/remote-blocks/, (route) => {
+    if (route.request().method() === 'DELETE') {
+      record(route)
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    return json(route, { blocks: remoteBlocks })
+  })
   await page.route(/\/api\/v1\/admin\/email_domain_blocks/, (route) => json(route, mail))
   await page.route(/\/api\/v1\/admin\/warning_presets/, (route) => json(route, presets))
   await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))

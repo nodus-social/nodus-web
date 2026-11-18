@@ -14,6 +14,7 @@ import {
   chartSpecs,
   granted,
   hydrated,
+  remoteBlock,
   report,
   scanFlag,
   scanner,
@@ -233,6 +234,24 @@ test('a mail domain is blocked from the administration screen', async ({ page })
 
   const create = await sent(calls, (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/email_domain_blocks'),)
   expect(create.body).toContain('domain=mail.example')
+})
+
+test('a peer that blocks an account is listed and can be cleared', async ({ page }) => {
+  const calls = await consoleAs(page, { remoteBlocks: [remoteBlock()] })
+  await open(page, '/admin/domains')
+
+  await expect(page.getByText('Remote blocks')).toBeVisible()
+  await expect(page.getByText('peer.example', { exact: true })).toBeVisible()
+  await expect(page.getByText('https://peer.example/users/x')).toBeVisible()
+
+  // The clear asks first: the record is the only sign the peer asked to be skipped.
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect(page.getByText('https://peer.example/users/x')).toBeVisible()
+  await page.getByRole('button', { name: 'Clear block' }).click()
+
+  const cleared = await sent(calls, (call) => call.method === 'DELETE' && call.url.endsWith('/api/v1/admin/federation/remote-blocks'))
+  expect(JSON.parse(cleared.body)).toEqual({ host: 'peer.example' })
+  await expect(page.getByText('No peer has blocked us.')).toBeVisible()
 })
 
 test('a canned reply is saved with its title and text', async ({ page }) => {

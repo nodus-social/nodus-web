@@ -296,6 +296,64 @@ pub async fn delete_domain_allow(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// An inbound block, as the instance returns it: who was blocked, by which peer, and when.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RemoteBlock {
+    /// The blocked account, as a URI on the peer.
+    pub actor: String,
+    /// The peer that sent the block, as its bare host.
+    pub host: String,
+    /// When the block arrived, as the instance wrote it down.
+    pub created_at: String,
+}
+
+/// The envelope the remote block read answers with.
+#[derive(serde::Deserialize)]
+struct RemoteBlocks {
+    blocks: Vec<RemoteBlock>,
+}
+
+/// Peers that have told this instance they block one of its accounts, newest first.
+///
+/// A Nodus extension rather than a Mastodon endpoint, so a screen that shows it is gated on
+/// `supports_extensions`.
+pub async fn remote_blocks() -> Result<Vec<RemoteBlock>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/federation/remote-blocks")
+        .map_err(|error| error.to_string())?;
+    let answer: RemoteBlocks = transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(answer.blocks)
+}
+
+/// Clears one peer's block, which is what lets delivery to it resume.
+pub async fn delete_remote_block(host: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/federation/remote-blocks")
+        .map_err(|error| error.to_string())?;
+    // The endpoint names the row in a JSON body rather than in the path: the one shape no
+    // helper on the shared instance takes.
+    let body = serde_json::to_vec(&serde_json::json!({ "host": host }))
+        .map_err(|error| error.to_string())?;
+    let mut request = transport.delete(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .send_empty(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Accounts waiting for a moderator to decide.
 pub async fn pending_accounts() -> Result<Vec<AdminAccount>, String> {
     let transport = admin_transport()
