@@ -143,3 +143,28 @@ test('the strip offers only the timelines the instance serves', async ({ page })
   await expect(page.getByRole('tab')).toHaveText(['Home', 'Local', 'Federated'])
   await expect(page.getByRole('tab', { name: 'Feed', exact: true })).toHaveCount(0)
 })
+
+test('a browser asks a Mastodon instance about extensions once, then remembers', async ({ page }) => {
+  await stubMastodon(page)
+  await signedIn(page)
+  const asked = []
+  page.on('request', (request) => {
+    // Only the account's instance is the question here: this site's own engine probe is a
+    // different fact and is asked on every load.
+    if (request.url().includes(`${MASTODON}/api/v1/meta`)) asked.push(request.url())
+  })
+
+  await page.goto('/home')
+  await hydrated(page)
+  await expect(page.getByRole('tab')).toHaveText(['Home', 'Local', 'Federated'])
+  const first = asked.length
+
+  await page.reload()
+  await hydrated(page)
+  await expect(page.getByRole('tab')).toHaveText(['Home', 'Local', 'Federated'])
+  // The answer is kept beside the session: a refused request on every load would be a
+  // question asked over and over with the same answer.
+  expect(asked.length).toBe(first)
+  expect(await page.evaluate(() => localStorage.getItem('nodus-extensions/1'))).toContain('no')
+})
+

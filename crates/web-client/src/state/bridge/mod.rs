@@ -42,10 +42,12 @@ pub mod actions;
 /// A session can live on any server, so "this deployment has a recommendation engine" is
 /// not the question a screen needs answered: an account on a Mastodon instance can read its
 /// own server's timelines and none of the surfaces built on top of ours. The answer is
-/// therefore asked of the account's instance, once per host per page, and recorded here so
-/// that a view can read it synchronously — a render must not wait on a request.
+/// therefore asked of the account's instance, once per host for this browser, and recorded
+/// here so a view can read it synchronously — a render must not wait on a request.
 thread_local! {
     static EXTENSIONS: RefCell<Option<(String, bool)>> = const { RefCell::new(None) };
+    /// Whether a request for the answer is already in flight.
+    static ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn extensions_revision() -> RwSignal<u64> {
@@ -68,10 +70,46 @@ pub fn supports_extensions() -> Signal<bool> {
     })
 }
 
+/// Where the answer for a host is remembered between visits.
+///
+/// One browser meets a Mastodon instance once, not once per page: keeping the answer beside
+/// the session costs a line of storage and saves a refused request on every load.
+const SUPPORT_KEY: &str = "nodus-extensions/1";
+
+fn remembered_support(host: &str) -> Option<bool> {
+    let stored = crate::platform::storage::get(SUPPORT_KEY)?;
+    stored.lines().find_map(|line| {
+        let (known_host, answer) = line.split_once('\t')?;
+        (known_host == host).then(|| answer.trim() == "yes")
+    })
+}
+
+fn remember_support(host: &str, answer: bool) {
+    let mut lines: Vec<String> = crate::platform::storage::get(SUPPORT_KEY)
+        .map(|stored| {
+            stored
+                .lines()
+                .filter(|line| !line.starts_with(&format!("{host}\t")))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.push(format!("{host}\t{}", if answer { "yes" } else { "no" }));
+    crate::platform::storage::set(SUPPORT_KEY, &lines.join("\n"));
+}
+
+fn settle(host: &str, answer: bool) -> bool {
+    EXTENSIONS.with_borrow_mut(|known| *known = Some((host.to_owned(), answer)));
+    remember_support(host, answer);
+    extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
+    answer
+}
+
 /// Asks the account's instance whether it serves the extension surface.
 ///
 /// Called from adoption and from a sign-in, not from a render: the answer arrives later and
-/// repaints whatever read [`supports_extensions`].
+/// repaints whatever read [`supports_extensions`]. A host this browser has already asked
+/// about is not asked again, and a question already in flight is not asked twice.
 pub async fn probe_extensions() -> bool {
     let Some(host) = session_host() else {
         return false;
@@ -81,16 +119,22 @@ pub async fn probe_extensions() -> bool {
             return known;
         }
     }
+    if let Some(known) = remembered_support(&host) {
+        return settle(&host, known);
+    }
+    if ASKING.with(std::cell::Cell::get) {
+        return false;
+    }
     let Some(transport) = instance_transport() else {
         return false;
     };
     let Ok(url) = transport.url("/api/v1/meta") else {
         return false;
     };
+    ASKING.with(|asking| asking.set(true));
     let answer = transport.send_empty(transport.get(url)).await.is_ok();
-    EXTENSIONS.with_borrow_mut(|known| *known = Some((host, answer)));
-    extensions_revision().update(|revision| *revision = revision.wrapping_add(1));
-    answer
+    ASKING.with(|asking| asking.set(false));
+    settle(&host, answer)
 }
 
 /// Forgets what was asked, for when the session changes under it.
