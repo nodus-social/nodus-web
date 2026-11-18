@@ -132,9 +132,52 @@ pub async fn probe_extensions() -> bool {
         return false;
     };
     ASKING.with(|asking| asking.set(true));
-    let answer = transport.send_empty(transport.get(url)).await.is_ok();
-    ASKING.with(|asking| asking.set(false));
+    // A host that answers slowly must not keep the question "in flight" for the rest of the
+    // visit: an abandoned future has to release the claim too.
+    let _claim = Claim;
+    let answering = transport.send_empty(transport.get(url));
+    let answer = match patience(answering, PATIENCE).await {
+        Some(Ok(())) => true,
+        Some(Err(_)) | None => false,
+    };
     settle(&host, answer)
+}
+
+/// How long a question waits for an answer before the surface is assumed absent.
+const PATIENCE: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// Holds the claim on the extension question and gives it back however the future ends.
+struct Claim;
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        ASKING.with(|asking| asking.set(false));
+    }
+}
+
+/// Waits for `future`, or for `limit`, whichever comes first.
+///
+/// `None` means the instance did not answer in time; the caller treats that as "no".
+async fn patience<F: std::future::Future>(future: F, limit: std::time::Duration) -> Option<F::Output> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let slot: Rc<RefCell<Option<F::Output>>> = Rc::new(RefCell::new(None));
+    let filled = Rc::clone(&slot);
+    let answering = async move {
+        *filled.borrow_mut() = Some(future.await);
+    };
+    let clock = async move {
+        gloo_timers::future::TimeoutFuture::new(
+            u32::try_from(limit.as_millis()).unwrap_or(u32::MAX),
+        )
+        .await;
+    };
+    let mut answering = Box::pin(answering);
+    let mut clock = Box::pin(clock);
+    match futures_util::future::select(answering, clock).await {
+        futures_util::future::Either::Left((_, _)) => slot.borrow_mut().take(),
+        futures_util::future::Either::Right(_) => None,
+    }
 }
 
 /// Forgets what was asked, for when the session changes under it.
