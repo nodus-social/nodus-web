@@ -974,10 +974,9 @@ impl PlacedModule {
 /// useful on a first visit.
 #[must_use]
 pub fn default_modules() -> Vec<PlacedModule> {
-    vec![
-        PlacedModule::new(ModuleKind::TrendingTags),
-        PlacedModule::new(ModuleKind::TrendingUsers),
-    ]
+    // Nothing is on until the reader asks for it: a column of trending cards is a decision
+    // about what the site is for, and a new account has not made it.
+    Vec::new()
 }
 
 /// Full per-account session styling and navigation layout state.
@@ -1699,7 +1698,7 @@ mod hidden_tests {
             style.modules.first().map(|held| held.kind),
             Some(ModuleKind::Notifications)
         );
-        assert_eq!(style.modules.len(), 3);
+        assert_eq!(style.modules.len(), 2);
 
         assert!(style.remove_module(ModuleKind::Notifications));
         assert!(!style.remove_module(ModuleKind::Notifications));

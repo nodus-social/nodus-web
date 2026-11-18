@@ -920,11 +920,23 @@ pub fn Rail(
     // while a queued update is still holding them.
     let nav = Memo::new(move |_| style.map(|s| s.get().nav).unwrap_or_default());
     let rails = Memo::new(move |_| {
-        nav.get()
+        let layout = nav.get();
+        let rails = layout
             .rails_in(ModuleRail::Left)
             .into_iter()
             .cloned()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        // An account whose layout never arrived has no cards to draw, but a reader who
+        // expected a rail and found an empty column cannot find their way out of it: the
+        // default categories stand in until a layout says otherwise.
+        if rails.is_empty() && layout.rails.is_empty() {
+            return crate::session_style::NavLayout::default()
+                .rails_in(ModuleRail::Left)
+                .into_iter()
+                .cloned()
+                .collect();
+        }
+        rails
     });
     let staff_here =
         Memo::new(move |_| style.is_none_or(|s| s.get().staff_rail == ModuleRail::Left));
