@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_client_core::model::{Report, ReportFilter};
 use nodus_pages::pages::moderation::reports::{ReportQuery, ReportsPage};
+use nodus_pages::pages::moderation::{BulkOutcome, ReportBatch};
 
 use crate::routes::format::relative_time;
 use crate::state::bridge::{admin, revision};
@@ -24,6 +25,7 @@ pub fn ReportQueue() -> impl IntoView {
     let (error, set_error) = signal(None::<String>);
     let (has_more, set_has_more) = signal(false);
     let (selected, set_selected) = signal(None::<Report>);
+    let (bulk, set_bulk) = signal(BulkOutcome::default());
 
     let filter = move |query: &ReportQuery| ReportFilter {
         state: query.state_value(),
@@ -129,6 +131,31 @@ pub fn ReportQueue() -> impl IntoView {
         });
     });
 
+    // One action over every ticked report. The instance answers per id, so a report it
+    // refused keeps its sentence on its own row instead of becoming one toast.
+    let batch = Callback::new(move |request: ReportBatch| {
+        spawn_local(async move {
+            let outcome = admin::bulk_reports(
+                &request.ids,
+                request.action.wire(),
+                request.assignee.as_deref(),
+                &request.note,
+            )
+            .await;
+            match outcome {
+                Ok(answer) => {
+                    set_bulk.set(BulkOutcome {
+                        applied: answer.applied,
+                        refusals: answer.refusals,
+                    });
+                    set_error.set(None);
+                    refresh();
+                }
+                Err(problem) => set_error.set(Some(problem)),
+            }
+        });
+    });
+
     // The clock is the browser's; the page only asks how long ago a report was filed.
     let age_of = Callback::new(|created_at: String| relative_time(&created_at));
 
@@ -148,6 +175,9 @@ pub fn ReportQueue() -> impl IntoView {
             on_resolve=resolve
             on_reopen=reopen
             on_assign=assign
+            bulk=bulk
+            on_bulk=batch
+            write=Some(crate::state::bridge::admin::may_write())
         />
     }
 }

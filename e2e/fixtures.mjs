@@ -348,6 +348,7 @@ export async function adminApi(
     remoteBlocks = [],
     audit = [],
     announcements = [],
+    bulkRefusals = {},
   } = {},
 ) {
   const calls = []
@@ -501,6 +502,25 @@ export async function adminApi(
     }),
   )
   await page.route(/\/api\/v1\/admin\/audit/, (route) => json(route, audit))
+  // The batch endpoints answer per id, and they are registered after the single-row routes
+  // above because those match any one trailing segment — `/accounts/bulk` included.
+  const bulk = (route) => {
+    record(route)
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    const ids = body.ids ?? []
+    const results = ids.map((id) =>
+      bulkRefusals[id]
+        ? { id, ok: false, error: bulkRefusals[id] }
+        : { id, ok: true },
+    )
+    return route.fulfill({
+      status: 200,
+      headers: CORS,
+      json: { results, applied: results.filter((item) => item.ok).length },
+    })
+  }
+  await page.route(/\/api\/v1\/admin\/accounts\/bulk$/, bulk)
+  await page.route(/\/api\/v1\/admin\/reports\/bulk$/, bulk)
   return calls
 }
 

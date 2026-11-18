@@ -11,6 +11,8 @@ use nodus_client_core::model::{
 
 use crate::components::panel::Panel;
 
+use super::{AccountBatch, AccountBulkAction, BulkOutcome};
+
 /// The states the filter offers, in the order it offers them.
 const STATUSES: [(&str, Option<AccountStatus>); 6] = [
     ("Any standing", None),
@@ -75,8 +77,32 @@ pub fn AccountsPage(
     /// Forgets a note.
     #[prop(optional)]
     on_note_delete: Option<Callback<(String, String)>>,
+    /// What the last batch answered: its summary and the rows it refused.
+    #[prop(into)]
+    bulk: Signal<BulkOutcome>,
+    /// Applies one action to every ticked account.
+    #[prop(optional)]
+    on_bulk: Option<Callback<AccountBatch>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
+    // The selection is the page's own: which rows are ticked is a state of this list, not
+    // something the caller asked for or the server knows about.
+    let selected = RwSignal::new(Vec::<String>::new());
+    let chosen = StoredValue::new(AccountBulkAction::Approve);
+    let reason = StoredValue::new(String::new());
+    // A `Callback`, not a closure: the tick sits inside a `<Show>` in the row, and a
+    // render-time child has to be shareable between threads.
+    let toggle = Callback::new(move |(id, on): (String, bool)| {
+        selected.update(|held| {
+            if on {
+                if !held.contains(&id) {
+                    held.push(id);
+                }
+            } else {
+                held.retain(|ticked| ticked != &id);
+            }
+        });
+    });
     view! {
         <Show when=move || error.get().is_some()>
             <p class="mb-2 text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
@@ -211,6 +237,76 @@ pub fn AccountsPage(
             </button>
         </Panel>
 
+        <Show when=move || write.get() && !selected.get().is_empty()>
+            <div
+                class="mb-2 flex flex-wrap items-end gap-2 rounded-box border border-base-300 bg-base-200 px-3 py-2"
+                role="group"
+                aria-label="Bulk account action"
+            >
+                <p class="text-sm font-medium">
+                    {move || format!("{} selected", selected.get().len())}
+                </p>
+                <select
+                    class="select select-bordered select-sm"
+                    aria-label="Bulk action"
+                    on:change=move |event| {
+                        let picked = event_target_value(&event);
+                        if let Some(found) = AccountBulkAction::ALL
+                            .into_iter()
+                            .find(|candidate| candidate.wire() == picked)
+                        {
+                            chosen.set_value(found);
+                        }
+                    }
+                >
+                    {AccountBulkAction::ALL
+                        .into_iter()
+                        .map(|candidate| {
+                            view! { <option value=candidate.wire()>{candidate.label()}</option> }
+                        })
+                        .collect_view()}
+                </select>
+                <input
+                    class="input input-bordered input-sm w-full sm:w-64"
+                    placeholder="Reason (recorded in the log)"
+                    on:input=move |event| reason.set_value(event_target_value(&event))
+                />
+                <button
+                    class="btn btn-primary btn-sm"
+                    disabled=move || on_bulk.is_none()
+                    on:click=move |_| {
+                        if let Some(on_bulk) = on_bulk {
+                            let ids = selected.get_untracked();
+                            if ids.is_empty() {
+                                return;
+                            }
+                            on_bulk
+                                .run(AccountBatch {
+                                    ids,
+                                    action: chosen.get_value(),
+                                    reason: reason.get_value(),
+                                });
+                            // The batch has gone out; what comes back is per row, so the tick
+                            // marks have done their work. Clearing them also makes the next
+                            // selection deliberate rather than a leftover.
+                            selected.set(Vec::new());
+                        }
+                    }
+                >
+                    "Apply to selection"
+                </button>
+                <button class="btn btn-ghost btn-sm" on:click=move |_| selected.set(Vec::new())>
+                    "Clear"
+                </button>
+            </div>
+        </Show>
+
+        <Show when=move || bulk.get() != BulkOutcome::default()>
+            <p class="mb-2 text-sm" role="status">
+                {move || bulk.get().summary()}
+            </p>
+        </Show>
+
         <Show when=move || detail.get().is_some()>
             {move || match detail.get() {
                 Some(open) => detail_panel(
@@ -240,8 +336,23 @@ pub fn AccountsPage(
                     let email = account.email.clone().unwrap_or_default();
                     let reports = account.open_reports;
                     let notes = account.notes_count;
+                    let label = format!("Select {name}");
                     view! {
-                        <li>
+                        <li class="flex items-start gap-2">
+                            <Show when=move || write.get()>
+                                <input
+                                    type="checkbox"
+                                    class="checkbox checkbox-sm mt-3"
+                                    aria-label=label.clone()
+                                    prop:checked=move || {
+                                        selected.get().iter().any(|ticked| ticked == &id.get_value())
+                                    }
+                                    on:change=move |event| {
+                                        toggle.run((id.get_value(), event_target_checked(&event)));
+                                    }
+                                />
+                            </Show>
+                            <div class="min-w-0 flex-1">
                             <button
                                 class="flex w-full items-center justify-between gap-2 rounded-box bg-base-100 px-3 py-2 text-left shadow-sm hover:bg-base-200"
                                 disabled=on_open.is_none()
@@ -267,6 +378,14 @@ pub fn AccountsPage(
                                     <p>{format!("{notes} note(s)")}</p>
                                 </div>
                             </button>
+                            <Show when=move || {
+                                bulk.get().refusal_for(&id.get_value()).is_some()
+                            }>
+                                <p class="mt-1 text-xs text-error" role="alert">
+                                    {move || bulk.get().refusal_for(&id.get_value()).unwrap_or_default()}
+                                </p>
+                            </Show>
+                            </div>
                         </li>
                     }
                 }

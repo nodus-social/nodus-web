@@ -200,3 +200,163 @@ pub fn ModerationPage(
         </Screen>
     }
 }
+
+/// What one batch of moderation asked for.
+///
+/// The accounts and the reports batch answer the same way — a result per id, because a
+/// selection of two hundred is two hundred decisions and three of them may be refused — so
+/// the shape is here rather than twice beside the two lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BulkOutcome {
+    /// How many ids the instance changed.
+    pub applied: u64,
+    /// The ids it refused, each with the sentence it gave for that id.
+    pub refusals: Vec<(String, String)>,
+}
+
+impl BulkOutcome {
+    /// The instance's sentence for one id, when it refused that id.
+    #[must_use]
+    pub fn refusal_for(&self, id: &str) -> Option<String> {
+        self.refusals
+            .iter()
+            .find(|(refused, _)| refused == id)
+            .map(|(_, why)| why.clone())
+    }
+
+    /// One line for the batch as a whole, drawn above the list it was applied to.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let refused = self.refusals.len();
+        if refused == 0 {
+            return format!("{} applied.", self.applied);
+        }
+        if self.applied == 0 {
+            return format!("All {refused} refused. The reason is on each row.");
+        }
+        format!(
+            "{} applied, {refused} refused. The reason is on each refused row.",
+            self.applied
+        )
+    }
+}
+
+/// The actions `POST /admin/accounts/bulk` accepts, in the order the bar offers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountBulkAction {
+    /// Let an account in.
+    Approve,
+    /// Refuse it, and leave it refused.
+    Reject,
+    /// Quiet it without removing it.
+    Silence,
+    /// Remove it.
+    Suspend,
+    /// Put it back in good standing.
+    Enable,
+    /// Lift a silence.
+    Unsilence,
+    /// Lift a suspension.
+    Unsuspend,
+}
+
+impl AccountBulkAction {
+    /// Every action, in the order the bar offers them.
+    pub const ALL: [Self; 7] = [
+        Self::Approve,
+        Self::Reject,
+        Self::Silence,
+        Self::Suspend,
+        Self::Enable,
+        Self::Unsilence,
+        Self::Unsuspend,
+    ];
+
+    /// The word the API takes.
+    #[must_use]
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Reject => "reject",
+            Self::Silence => "silence",
+            Self::Suspend => "suspend",
+            Self::Enable => "enable",
+            Self::Unsilence => "unsilence",
+            Self::Unsuspend => "unsuspend",
+        }
+    }
+
+    /// The word on the option.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Approve => "Approve",
+            Self::Reject => "Reject",
+            Self::Silence => "Silence",
+            Self::Suspend => "Suspend",
+            Self::Enable => "Restore",
+            Self::Unsilence => "Unsilence",
+            Self::Unsuspend => "Unsuspend",
+        }
+    }
+}
+
+/// The actions `POST /admin/reports/bulk` accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportBulkAction {
+    /// Claim the reports for one account.
+    Assign,
+    /// Close them with one note.
+    Resolve,
+    /// Put them back in the queue.
+    Reopen,
+}
+
+impl ReportBulkAction {
+    /// Every action, in the order the bar offers them.
+    pub const ALL: [Self; 3] = [Self::Assign, Self::Resolve, Self::Reopen];
+
+    /// The word the API takes.
+    #[must_use]
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::Assign => "assign",
+            Self::Resolve => "resolve",
+            Self::Reopen => "reopen",
+        }
+    }
+
+    /// The word on the option.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Assign => "Assign",
+            Self::Resolve => "Resolve",
+            Self::Reopen => "Reopen",
+        }
+    }
+}
+
+/// One batch request the caller has to send.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountBatch {
+    /// The accounts the moderator ticked.
+    pub ids: Vec<String>,
+    /// What to do with them.
+    pub action: AccountBulkAction,
+    /// The sentence that goes in the log.
+    pub reason: String,
+}
+
+/// One batch request against the report queue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportBatch {
+    /// The reports the moderator ticked.
+    pub ids: Vec<String>,
+    /// What to do with them.
+    pub action: ReportBulkAction,
+    /// The account to claim them for, when the action is `Assign`.
+    pub assignee: Option<String>,
+    /// The decision's note, when the action is `Resolve`.
+    pub note: String,
+}

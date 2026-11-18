@@ -6,11 +6,9 @@ use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
-    AuditFilter,
-    DomainAllow, DomainBlock, DomainBlockDraft, DomainImportOutcome, DomainSeverity,
-    EmailDomainBlock, FlagState,
-    ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ScanFlag,
-    ScanRequest, ScanSeverity, Scanner, ScannerAsset, ScannerKind, ScannerRule, Topology,
+    AuditFilter, DomainAllow, DomainBlock, DomainBlockDraft, DomainImportOutcome, DomainSeverity,
+    EmailDomainBlock, FlagState, ModerationAction, NewScanner, NodeLog, Report, ReportFilter,
+    ScanFlag, ScanRequest, ScanSeverity, Scanner, ScannerAsset, ScannerKind, ScannerRule, Topology,
     TriggerOutcome, WarningPreset,
 };
 
@@ -301,7 +299,9 @@ async fn ask_role() -> Result<Option<Role>, String> {
     let bytes = transport
         .fetch_bytes(transport.get(url))
         .await
-        .map_err(|error| format!("The instance did not say what role this account holds: {error}"))?;
+        .map_err(|error| {
+            format!("The instance did not say what role this account holds: {error}")
+        })?;
     let answer: RoleAnswer = serde_json::from_slice(&bytes).map_err(|error| {
         format!("The instance's answer about this account's role could not be read: {error}")
     })?;
@@ -1227,4 +1227,109 @@ pub async fn update_warning_preset(
         .update_warning_preset(id, title, text)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// What a batch answered, id by id.
+///
+/// The API applies each id on the request's own transaction and answers per id, because a
+/// moderator who ticked two hundred accounts needs to know which three did not go through,
+/// not merely that the request was refused. The refusals are kept with the ids they name so
+/// the screen can put each sentence on its own row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    /// How many ids the instance changed.
+    pub applied: u64,
+    /// Each id it refused, with the sentence it gave.
+    pub refusals: Vec<(String, String)>,
+}
+
+/// One id's line in a batch answer.
+#[derive(Debug, serde::Deserialize)]
+struct BatchItem {
+    id: String,
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// A batch answer as the instance writes it.
+#[derive(Debug, serde::Deserialize)]
+struct BatchAnswer {
+    #[serde(default)]
+    results: Vec<BatchItem>,
+}
+
+impl BatchAnswer {
+    /// Splits the per-id lines into a count and the refusals.
+    fn into_outcome(self) -> BatchOutcome {
+        let mut outcome = BatchOutcome::default();
+        for item in self.results {
+            if item.ok {
+                outcome.applied += 1;
+            } else {
+                outcome.refusals.push((
+                    item.id,
+                    item.error
+                        .unwrap_or_else(|| "the instance refused this id".to_owned()),
+                ));
+            }
+        }
+        outcome
+    }
+}
+
+/// Posts a batch document to `path` and splits the per-id answer.
+async fn post_batch(path: &str, body: &serde_json::Value) -> Result<BatchOutcome, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport.url(path).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec(body).map_err(|error| error.to_string())?;
+    let answer: BatchAnswer = transport
+        .fetch(transport.post_body(url, "application/json", bytes))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(answer.into_outcome())
+}
+
+/// Applies one action to many accounts. Requires `admin:write`.
+///
+/// `reason` is the sentence the audit row carries for every account in the batch; the
+/// instance records one row per account it changed.
+pub async fn bulk_moderate(
+    ids: &[String],
+    action: &str,
+    reason: &str,
+) -> Result<BatchOutcome, String> {
+    post_batch(
+        "/api/v1/admin/accounts/bulk",
+        &serde_json::json!({
+            "ids": ids,
+            "action": action,
+            "reason": reason,
+            // This instance does not send mail yet; the field is accepted and ignored.
+            "notify": false,
+        }),
+    )
+    .await
+}
+
+/// Claims, closes or reopens many reports at once. Requires `admin:write`.
+pub async fn bulk_reports(
+    ids: &[String],
+    action: &str,
+    assignee: Option<&str>,
+    note: &str,
+) -> Result<BatchOutcome, String> {
+    post_batch(
+        "/api/v1/admin/reports/bulk",
+        &serde_json::json!({
+            "ids": ids,
+            "action": action,
+            "assignee_id": assignee,
+            "note": note,
+        }),
+    )
+    .await
 }

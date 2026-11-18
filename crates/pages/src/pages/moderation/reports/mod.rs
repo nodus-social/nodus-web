@@ -7,6 +7,8 @@
 use leptos::prelude::*;
 use nodus_client_core::model::{Report, ReportState};
 
+use super::{BulkOutcome, ReportBatch, ReportBulkAction};
+
 /// What the list is filtered by. Empty strings mean "no restriction".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportQuery {
@@ -87,10 +89,39 @@ pub fn ReportsPage(
     /// Assigns a report to an account id, or to nobody.
     #[prop(optional)]
     on_assign: Option<Callback<(String, Option<String>)>>,
+    /// What the last batch answered: its summary and the rows it refused.
+    #[prop(into)]
+    bulk: Signal<BulkOutcome>,
+    /// Applies one action to every ticked report.
+    #[prop(optional)]
+    on_bulk: Option<Callback<ReportBatch>>,
+    /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    write: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let write = crate::props::writable(write);
     let category = StoredValue::new(String::new());
     let assignee = StoredValue::new(String::new());
     let note = StoredValue::new(String::new());
+    // Which rows are ticked is this list's own state; the batch bar reads it. Not called
+    // `selected`: that name is the report whose detail is open.
+    let ticked = RwSignal::new(Vec::<String>::new());
+    let chosen = StoredValue::new(ReportBulkAction::Resolve);
+    let bulk_note = StoredValue::new(String::new());
+    let bulk_assignee = StoredValue::new(String::new());
+    // A `Callback`, not a closure: the tick sits inside a `<Show>` in the row, and a
+    // render-time child has to be shareable between threads.
+    let toggle = Callback::new(move |(id, on): (String, bool)| {
+        ticked.update(|held| {
+            if on {
+                if !held.contains(&id) {
+                    held.push(id);
+                }
+            } else {
+                held.retain(|ticked| ticked != &id);
+            }
+        });
+    });
     let applied = StoredValue::new(query.get_untracked());
     let submit = move || ReportQuery {
         state: applied.get_value().state,
@@ -137,6 +168,82 @@ pub fn ReportsPage(
                 </div>
             </div>
 
+            <Show when=move || write.get() && !ticked.get().is_empty()>
+                <div
+                    class="flex flex-wrap items-end gap-2 rounded-box border border-base-300 bg-base-200 px-3 py-2"
+                    role="group"
+                    aria-label="Bulk report action"
+                >
+                    <p class="text-sm font-medium">
+                        {move || format!("{} selected", ticked.get().len())}
+                    </p>
+                    <select
+                        class="select select-bordered select-sm"
+                        aria-label="Bulk action"
+                        on:change=move |event| {
+                            let picked = event_target_value(&event);
+                            if let Some(found) = ReportBulkAction::ALL
+                                .into_iter()
+                                .find(|candidate| candidate.wire() == picked)
+                            {
+                                chosen.set_value(found);
+                            }
+                        }
+                    >
+                        {ReportBulkAction::ALL
+                            .into_iter()
+                            .map(|candidate| {
+                                view! { <option value=candidate.wire()>{candidate.label()}</option> }
+                            })
+                            .collect_view()}
+                    </select>
+                    <input
+                        class="input input-bordered input-sm w-full sm:w-56"
+                        placeholder="Assignee account id (Assign)"
+                        on:input=move |event| bulk_assignee.set_value(event_target_value(&event))
+                    />
+                    <input
+                        class="input input-bordered input-sm w-full sm:w-56"
+                        placeholder="Note (Resolve)"
+                        on:input=move |event| bulk_note.set_value(event_target_value(&event))
+                    />
+                    <button
+                        class="btn btn-primary btn-sm"
+                        disabled=move || on_bulk.is_none()
+                        on:click=move |_| {
+                            if let Some(on_bulk) = on_bulk {
+                                let ids = ticked.get_untracked();
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                on_bulk
+                                    .run(ReportBatch {
+                                        ids,
+                                        action: chosen.get_value(),
+                                        assignee: Some(bulk_assignee.get_value().trim().to_owned())
+                                            .filter(|id| !id.is_empty()),
+                                        note: bulk_note.get_value(),
+                                    });
+                                // The batch has gone out; the answer comes back per row, so
+                                // the ticks have done their work and are cleared.
+                                ticked.set(Vec::new());
+                            }
+                        }
+                    >
+                        "Apply to selection"
+                    </button>
+                    <button class="btn btn-ghost btn-sm" on:click=move |_| ticked.set(Vec::new())>
+                        "Clear"
+                    </button>
+                </div>
+            </Show>
+
+            <Show when=move || bulk.get() != BulkOutcome::default()>
+                <p class="text-sm" role="status">
+                    {move || bulk.get().summary()}
+                </p>
+            </Show>
+
             <Show when=move || selected.get().is_some()>
                 {move || {
                     selected
@@ -157,7 +264,7 @@ pub fn ReportsPage(
 
             <ul class="flex flex-col gap-2">
                 <For each=move || reports.get() key=|report| report.id.clone() let:report>
-                    {row(report.clone(), age_of, on_open)}
+                    {row(report.clone(), age_of, on_open, ticked, bulk, write, toggle)}
                 </For>
             </ul>
 
@@ -214,6 +321,10 @@ fn row(
     report: Report,
     age_of: Option<Callback<String, String>>,
     on_open: Option<Callback<String>>,
+    ticked: RwSignal<Vec<String>>,
+    bulk: Signal<BulkOutcome>,
+    write: Signal<bool>,
+    toggle: Callback<(String, bool)>,
 ) -> impl IntoView {
     let id = report.id.clone();
     let target = report.target_account.as_ref().map_or_else(
@@ -240,8 +351,26 @@ fn row(
     } else {
         report.category.clone()
     };
+    let label = format!("Select the report on {target}");
+    // Three handles on one id: a `move` closure can own a value once, and the row has three
+    // of them — the tick, the press, and the refusal line.
+    let refuse_id = StoredValue::new(report.id.clone());
+    let check_id = StoredValue::new(report.id.clone());
+    let change_id = StoredValue::new(report.id.clone());
     view! {
-        <li class="rounded-box border border-base-300 bg-base-100 p-3">
+        <li class="flex items-start gap-2">
+            <Show when=move || write.get()>
+                <input
+                    type="checkbox"
+                    class="checkbox checkbox-sm mt-3"
+                    aria-label=label.clone()
+                    prop:checked=move || ticked.get().iter().any(|held| held == &check_id.get_value())
+                    on:change=move |event| {
+                        toggle.run((change_id.get_value(), event_target_checked(&event)));
+                    }
+                />
+            </Show>
+            <div class="min-w-0 flex-1">
             <button
                 class="flex w-full flex-col gap-1 text-left"
                 disabled=on_open.is_none()
@@ -261,6 +390,12 @@ fn row(
                     <span class="line-clamp-2 text-sm opacity-80">{comment.clone()}</span>
                 </Show>
             </button>
+            <Show when=move || bulk.get().refusal_for(&refuse_id.get_value()).is_some()>
+                <p class="mt-1 text-xs text-error" role="alert">
+                    {move || bulk.get().refusal_for(&refuse_id.get_value()).unwrap_or_default()}
+                </p>
+            </Show>
+            </div>
         </li>
     }
 }

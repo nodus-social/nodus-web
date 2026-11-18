@@ -5,6 +5,7 @@ use leptos::task::spawn_local;
 
 use nodus_client_core::model::{AccountDetail, AdminAccount, AdminAccountQuery, ModerationAction};
 use nodus_pages::pages::moderation::accounts::AccountsPage;
+use nodus_pages::pages::moderation::{AccountBatch, BulkOutcome};
 
 use crate::state::alive::Alive;
 use crate::state::bridge::admin;
@@ -28,6 +29,7 @@ pub fn AccountList() -> impl IntoView {
     let (detail, set_detail) = signal(None::<AccountDetail>);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
+    let (bulk, set_bulk) = signal(BulkOutcome::default());
 
     let reload = Callback::new(move |only_staff: bool| {
         spawn_local(async move {
@@ -154,6 +156,27 @@ pub fn AccountList() -> impl IntoView {
         });
     });
 
+    // One action over every ticked account. The instance answers per id, so the refusals
+    // land on the rows they name and the list is re-read for the ones that went through.
+    let batch = Callback::new(move |request: AccountBatch| {
+        spawn_local(async move {
+            let outcome =
+                admin::bulk_moderate(&request.ids, request.action.wire(), &request.reason).await;
+            match outcome {
+                Ok(answer) => alive.if_alive(|| {
+                    set_bulk.set(BulkOutcome {
+                        applied: answer.applied,
+                        refusals: answer.refusals,
+                    });
+                    set_error.set(None);
+                }),
+                Err(problem) => alive.if_alive(|| set_error.set(Some(problem))),
+            }
+            reload.run(query.get_untracked().staff);
+            refresh_detail();
+        });
+    });
+
     let write_note = Callback::new(move |(id, body): (String, String)| {
         spawn_local(async move {
             match admin::add_account_note(&id, &body).await {
@@ -190,6 +213,8 @@ pub fn AccountList() -> impl IntoView {
             on_purge=purge
             on_note=write_note
             on_note_delete=drop_note
+            bulk=bulk
+            on_bulk=batch
             write=Some(crate::state::bridge::admin::may_write())
         />
     }

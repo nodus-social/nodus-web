@@ -494,3 +494,96 @@ test('a flagged post is handed to the scanners again', async ({ page }) => {
   })
   await expect(page.getByText('Queued 1 scan for this post.')).toBeVisible()
 })
+
+test('a batch of accounts is applied one by one, and a refusal stays on its own row', async ({
+  page,
+}) => {
+  const many = [
+    adminAccount({ id: '1', username: 'ada' }),
+    adminAccount({ id: '2', username: 'grace', admin: true }),
+  ]
+  const calls = await consoleAs(page, {
+    accounts: many,
+    bulkRefusals: { 2: 'demote an administrator before taking action against them' },
+  })
+  await open(page, '/moderation/accounts')
+
+  const boxes = page.getByRole('checkbox', { name: /^Select / })
+  await boxes.nth(0).check()
+  await boxes.nth(1).check()
+  await expect(page.getByText('2 selected')).toBeVisible()
+
+  await page.getByLabel('Bulk action').selectOption('silence')
+  await page.getByPlaceholder('Reason (recorded in the log)').fill('Repeated spam')
+  await page.getByRole('button', { name: 'Apply to selection' }).click()
+
+  const batch = await sent(calls, (call) =>
+    call.url.endsWith('/api/v1/admin/accounts/bulk'),
+  )
+  expect(JSON.parse(batch.body)).toEqual({
+    ids: ['1', '2'],
+    action: 'silence',
+    reason: 'Repeated spam',
+    notify: false,
+  })
+
+  // One request, one line for the batch, and the sentence the instance gave for id 2 on
+  // the row that id names — not one toast for a partially applied batch.
+  await expect(page.getByRole('status')).toContainText('1 applied, 1 refused')
+  await expect(
+    page.getByText('demote an administrator before taking action against them'),
+  ).toBeVisible()
+
+  // The ticks did their work: the bar is gone and the rows are unticked, so the next
+  // batch is a fresh decision rather than a leftover.
+  await expect(page.getByText('2 selected')).toHaveCount(0)
+  await expect(boxes.nth(0)).not.toBeChecked()
+  await expect(boxes.nth(1)).not.toBeChecked()
+})
+
+test('a batch of reports is closed with one note, and a refusal stays on its own row', async ({
+  page,
+}) => {
+  const queue = [report({ id: '7001' }), report({ id: '7002' })]
+  const calls = await consoleAs(page, {
+    reports: queue,
+    bulkRefusals: { 7002: 'that report does not exist' },
+  })
+  await open(page, '/moderation/reports')
+
+  const boxes = page.getByRole('checkbox', { name: /^Select the report/ })
+  await boxes.nth(0).check()
+  await boxes.nth(1).check()
+
+  await page.getByLabel('Bulk action').selectOption('resolve')
+  await page.getByPlaceholder('Note (Resolve)').fill('Closed in one pass.')
+  await page.getByRole('button', { name: 'Apply to selection' }).click()
+
+  const batch = await sent(calls, (call) => call.url.endsWith('/api/v1/admin/reports/bulk'))
+  expect(JSON.parse(batch.body)).toEqual({
+    ids: ['7001', '7002'],
+    action: 'resolve',
+    assignee_id: null,
+    note: 'Closed in one pass.',
+  })
+
+  await expect(page.getByRole('status')).toContainText('1 applied, 1 refused')
+  await expect(page.getByText('that report does not exist')).toBeVisible()
+  await expect(page.getByText('2 selected')).toHaveCount(0)
+  await expect(boxes.nth(0)).not.toBeChecked()
+  await expect(boxes.nth(1)).not.toBeChecked()
+})
+
+test('a grant without admin:write is shown no bulk bar and no ticks', async ({ page }) => {
+  await consoleAs(page, {
+    accounts: [adminAccount({ id: '1', username: 'ada' })],
+    scopes: ['read', 'write', 'follow', 'admin:read'],
+  })
+  await open(page, '/moderation/accounts')
+
+  // The console says why, and then shows no way to ask: a bar whose button is disabled is
+  // still a promise the console cannot keep.
+  await expect(page.getByText(/does not include admin:write/)).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Bulk account action' })).toHaveCount(0)
+  await expect(page.getByRole('checkbox', { name: /^Select / })).toHaveCount(0)
+})
