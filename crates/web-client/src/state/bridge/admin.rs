@@ -6,6 +6,7 @@ use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
     AdminMeta, AdminOverview, Announcement, AnnouncementDraft, AssetUpload, AuditEntry,
+    AuditFilter,
     DomainAllow, DomainBlock, DomainImportOutcome, DomainSeverity, EmailDomainBlock, FlagState,
     ModerationAction, NewScanner, NodeLog, Report, ReportFilter, ScanFlag,
     ScanSeverity, Scanner, ScannerAsset, ScannerRule, Topology, TriggerOutcome,
@@ -386,13 +387,13 @@ async fn meta_answer() -> Result<MetaAnswer, MetaProblem> {
     ))
 }
 
-/// Recent administrative actions.
-pub async fn audit() -> Result<Vec<AuditEntry>, String> {
+/// One page of the audit log, narrowed by the filter the screen holds.
+pub async fn audit(filter: &AuditFilter) -> Result<Vec<AuditEntry>, String> {
     let transport = admin_transport()
         .or_else(instance_transport)
         .ok_or_else(|| "Not signed in.".to_owned())?;
     transport
-        .audit(PAGE)
+        .audit(filter)
         .await
         .map_err(|error| error.to_string())
 }

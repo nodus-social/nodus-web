@@ -9,12 +9,22 @@ use nodus_pages::pages::moderation::accounts::AccountsPage;
 use crate::state::alive::Alive;
 use crate::state::bridge::admin;
 
+/// How many accounts one page holds.
+///
+/// The same number the request asks the instance for, so "another page exists" is the
+/// answer to "did this page come back full?" rather than a guess about the server's own
+/// default.
+const PAGE: u16 = 20;
+
 /// One page of accounts, the search that narrows it, and the account a moderator picked.
 #[component]
 pub fn AccountList() -> impl IntoView {
     let alive = Alive::new();
     let (accounts, set_accounts) = signal(Vec::<AdminAccount>::new());
-    let (query, set_query) = signal(AdminAccountQuery::default());
+    let (query, set_query) = signal(AdminAccountQuery {
+        limit: Some(PAGE),
+        ..AdminAccountQuery::default()
+    });
     let (detail, set_detail) = signal(None::<AccountDetail>);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
@@ -23,9 +33,10 @@ pub fn AccountList() -> impl IntoView {
         spawn_local(async move {
             let mut search = query.get_untracked();
             search.staff = only_staff;
+            search.offset = None;
+            set_busy.set(true);
             let outcome = admin::search_accounts(&search).await;
             alive.if_alive(|| {
-                set_busy.set(true);
                 match outcome {
                     Ok(list) => {
                         set_accounts.set(list);
@@ -41,10 +52,10 @@ pub fn AccountList() -> impl IntoView {
     // The search is a re-read: the instance decides which accounts match it.
     Effect::new(move |_| {
         let search = query.get();
+        set_busy.set(true);
         spawn_local(async move {
             let outcome = admin::search_accounts(&search).await;
             alive.if_alive(|| {
-                set_busy.set(true);
                 match outcome {
                     Ok(list) => {
                         set_accounts.set(list);
@@ -168,7 +179,7 @@ pub fn AccountList() -> impl IntoView {
             detail=detail
             busy=busy
             error=error
-            has_more=Signal::derive(move || accounts.get().len() >= 20)
+            has_more=Signal::derive(move || accounts.get().len() >= usize::from(PAGE))
             on_query=Callback::new(move |next: AdminAccountQuery| set_query.set(next))
             on_more=more
             on_open=open

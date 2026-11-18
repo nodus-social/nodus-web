@@ -266,3 +266,62 @@ test('a canned reply is saved with its title and text', async ({ page }) => {
   const create = await sent(calls, (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/warning_presets'),)
   expect(JSON.parse(create.body)).toEqual({ title: 'First warning', text: 'Be kind.' })
 })
+
+test('the accounts screen browses the directory and pages through it', async ({ page }) => {
+  const many = Array.from({ length: 20 }, (_, index) =>
+    adminAccount({ id: String(index + 1), username: `ada${index}` }),
+  )
+  const calls = await consoleAs(page, { accounts: many })
+  await open(page, '/moderation/accounts')
+
+  // The first read is the directory itself, not the answer to a search nobody typed.
+  const first = await sent(calls, (call) => call.url.includes('/api/v1/admin/accounts?'))
+  expect(new URL(first.url).searchParams.get('limit')).toBe('20')
+  await expect(page.getByRole('button', { name: 'Load more accounts' })).toBeVisible()
+
+  // A domain is a filter like any other, and it is a first page again, not a deeper one.
+  await page.getByPlaceholder('Domain (remote accounts)').fill('example.test')
+  const narrowed = await sent(calls, (call) => call.url.includes('by_domain=example.test'))
+  expect(new URL(narrowed.url).searchParams.has('offset')).toBe(false)
+
+  await page.getByRole('button', { name: 'Load more accounts' }).click()
+  await sent(calls, (call) => new URL(call.url).searchParams.get('offset') === '20')
+
+  // Clearing every filter is the way back to the whole directory.
+  const unfiltered = (call) => {
+    const params = new URL(call.url).searchParams
+    return call.url.includes('/api/v1/admin/accounts?') && !params.has('by_domain')
+  }
+  const before = calls.filter(unfiltered).length
+  await page.getByRole('button', { name: 'Browse all accounts' }).click()
+  await expect.poll(() => calls.filter(unfiltered).length).toBeGreaterThan(before)
+})
+
+test('the audit log is narrowed and paged by its filters', async ({ page }) => {
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    id: String(index + 1),
+    actor_id: '7',
+    action: 'resolve_report',
+    target_type: 'report',
+    target_id: '9',
+    detail: {},
+    created_at: '2026-11-01T10:00:00Z',
+  }))
+  const calls = await consoleAs(page, { audit: rows })
+  await open(page, '/admin/audit')
+
+  await expect(page.getByText('resolve_report').first()).toBeVisible()
+  const first = await sent(calls, (call) => call.url.includes('/api/v1/admin/audit'))
+  expect(new URL(first.url).searchParams.get('limit')).toBe('20')
+  await expect(page.getByRole('button', { name: 'Load more' })).toBeVisible()
+
+  await page.getByPlaceholder('Action, e.g. resolve_report').fill('suspend_account')
+  const narrowed = await sent(calls, (call) => call.url.includes('action=suspend_account'))
+  expect(new URL(narrowed.url).searchParams.has('offset')).toBe(false)
+
+  await page.getByPlaceholder('Target type, e.g. report').fill('account')
+  await sent(calls, (call) => call.url.includes('target_type=account'))
+
+  await page.getByRole('button', { name: 'Load more' }).click()
+  await sent(calls, (call) => new URL(call.url).searchParams.get('offset') === '20')
+})

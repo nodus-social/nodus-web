@@ -346,6 +346,7 @@ export async function adminApi(
     topology = null,
     logs = [],
     remoteBlocks = [],
+    audit = [],
   } = {},
 ) {
   const calls = []
@@ -456,9 +457,7 @@ export async function adminApi(
       ...meta,
     }),
   )
-  for (const path of ['audit']) {
-    await page.route(new RegExp(`/api/v1/admin/${path}`), (route) => json(route, []))
-  }
+  await page.route(/\/api\/v1\/admin\/audit/, (route) => json(route, audit))
   return calls
 }
 

@@ -89,8 +89,8 @@ pub fn AccountsPage(
         </Show>
 
         <Panel
-            title="Find an account"
-            description="Search by name, address or mail domain. A moderator sees the standing and the numbers; nothing here is shown to the account."
+            title="Accounts"
+            description="Every account, narrowed by name, address, domain or standing. A moderator sees the standing and the numbers; nothing here is shown to the account."
         >
             <div class="grid gap-2 sm:grid-cols-2">
                 <input
@@ -116,6 +116,22 @@ pub fn AccountsPage(
                             let mut next = query.get_untracked();
                             let value = event_target_value(&event);
                             next.email = Some(value.clone()).filter(|text| !text.is_empty());
+                            next.offset = None;
+                            on_query.run(next);
+                        }
+                    }
+                />
+                <input
+                    class="input input-bordered input-sm"
+                    placeholder="Domain (remote accounts)"
+                    prop:value=move || query.get().by_domain.unwrap_or_default()
+                    on:input=move |event| {
+                        if let Some(on_query) = on_query {
+                            let mut next = query.get_untracked();
+                            let value = event_target_value(&event);
+                            next.by_domain = Some(value.clone()).filter(|text| !text.is_empty());
+                            // A narrower filter is a new first page, not a deeper one: the
+                            // offset counted rows the filter has just removed.
                             next.offset = None;
                             on_query.run(next);
                         }
@@ -178,6 +194,21 @@ pub fn AccountsPage(
                     <span class="label-text">"Only administrators"</span>
                 </label>
             </div>
+            <button
+                class="btn btn-ghost btn-xs mt-2 self-start"
+                disabled=on_query.is_none()
+                on:click=move |_| {
+                    if let Some(on_query) = on_query {
+                        // Every filter cleared, and the page size kept: this is the door
+                        // back to the whole directory, not a search with an empty box.
+                        let mut next = AdminAccountQuery::default();
+                        next.limit = query.get_untracked().limit;
+                        on_query.run(next);
+                    }
+                }
+            >
+                "Browse all accounts"
+            </button>
         </Panel>
 
         <Show when=move || detail.get().is_some()>
@@ -252,7 +283,7 @@ pub fn AccountsPage(
                     }
                 }
             >
-                "More accounts"
+                "Load more accounts"
             </button>
         </Show>
 
