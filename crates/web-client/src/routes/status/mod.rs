@@ -93,7 +93,10 @@ pub fn StatusCard(status: Status) -> impl IntoView {
         )
     } else {
         (
-            Route::Account(header.account.id.clone()).path(),
+            // An id belongs to the instance that minted it: a post read from another
+            // instance must link to that instance's profile, or the session's own
+            // instance is asked for an account it has never heard of.
+            nodus_web::shared::handles::profile_path_for(&header.account.acct, None),
             thread_route(&header.id).path(),
         )
     };

@@ -313,7 +313,7 @@ pub fn on_signed_out() {
 
 /// Fetch the active account's custom style metadata from `nodus-backend`.
 pub async fn refresh_active() -> Result<SessionStyle, String> {
-    if !super::knows_extensions() {
+    if !keeps_styling_async().await {
         return Err(String::from("This instance does not keep session styling."));
     }
     let key = active_cache_key().ok_or_else(|| String::from("No active account."))?;
@@ -331,7 +331,7 @@ pub async fn refresh_active() -> Result<SessionStyle, String> {
 
 /// Background-fetch thumbnails/styles for remembered accounts in the account switcher.
 pub async fn prefetch_account_thumbnails() -> bool {
-    if !super::knows_extensions() {
+    if !keeps_styling_async().await {
         return false;
     }
     let mut updated = false;
@@ -358,6 +358,9 @@ pub async fn prefetch_account_thumbnails() -> bool {
 /// Persist updated session styling to `nodus-backend`, update caches & shell immediately,
 /// and notify the SSR host so subsequent document loads paint without a flash.
 pub async fn save_style(style: SessionStyle) -> Result<SessionStyle, String> {
+    if !keeps_styling_async().await {
+        return Err(String::from("This instance does not keep session styling."));
+    }
     let key = active_cache_key().ok_or_else(|| String::from("Sign in to save session style."))?;
     let Some(transport) = instance_transport() else {
         return Err(String::from("No active instance connection."));
@@ -433,6 +436,42 @@ pub async fn reset_style() -> Result<(), String> {
         sync_ssr_style(&key, &default).await;
     }
     Ok(())
+}
+
+/// Whether the account's instance keeps session styling, asked once per host.
+async fn keeps_styling_async() -> bool {
+    let Some(transport) = instance_transport() else {
+        return false;
+    };
+    let Some(host) = super::session_host() else {
+        return false;
+    };
+    if let Some(known) = styling_support(&host) {
+        return known;
+    }
+    let Ok(url) = transport.url("/api/v1/meta") else {
+        return false;
+    };
+    let request = transport.get(url);
+    let known = transport.send_empty(request).await.is_ok();
+    remember_styling_support(&host, known);
+    known
+}
+
+fn styling_support(host: &str) -> Option<bool> {
+    STYLING_SUPPORT.with_borrow(|known| known.get(host).copied())
+}
+
+fn remember_styling_support(host: &str, known: bool) {
+    STYLING_SUPPORT.with_borrow_mut(|support| {
+        support.insert(host.to_owned(), known);
+    });
+}
+
+thread_local! {
+    /// Hosts this page has asked about styling. `None` means not asked yet.
+    static STYLING_SUPPORT: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 async fn fetch_style_with(transport: &BrowserInstance) -> Result<SessionStyle, String> {

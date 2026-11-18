@@ -20,7 +20,7 @@
 //!
 //! See `web/docs/02-architecture.md` ("SDK owns state") and `sdk/README.md`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use leptos::prelude::*;
@@ -229,24 +229,6 @@ pub fn revision() -> RwSignal<u64> {
 /// # Panics
 ///
 /// Panics if [`init`] has not run.
-/// Whether the signed-in server runs Nodus's own extensions.
-///
-/// A plain mirror of the negotiation's answer, kept outside the reactive graph so a caller
-/// can decide before it sends anything: a Mastodon instance has no `/api/v1/nodus/*`, and
-/// asking it is a guaranteed 404 in every console. An unanswered negotiation is the
-/// Mastodon surface.
-pub(crate) fn knows_extensions() -> bool {
-    EXTENSIONS.with(Cell::get).unwrap_or(false)
-}
-
-fn record_extensions(knows: bool) {
-    EXTENSIONS.with(|recorded| recorded.set(Some(knows)));
-}
-
-thread_local! {
-    static EXTENSIONS: Cell<Option<bool>> = const { Cell::new(None) };
-}
-
 pub fn with_sdk<R>(f: impl FnOnce(&WebSdk) -> R) -> R {
     SDK.with_borrow(|slot| {
         let sdk = slot
@@ -357,14 +339,7 @@ fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
     wasm_bindgen_futures::spawn_local({
         let sdk = Rc::clone(&sdk);
         async move {
-            let capabilities = sdk.load_capabilities().await;
-            record_extensions(capabilities.knows_extensions());
-            // A server without the extensions cannot answer for styling, so the
-            // question is only worth asking once the negotiation has said it can.
-            if knows_extensions() {
-                let _ = crate::state::bridge::style::refresh_active().await;
-                crate::state::bridge::style::prefetch_account_thumbnails().await;
-            }
+            sdk.load_capabilities().await;
         }
     });
 
