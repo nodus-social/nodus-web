@@ -16,8 +16,10 @@ use crate::state::alive::Alive;
 use crate::state::bridge::{admin, feature};
 
 mod pauses;
-
 pub use self::pauses::DomainPauses;
+
+mod forwarded;
+pub use self::forwarded::Forwarded;
 
 /// What the instance answered, translated once into the page's own shape.
 fn delivery_of(row: admin::Delivery) -> Delivery {
@@ -168,6 +170,9 @@ pub fn Deliveries() -> impl IntoView {
             on_retry=on_retry
             on_retry_failed=on_retry_failed
         />
+        <Show when=move || feature("report_forwarding").get()>
+            <Forwarded/>
+        </Show>
         <Show when=move || feature("domain_pauses").get()>
             <DomainPauses/>
         </Show>

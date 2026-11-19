@@ -8,6 +8,37 @@ use leptos::prelude::*;
 use nodus_client_core::model::{Report, ReportState};
 
 use super::{BulkOutcome, ReportBatch, ReportBulkAction};
+use crate::pages::admin::federation::forwarded::{forward_of, Forward};
+
+/// What forwarding has answered about this queue's rows so far.
+///
+/// The queue keeps this rather than a per-row flag because a refusal belongs to the row
+/// that caused it, and two presses on two rows answer independently. It is the page's own
+/// state: the caller records the answers, the page reads them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Forwarding {
+    /// Reports whose forward is on its way, by id.
+    pub in_flight: Vec<String>,
+    /// The last refusal per report id, in the instance's own words.
+    pub refusals: Vec<(String, String)>,
+}
+
+impl Forwarding {
+    /// Whether this report's forward has not been answered yet.
+    #[must_use]
+    pub fn sending(&self, report_id: &str) -> bool {
+        self.in_flight.iter().any(|held| held == report_id)
+    }
+
+    /// The instance's refusal of this report's forward, when it refused one.
+    #[must_use]
+    pub fn refusal_for(&self, report_id: &str) -> Option<&str> {
+        self.refusals
+            .iter()
+            .find(|(held, _)| held == report_id)
+            .map(|(_, reason)| reason.as_str())
+    }
+}
 
 /// What the list is filtered by. Empty strings mean "no restriction".
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +96,12 @@ pub fn ReportsPage(
     /// The report whose detail panel is open.
     #[prop(into)]
     selected: Signal<Option<Report>>,
+    /// The reports already forwarded, so a row shows what became of its forward.
+    #[prop(into)]
+    forwarded: Signal<Vec<Forward>>,
+    /// Which rows are in flight, and what forwarding refused.
+    #[prop(into)]
+    forwarding: Signal<Forwarding>,
     /// How long ago a report was filed.
     #[prop(optional)]
     age_of: Option<Callback<String, String>>,
@@ -98,8 +135,16 @@ pub fn ReportsPage(
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
+    /// Whether the instance serves the forwarding endpoints (`report_forwarding`). Absent
+    /// means "assume yes".
+    #[prop(optional_no_strip)]
+    forwardable: Option<Signal<bool>>,
+    /// Forwards one report to its peer, with a note that may be empty.
+    #[prop(optional)]
+    on_forward: Option<Callback<(String, String)>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
+    let forwardable = crate::props::capable(forwardable);
     let category = StoredValue::new(String::new());
     let assignee = StoredValue::new(String::new());
     let note = StoredValue::new(String::new());
@@ -264,7 +309,19 @@ pub fn ReportsPage(
 
             <ul class="flex flex-col gap-2">
                 <For each=move || reports.get() key=|report| report.id.clone() let:report>
-                    {row(report.clone(), age_of, on_open, ticked, bulk, write, toggle)}
+                    {row(
+                        report.clone(),
+                        age_of,
+                        on_open,
+                        ticked,
+                        bulk,
+                        write,
+                        toggle,
+                        forwarded,
+                        forwarding,
+                        forwardable,
+                        on_forward,
+                    )}
                 </For>
             </ul>
 
@@ -325,6 +382,10 @@ fn row(
     bulk: Signal<BulkOutcome>,
     write: Signal<bool>,
     toggle: Callback<(String, bool)>,
+    forwarded: Signal<Vec<Forward>>,
+    forwarding: Signal<Forwarding>,
+    forwardable: Signal<bool>,
+    on_forward: Option<Callback<(String, String)>>,
 ) -> impl IntoView {
     let id = report.id.clone();
     let target = report.target_account.as_ref().map_or_else(
@@ -357,6 +418,15 @@ fn row(
     let refuse_id = StoredValue::new(report.id.clone());
     let check_id = StoredValue::new(report.id.clone());
     let change_id = StoredValue::new(report.id.clone());
+    // Where a remote target is: a report about `@someone@peer.example` is the only kind that
+    // can leave this instance, so the host half of the handle is what the forward addresses.
+    let peer = report
+        .target_account
+        .as_ref()
+        .and_then(|account| account.acct.split_once('@').map(|(_, host)| host.to_owned()));
+    let peer = StoredValue::new(peer);
+    let forward_id = StoredValue::new(report.id.clone());
+    let forward_note = StoredValue::new(String::new());
     view! {
         <li class="flex items-start gap-2">
             <Show when=move || write.get()>
@@ -393,6 +463,92 @@ fn row(
             <Show when=move || bulk.get().refusal_for(&refuse_id.get_value()).is_some()>
                 <p class="mt-1 text-xs text-error" role="alert">
                     {move || bulk.get().refusal_for(&refuse_id.get_value()).unwrap_or_default()}
+                </p>
+            </Show>
+            <Show when=move || peer.get_value().is_some() && forward_of(&forwarded.get(), &forward_id.get_value()).is_some()>
+                <div class="mt-1 flex flex-wrap items-baseline gap-2 text-xs" data-testid="forward-state">
+                    {move || {
+                        forward_of(&forwarded.get(), &forward_id.get_value())
+                            .map(|held| {
+                                let domain = held.target_domain.clone();
+                                let state = held.state.clone();
+                                let line = held.state_line();
+                                let failure = held.last_error.clone();
+                                view! {
+                                    <span class="badge badge-sm" data-testid="forward-badge">{state}</span>
+                                    <span class="opacity-70">
+                                        {format!("Forwarded to {domain}: {line}.")}
+                                    </span>
+                                    {failure
+                                        .map(|error| {
+                                            view! { <span class="text-error">{error}</span> }
+                                        })}
+                                }
+                            })
+                    }}
+                </div>
+            </Show>
+            <Show when=move || {
+                peer.get_value().is_some() && write.get() && forwardable.get() && on_forward.is_some()
+                    && forward_of(&forwarded.get(), &forward_id.get_value()).is_none()
+            }>
+                <div class="mt-1 flex flex-wrap items-center gap-2">
+                    <input
+                        type="text"
+                        class="input input-bordered input-xs w-full sm:w-56"
+                        placeholder="Note to the peer (optional)"
+                        aria-label={
+                            move || {
+                                format!(
+                                    "Note to {}, attached to the forwarded report",
+                                    peer.get_value().unwrap_or_default(),
+                                )
+                            }
+                        }
+                        on:input=move |event| forward_note.set_value(event_target_value(&event))
+                    />
+                    <button
+                        type="button"
+                        class="btn btn-xs"
+                        data-testid="forward-report"
+                        title={
+                            move || {
+                                format!(
+                                    "Send this report to the moderators on {}",
+                                    peer.get_value().unwrap_or_default(),
+                                )
+                            }
+                        }
+                        disabled=move || forwarding.get().sending(&forward_id.get_value())
+                        on:click=move |_| {
+                            if let Some(on_forward) = on_forward {
+                                let id = forward_id.get_value();
+                                if forwarding.get_untracked().sending(&id) {
+                                    return;
+                                }
+                                on_forward.run((id, forward_note.get_value().trim().to_owned()));
+                            }
+                        }
+                    >
+                        {move || {
+                            if forwarding.get().sending(&forward_id.get_value()) {
+                                "Forwarding…"
+                            } else {
+                                "Forward to the peer"
+                            }
+                        }}
+                    </button>
+                </div>
+            </Show>
+            <Show when=move || forwarding.get().refusal_for(&forward_id.get_value()).is_some()>
+                <p class="mt-1 text-xs text-error" role="alert" data-testid="forward-refusal">
+                    {move || {
+                        forwarding
+                            .get()
+                            .refusal_for(&forward_id.get_value())
+                            .map(str::to_owned)
+                            .unwrap_or_default()
+                    }}
                 </p>
             </Show>
             </div>

@@ -16,8 +16,10 @@ import {
   granted,
   grantRecord,
   hydrated,
+  otherAccount,
   quarantinedMedia,
   remoteAccount,
+  report,
   signedIn,
   stubApi,
 } from '../fixtures.mjs'
@@ -626,4 +628,135 @@ test('an instance whose features omit media_quarantine paints no media panel', a
   await expect(page.getByRole('tab', { name: 'Media' })).toHaveCount(0)
   await expect(page.getByText(/does not quarantine media/)).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Appeals' })).toBeVisible()
+})
+
+/// One forwarded report, as `GET /api/v1/admin/federation/forwarded` sends it.
+function forward(overrides = {}) {
+  return {
+    id: 'f7001',
+    report_id: '7001',
+    target_domain: 'peer.example',
+    activity_uri: 'https://nodus.example/activities/f7001',
+    state: 'pending',
+    attempts: 0,
+    last_error: null,
+    created_at: '2026-11-19T08:00:00Z',
+    updated_at: '2026-11-19T08:00:00Z',
+    ...overrides,
+  }
+}
+
+/// A report about an account that lives on another instance.
+function remoteReport(overrides = {}) {
+  return report({ target_account: { ...otherAccount, acct: 'grace@peer.example' }, ...overrides })
+}
+
+test('a report on a remote account is forwarded once, then shows what became of it', async ({
+  page,
+}) => {
+  await stubApi(page)
+  const calls = await adminApi(page, { reports: [remoteReport()] })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/reports')
+  await hydrated(page)
+
+  const held = row(page, '@grace@peer.example')
+  await held.getByPlaceholder('Note to the peer (optional)').fill('Please look at this.')
+  await held.getByRole('button', { name: 'Forward to the peer' }).click()
+
+  const pressed = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/reports/7001/forward'),
+  )
+  expect(JSON.parse(pressed.body)).toEqual({ note: 'Please look at this.' })
+
+  // The action becomes the state. The endpoint is idempotent and would only answer the row
+  // that already exists, so there is nothing left to press — and no second Flag queued.
+  await expect(held.getByTestId('forward-badge')).toHaveText('pending')
+  await expect(held.getByTestId('forward-state')).toContainText('Forwarded to peer.example')
+  await expect(held.getByTestId('forward-state')).toContainText('the peer has not been told yet')
+  await expect(held.getByRole('button', { name: 'Forward to the peer' })).toHaveCount(0)
+  expect(calls.filter((call) => call.method === 'POST')).toHaveLength(1)
+})
+
+test('a report on a local account offers no forward action', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/reports')
+  await hydrated(page)
+
+  // The subject is moderated here: the instance would refuse, and a control that can only
+  // be refused is not offered.
+  const held = row(page, '@grace')
+  await expect(held).toBeVisible()
+  await expect(held.getByRole('button', { name: 'Forward to the peer' })).toHaveCount(0)
+  await expect(held.getByTestId('forward-state')).toHaveCount(0)
+})
+
+test('a refused forward shows the instance’s own sentence', async ({ page }) => {
+  const reason = 'that domain is paused; nothing is delivered while the pause is in force'
+  await stubApi(page)
+  const calls = await adminApi(page, {
+    reports: [remoteReport()],
+    forwardRefusal: { status: 409, message: reason },
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/reports')
+  await hydrated(page)
+
+  const held = row(page, '@grace@peer.example')
+  await held.getByRole('button', { name: 'Forward to the peer' }).click()
+  await sent(calls, (call) => call.method === 'POST' && call.url.endsWith('/forward'))
+
+  // Verbatim, without the transport's `discovery returned 409:` lead-in: the sentence names
+  // the reason, and it is the only explanation a moderator gets.
+  await expect(held.getByTestId('forward-refusal')).toHaveText(reason)
+  await expect(held.getByRole('button', { name: 'Forward to the peer' })).toBeVisible()
+})
+
+test('the federation screen groups what was forwarded by what became of it', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page, {
+    forwarded: [
+      forward({ id: 'f1', report_id: '7001', target_domain: 'peer.example', state: 'pending' }),
+      forward({
+        id: 'f2',
+        report_id: '7002',
+        target_domain: 'other.example',
+        state: 'gave_up',
+        attempts: 5,
+        last_error: 'the peer answered 401',
+      }),
+      forward({ id: 'f3', report_id: '7003', target_domain: 'peer.example', state: 'delivered' }),
+    ],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/admin/federation')
+  await hydrated(page)
+
+  await expect(page.getByRole('heading', { name: 'Report forwarding' })).toBeVisible()
+  await expect(page.getByTestId('forwarded-group-pending')).toContainText('Pending (1)')
+  await expect(page.getByTestId('forwarded-group-delivered')).toContainText('Delivered (1)')
+  await expect(page.getByTestId('forwarded-group-gave_up')).toContainText('Given up (1)')
+  await expect(page.getByTestId('forwarded-group-gave_up')).toContainText('other.example')
+  // A row says how hard the queue tried and what the peer answered, in its own words.
+  await expect(page.getByTestId('forwarded-group-gave_up')).toContainText('5 attempts')
+  await expect(page.getByTestId('forwarded-group-gave_up')).toContainText('the peer answered 401')
+  await expect(page.getByTestId('forwarded-empty')).toHaveCount(0)
+})
+
+test('the federation screen says when nothing was forwarded', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/admin/federation')
+  await hydrated(page)
+
+  await expect(page.getByTestId('forwarded-empty')).toHaveText('Nothing has been forwarded.')
 })

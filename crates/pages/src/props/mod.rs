@@ -57,6 +57,16 @@ pub fn writable(write: Option<Signal<bool>>) -> Signal<bool> {
     write.unwrap_or_else(|| Signal::derive(|| true))
 }
 
+/// Whether the instance serves a capability's endpoints, as `/api/v1/meta` names them.
+///
+/// `None` means "assume yes", for the same reason `writable` does: the page is also painted
+/// where no capability list was read, and a paint that hid a control the instance serves
+/// would be a lie about the screen.
+#[must_use]
+pub fn capable(capability: Option<Signal<bool>>) -> Signal<bool> {
+    capability.unwrap_or_else(|| Signal::derive(|| true))
+}
+
 /// The ages a page prints, measured against the clock reading the caller lends it.
 pub fn ages(now_millis: f64) -> Callback<String, String> {
     Callback::new(move |created: String| crate::relative_age(&created, now_millis))

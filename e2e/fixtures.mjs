@@ -101,6 +101,7 @@ export const FEATURES = [
   'moderation_rules',
   'federation_delivery',
   'domain_pauses',
+  'report_forwarding',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
@@ -556,11 +557,28 @@ export async function adminApi(
     deliveries = [],
     deliveryCounts: counts = null,
     domainPauses = [],
+    forwarded = [],
+    forwardRefusal = null,
   } = {},
 ) {
   // The list answers with the rows it holds: a pause the console sends is pushed here, so
   // the re-read after a write shows the same list the instance would.
   let paused = [...domainPauses]
+  // Report forwarding: one list says what each report reached, and the POST is idempotent —
+  // the first press queues a Flag (202) and a replay answers the row that already exists
+  // (200), so a second press can never queue a second one.
+  let sentForwards = [...forwarded]
+  const forwardRow = (reportId) => ({
+    id: `f${reportId}`,
+    report_id: reportId,
+    target_domain: 'peer.example',
+    activity_uri: `https://nodus.example/activities/f${reportId}`,
+    state: 'pending',
+    attempts: 0,
+    last_error: null,
+    created_at: '2026-11-19T08:00:00Z',
+    updated_at: '2026-11-19T08:00:00Z',
+  })
   const calls = []
   const node = (name, status, extra = {}) => ({
     name,
@@ -1051,6 +1069,38 @@ export async function adminApi(
   }
   await page.route(/\/api\/v1\/admin\/accounts\/bulk$/, bulk)
   await page.route(/\/api\/v1\/admin\/reports\/bulk$/, bulk)
+  await page.route(/\/api\/v1\/admin\/federation\/forwarded(\?|$)/, (route) => {
+    const state = new URL(route.request().url()).searchParams.get('state')
+    return json(route, state ? sentForwards.filter((row) => row.state === state) : sentForwards)
+  })
+  await page.route(/\/api\/v1\/admin\/reports\/[^/]+\/forward$/, (route) => {
+    const reportId = new URL(route.request().url()).pathname.split('/').at(-2)
+    const existing = sentForwards.find((row) => row.report_id === reportId)
+    if (route.request().method() === 'GET') {
+      if (!existing) {
+        record(route)
+        return route.fulfill({
+          status: 404,
+          headers: CORS,
+          json: { error: { message: 'that report was never forwarded' } },
+        })
+      }
+      return json(route, existing)
+    }
+    if (forwardRefusal) {
+      record(route)
+      return route.fulfill({
+        status: forwardRefusal.status ?? 422,
+        headers: CORS,
+        json: { error: { message: forwardRefusal.message } },
+      })
+    }
+    if (existing) return json(route, existing)
+    const row = forwardRow(reportId)
+    sentForwards = [row, ...sentForwards]
+    record(route)
+    return route.fulfill({ status: 202, headers: CORS, json: row })
+  })
   return calls
 }
 

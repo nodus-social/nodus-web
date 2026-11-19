@@ -17,6 +17,7 @@ use crate::components::panel::Panel;
 use crate::props::{writable, NO_WRITE};
 use crate::Note;
 
+pub mod forwarded;
 pub mod pauses;
 
 /// How many rows one page asks for.

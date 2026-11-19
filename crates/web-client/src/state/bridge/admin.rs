@@ -1125,6 +1125,63 @@ pub async fn assign_report(id: &str, account_id: Option<&str>) -> Result<Report,
         .map_err(|error| error.to_string())
 }
 
+/// Sends one report to its peer, or answers the forward that already exists.
+///
+/// The endpoint is idempotent and answers the first row on a replay (200) instead of
+/// queueing a second Flag (202), so a press that follows an earlier one cannot duplicate
+/// the delivery — which is why the queue shows the state after the first press rather than
+/// inviting the second.
+///
+/// A refusal (a local account, a blocked or paused domain) comes back as the instance's own
+/// sentence in the error envelope; the caller shows it as it stands.
+pub async fn forward_report(report_id: &str, note: &str) -> Result<Forwarded, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url(&format!("/api/v1/admin/reports/{report_id}/forward"))
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({ "note": note.trim() }))
+        .map_err(|error| error.to_string())?;
+    let mut request = transport.post(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch::<Forwarded>(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Every report this instance forwarded, newest first, narrowed by state or peer.
+pub async fn forwarded(
+    state: Option<&str>,
+    domain: Option<&str>,
+    limit: u16,
+) -> Result<Vec<Forwarded>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/federation/forwarded")
+        .map_err(|error| error.to_string())?;
+    {
+        let mut serializer = url.query_pairs_mut();
+        if let Some(state) = state.filter(|value| !value.is_empty()) {
+            serializer.append_pair("state", state);
+        }
+        if let Some(domain) = domain.map(str::trim).filter(|value| !value.is_empty()) {
+            serializer.append_pair("domain", domain);
+        }
+        serializer.append_pair("limit", &limit.to_string());
+    }
+    transport
+        .fetch::<Vec<Forwarded>>(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// One account with its notes, flags and report count.
 pub async fn account_detail(id: &str) -> Result<AccountDetail, String> {
     let transport = admin_transport()
@@ -2560,6 +2617,41 @@ pub struct DeliveryPage {
     /// The whole queue's counts.
     #[serde(default)]
     pub counts: DeliveryCounts,
+}
+
+/// One report this instance sent to a peer, as the forwarding endpoints send it.
+///
+/// The same row appears on both screens that read it: the report queue uses it to say what a
+/// single report's forward reached, and `/admin/federation` holds every one of them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Forwarded {
+    /// The forward's own id.
+    #[serde(default)]
+    pub id: String,
+    /// The report it carries.
+    #[serde(default)]
+    pub report_id: String,
+    /// The peer it was addressed to.
+    #[serde(default)]
+    pub target_domain: String,
+    /// The activity a peer receives, as it was signed.
+    #[serde(default)]
+    pub activity_uri: String,
+    /// `pending`, `delivered`, `failed` or `gave_up`.
+    #[serde(default)]
+    pub state: String,
+    /// How many times delivery has been tried.
+    #[serde(default)]
+    pub attempts: i32,
+    /// What the peer or the queue last said went wrong.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// When the forward was queued.
+    #[serde(default)]
+    pub created_at: String,
+    /// When it last changed.
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 /// One page of the delivery queue, narrowed by state and peer.
