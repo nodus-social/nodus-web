@@ -152,6 +152,32 @@ pub fn may_write() -> Signal<bool> {
     })
 }
 
+/// Whether the account's staff role is administrator, as a signal a control can disable
+/// itself with.
+///
+/// A separate question from [`may_write`]: the grant's scopes say what the token may do,
+/// the role says what the instance will let this account do, and several routes — the
+/// administrator flag, media retention, scanners — ask for `role == admin` whatever the
+/// grant carries.
+#[must_use]
+pub fn may_administer() -> Signal<bool> {
+    let revision = standing_revision();
+    Signal::derive(move || {
+        revision.get();
+        STANDING.with_borrow(|held| {
+            held.as_ref().is_some_and(|(_, verdict)| {
+                matches!(
+                    verdict,
+                    Staff::Yes {
+                        role: Role::Admin,
+                        ..
+                    }
+                )
+            })
+        })
+    })
+}
+
 /// Bumped whenever the cached verdict changes, so a signal derived from it repaints.
 fn standing_revision() -> RwSignal<u64> {
     thread_local! {

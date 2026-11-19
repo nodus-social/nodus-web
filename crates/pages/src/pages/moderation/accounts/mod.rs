@@ -112,6 +112,12 @@ pub fn AccountsPage(
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
+    /// Whether the instance serves account deletion. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    deletable: Option<Signal<bool>>,
     /// Writes a note.
     #[prop(optional)]
     on_note: Option<Callback<(String, String)>>,
@@ -126,6 +132,8 @@ pub fn AccountsPage(
     on_bulk: Option<Callback<AccountBatch>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
+    let administrator = crate::props::administrator(administrator);
+    let deletable = crate::props::capable(deletable);
     // The selection is the page's own: which rows are ticked is a state of this list, not
     // something the caller asked for or the server knows about.
     let selected = RwSignal::new(Vec::<String>::new());
@@ -152,6 +160,12 @@ pub fn AccountsPage(
         <Show when=move || !write.get()>
             <crate::components::chrome::Note class="mb-2 text-sm text-warning">
                 {crate::props::NO_WRITE}
+            </crate::components::chrome::Note>
+        </Show>
+
+        <Show when=move || !administrator.get()>
+            <crate::components::chrome::Note class="mb-2 text-sm opacity-70">
+                {crate::props::NO_ADMIN_ROLE}
             </crate::components::chrome::Note>
         </Show>
 
@@ -360,6 +374,8 @@ pub fn AccountsPage(
                     on_note,
                     on_note_delete,
                     write,
+                    administrator,
+                    deletable,
                 ),
                 None => ().into_any(),
             }}
@@ -475,6 +491,8 @@ fn detail_panel(
     on_note: Option<Callback<(String, String)>>,
     on_note_delete: Option<Callback<(String, String)>>,
     write: Signal<bool>,
+    administrator: Signal<bool>,
+    deletable: Signal<bool>,
 ) -> AnyView {
     let id = StoredValue::new(open.account.id.clone());
     let note = StoredValue::new(String::new());
@@ -514,8 +532,16 @@ fn detail_panel(
                     type="checkbox"
                     class="toggle toggle-sm"
                     prop:checked=staff
-                    disabled=move || on_staff.is_none() || !write.get()
-                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                    disabled=move || on_staff.is_none() || !write.get() || !administrator.get()
+                    title=move || {
+                        if !administrator.get() {
+                            crate::props::NO_ADMIN_ROLE
+                        } else if !write.get() {
+                            crate::props::NO_WRITE
+                        } else {
+                            ""
+                        }
+                    }
                     on:change=move |event| {
                         if let Some(on_staff) = on_staff {
                             on_staff.run((id.get_value(), event_target_checked(&event)));
@@ -529,7 +555,8 @@ fn detail_panel(
                     type="checkbox"
                     class="toggle toggle-sm"
                     prop:checked=images
-                    disabled=on_lossless.is_none()
+                    disabled=move || on_lossless.is_none() || !administrator.get()
+                    title=move || (!administrator.get()).then_some(crate::props::NO_ADMIN_ROLE).unwrap_or_default()
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);
@@ -544,7 +571,8 @@ fn detail_panel(
                     type="checkbox"
                     class="toggle toggle-sm"
                     prop:checked=videos
-                    disabled=on_lossless.is_none()
+                    disabled=move || on_lossless.is_none() || !administrator.get()
+                    title=move || (!administrator.get()).then_some(crate::props::NO_ADMIN_ROLE).unwrap_or_default()
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);
@@ -640,8 +668,16 @@ fn detail_panel(
                 </button>
                 <button
                     class="btn btn-error btn-sm ml-auto"
-                    disabled=move || on_purge.is_none() || !write.get()
-                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                    disabled=move || on_purge.is_none() || !write.get() || !deletable.get()
+                    title=move || {
+                        if !deletable.get() {
+                            "This instance does not serve account deletion."
+                        } else if !write.get() {
+                            crate::props::NO_WRITE
+                        } else {
+                            ""
+                        }
+                    }
                     on:click=move |_| {
                         if let Some(on_purge) = on_purge {
                             on_purge.run(id.get_value());

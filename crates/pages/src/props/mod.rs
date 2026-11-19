@@ -48,6 +48,22 @@ pub fn settled() -> Signal<bool> {
 pub const NO_WRITE: &str =
     "This browser's staff grant does not include admin:write, so the instance would refuse this change.";
 
+/// The sentence a control carries when the route behind it asks for the administrator role.
+///
+/// The account's staff role is a different question from the grant's scopes: the
+/// administrator flag and media retention answer `role == admin` whatever the token holds.
+pub const NO_ADMIN_ROLE: &str =
+    "This needs an administrator role rather than a moderator's: the instance refuses this request whatever the grant's scopes.";
+
+/// Whether the account's staff role is administrator.
+///
+/// `None` means "assume yes", for the same reason [`writable`] does: the server paints these
+/// pages with every verb already absent.
+#[must_use]
+pub fn administrator(role: Option<Signal<bool>>) -> Signal<bool> {
+    role.unwrap_or_else(|| Signal::derive(|| true))
+}
+
 /// Whether the browser's staff grant carries `admin:write`.
 ///
 /// `None` means "assume yes": the server paints these pages with every verb already absent,

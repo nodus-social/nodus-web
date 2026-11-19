@@ -109,10 +109,24 @@ pub fn Moderation(section: String) -> impl IntoView {
     // The page speaks the shared standing, not the bridge's: the gate is markup, so its
     // three arms are the view's vocabulary, and the probe's answer is translated once here.
     let standing = Signal::derive(move || allowed.get().as_ref().map(standing_of));
+    // The Scans tab reads the instance's scanner routes, and those answer only an
+    // administrator. A moderator opening it would find a panel every request refuses.
+    let administrator = Signal::derive(move || {
+        matches!(
+            allowed.get(),
+            Some(admin::Staff::Yes {
+                role: admin::Role::Admin,
+                ..
+            })
+        )
+    });
 
     // Scans are a scanner feature: an instance that does not advertise `scanners` has no
     // flags to show, so the tab is not drawn and the address says why.
     let scanners = feature("scanners");
+    // Appeals are their own capability: an instance may take reports without an appeal
+    // queue, and the tab follows the name.
+    let appeals = feature("appeals");
     // Quarantined media is a capability of its own: an instance whose sets never touch an
     // attachment publishes no `media_quarantine`, and there is no queue to open.
     let quarantine = feature("media_quarantine");
@@ -123,7 +137,8 @@ pub fn Moderation(section: String) -> impl IntoView {
         Section::ALL
             .iter()
             .filter(|section| match section {
-                Section::Scans => scanners.get(),
+                Section::Scans => scanners.get() && administrator.get(),
+                Section::Appeals => appeals.get(),
                 Section::Media => quarantine.get(),
                 Section::Rules => rules.get(),
                 _ => true,
@@ -145,10 +160,22 @@ pub fn Moderation(section: String) -> impl IntoView {
         >
             {move || match section.get_value() {
                 Section::Reports => view! { <ReportQueue/> }.into_any(),
+                Section::Appeals if !appeals.get() => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance does not serve the appeals panel: its /api/v1/meta answer does not name appeals among its features."
+                    </Note>
+                }
+                .into_any(),
                 Section::Appeals => view! { <Appeals/> }.into_any(),
                 Section::Scans if !scanners.get() => view! {
                     <Note class="text-sm opacity-70">
                         "This instance does not serve the scans panel: its /api/v1/meta answer does not name scanners among its features."
+                    </Note>
+                }
+                .into_any(),
+                Section::Scans if !administrator.get() => view! {
+                    <Note class="text-sm opacity-70">
+                        "The scans panel is served only to an administrator: the instance answers its scanner routes with the admin role, not the moderator's."
                     </Note>
                 }
                 .into_any(),

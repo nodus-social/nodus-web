@@ -120,19 +120,34 @@ pub fn Admin(section: String) -> impl IntoView {
 
     // The page speaks the shared standing; the probe's answer is translated once here.
     let standing = Signal::derive(move || allowed.get().as_ref().map(standing_of));
+    // Which door this account walks through. The instance's own levers are split: scanners
+    // and mail-domain blocks answer only an administrator, while audit, announcements,
+    // deliveries, exports and telemetry logs are served to moderators too. The tab strip
+    // and the section bodies read this, not the grant's scopes.
+    let administrator = Signal::derive(move || {
+        matches!(
+            allowed.get(),
+            Some(admin::Staff::Yes {
+                role: admin::Role::Admin,
+                ..
+            })
+        )
+    });
 
     // The instance decides which sections exist: a `features` name it does not publish is a
     // panel it does not serve, so the tab is not drawn and the section says why if the
     // address names it anyway. Everything else is this instance's own console.
-    // Escalation has no feature name of its own: `/api/v1/meta` advertises `moderation`,
-    // and the strikes the ladder acts on are moderation's own. The gate is that name.
-    let moderation = feature("moderation");
+    // Escalation has its own name: the ladder is a capability an instance may serve without
+    // the rest of `moderation`, and the section is gated on that name.
+    let escalation = feature("escalation");
     // Delivery has its own name: an instance that speaks federation without serving the
     // queue would otherwise offer a panel whose request 404s.
     let delivery = feature("federation_delivery");
     let scanners = feature("scanners");
     let topology = feature("topology");
     let protocol = feature("protocol");
+    // Warning presets are their own capability; the replies panel is what reads them.
+    let warnings = feature("warnings");
     // Transfer is a Nodus extension: an instance that does not publish the name does not
     // serve the two endpoints, so the section is neither drawn nor offered.
     let transfer = feature("settings_transfer");
@@ -140,8 +155,10 @@ pub fn Admin(section: String) -> impl IntoView {
         Section::ALL
             .iter()
             .filter(|section| match section {
-                Section::Scanners => scanners.get(),
-                Section::Escalation => moderation.get(),
+                Section::Scanners => scanners.get() && administrator.get(),
+                Section::Email => administrator.get(),
+                Section::Replies => warnings.get(),
+                Section::Escalation => escalation.get(),
                 Section::Federation => delivery.get(),
                 Section::Topology => topology.get(),
                 Section::Protocol => protocol.get(),
@@ -164,26 +181,17 @@ pub fn Admin(section: String) -> impl IntoView {
             on_navigate=Some(Callback::new(|slug: String| router::navigate(Route::Admin(slug))))
         >
             {move || {
-                let moderator = matches!(
-                    allowed.get(),
-                    Some(admin::Staff::Yes { role: admin::Role::Moderator, .. })
-                );
-                if moderator {
-                    return view! {
-                        <Note class="text-sm opacity-70">
-                            "These are the instance's own levers, and this account's staff\n                             role is moderator rather than administrator: the instance will\n                             refuse the requests behind them. Moderation is where this\n                             account's access applies — an administrator can raise the role\n                             here."
-                        </Note>
-                    }
-                        .into_any();
-                }
                 match section.get_value() {
                     Section::Overview => view! { <Overview/> }.into_any(),
                     Section::Scanners if !scanners.get() => missing("scanners"),
+                    Section::Scanners if !administrator.get() => administrator_only("scanners"),
                     Section::Scanners => view! { <Scanners/> }.into_any(),
                     Section::Domains => view! { <Domains/> }.into_any(),
+                    Section::Email if !administrator.get() => administrator_only("mail domain blocks"),
                     Section::Email => view! { <EmailDomains/> }.into_any(),
+                    Section::Replies if !warnings.get() => missing("warning presets"),
                     Section::Replies => view! { <Replies/> }.into_any(),
-                    Section::Escalation if !moderation.get() => missing_escalation(),
+                    Section::Escalation if !escalation.get() => missing_escalation(),
                     Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
                     Section::Federation if !delivery.get() => missing("delivery"),
                     Section::Federation => view! { <federation::Deliveries/> }.into_any(),
@@ -208,6 +216,18 @@ async fn read_document_file(file: web_sys::File) -> Result<String, String> {
         .map_err(|error| format!("Could not read that file: {error:?}"))?;
     let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
     String::from_utf8(bytes).map_err(|_| "That file is not UTF-8 text.".to_owned())
+}
+
+/// The panel behind an administrator-only section, on a moderator's screen.
+fn administrator_only(name: &'static str) -> AnyView {
+    view! {
+        <Note class="text-sm opacity-70">
+            {format!(
+                "The {name} panel is served only to an administrator: the instance answers its routes with the admin role, not the moderator's. This account's access applies across moderation, and an administrator can raise the role here."
+            )}
+        </Note>
+    }
+    .into_any()
 }
 
 /// A section the instance's `/api/v1/meta` answer does not advertise.

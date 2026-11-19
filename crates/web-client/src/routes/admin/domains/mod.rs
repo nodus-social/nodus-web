@@ -36,7 +36,11 @@ async fn read_list_file(file: web_sys::File) -> Result<String, String> {
 #[component]
 pub fn Domains() -> impl IntoView {
     let revision = revision();
-    let supported = feature("remote_blocks");
+    // The block-list screen and its subscriptions are the `block_lists` capability; the
+    // inbound-block panel below is the separate `remote_blocks` one. Asking one name for
+    // the other hides a screen the instance serves.
+    let block_lists = feature("block_lists");
+    let remote_blocks = feature("remote_blocks");
     let (items, set_items) = signal(Vec::<DomainAllow>::new());
     let (domain, set_domain) = signal(String::new());
     let (busy, set_busy) = signal(false);
@@ -68,7 +72,7 @@ pub fn Domains() -> impl IntoView {
     });
 
     Effect::new(move |_| {
-        if !supported.get() {
+        if !remote_blocks.get() {
             return;
         }
         revision.get();
@@ -242,7 +246,7 @@ pub fn Domains() -> impl IntoView {
     });
 
     Effect::new(move |_| {
-        if !supported.get() {
+        if !block_lists.get() {
             return;
         }
         revision.get();
@@ -353,7 +357,7 @@ pub fn Domains() -> impl IntoView {
                 on_withdraw=withdraw
                 write=Some(crate::state::bridge::admin::may_write())
             />
-            <Show when=move || supported.get()>
+            <Show when=move || block_lists.get()>
                 <BlockListPage
                     text=list_text
                     report=import_report
@@ -383,7 +387,7 @@ pub fn Domains() -> impl IntoView {
                     write=Some(crate::state::bridge::admin::may_write())
                 />
             </Show>
-            <Show when=move || supported.get()>
+            <Show when=move || remote_blocks.get()>
                 <RemoteBlocksPage
                     blocks=blocks
                     confirming=confirming

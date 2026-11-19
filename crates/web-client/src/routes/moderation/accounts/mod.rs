@@ -251,6 +251,8 @@ pub fn AccountList() -> impl IntoView {
             bulk=bulk
             on_bulk=batch
             write=Some(crate::state::bridge::admin::may_write())
+            administrator=Some(crate::state::bridge::admin::may_administer())
+            deletable=Some(crate::state::bridge::feature("account_deletion"))
         />
     }
 }

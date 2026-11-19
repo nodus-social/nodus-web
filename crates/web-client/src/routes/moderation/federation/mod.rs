@@ -17,14 +17,12 @@ use remote::RemoteAccountList;
 
 #[component]
 pub fn Federation() -> impl IntoView {
-    // The account panel is a Nodus extension like the inbound-block panel; an instance that
-    // advertises either `remote_blocks` or `moderation` serves it. Both names already exist in
-    // the contract, and a new name would be a door no instance has been taught to open.
-    let remote_blocks = feature("remote_blocks");
-    let moderation = feature("moderation");
+    // The account panel is its own capability: `remote_accounts` names it, so an instance
+    // that advertises that name — and only that one — serves it.
+    let remote_accounts = feature("remote_accounts");
     view! {
         <BlockedList/>
-        <Show when=move || remote_blocks.get() || moderation.get()>
+        <Show when=move || remote_accounts.get()>
             <RemoteAccountList/>
         </Show>
     }

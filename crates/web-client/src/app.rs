@@ -464,7 +464,7 @@ fn StaffRail() -> impl IntoView {
         <Show when=move || {
             extensions.get()
                 && admin.get()
-                && matches!(role.get(), Some(crate::state::bridge::admin::Role::Admin))
+                && role.get().is_some()
         }>
             <RailItem
                 label="Administration"
