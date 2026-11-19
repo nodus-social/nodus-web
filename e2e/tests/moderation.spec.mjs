@@ -49,6 +49,7 @@ const ADMINISTRATION = [
   'Audit log',
   'System',
   'Protocol',
+  'Settings transfer',
 ]
 
 /** The request the console sent, once it has sent it. */

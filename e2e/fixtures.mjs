@@ -102,6 +102,7 @@ export const FEATURES = [
   'federation_delivery',
   'domain_pauses',
   'report_forwarding',
+  'settings_transfer',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
@@ -559,6 +560,19 @@ export async function adminApi(
     domainPauses = [],
     forwarded = [],
     forwardRefusal = null,
+    settings = {
+      rules: [moderationRule()],
+      instance_rules: [],
+      warning_presets: [],
+      escalation: escalationPolicy(),
+      domain_pauses: [],
+      domain_blocks: [],
+      email_domain_blocks: [],
+      scanner_rules: [],
+      scanner_sets: [],
+    },
+    settingsReport = null,
+    settingsRefusal = null,
   } = {},
 ) {
   // The list answers with the rows it holds: a pause the console sends is pushed here, so
@@ -794,6 +808,41 @@ export async function adminApi(
   })
   await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))
   await page.route(/\/api\/v1\/admin\/measures/, (route) => json(route, measures))
+  // A settings document, counted the way the instance counts it: every asked-for section
+  // is present in the answer, and the counts come from what each one holds.
+  await page.route(/\/api\/v1\/admin\/settings\/export/, (route) => {
+    record(route)
+    const asked = new URL(route.request().url()).searchParams.get('sections')
+    const names = asked ? asked.split(',') : Object.keys(settings)
+    const sections = Object.fromEntries(names.map((name) => [name, settings[name] ?? []]))
+    return json(route, {
+      format: 'nodus-admin-settings',
+      version: 1,
+      exported_at: '2026-11-19T09:00:00Z',
+      instance: HOST,
+      sections,
+    })
+  })
+  // The import: the dry run reports and writes nothing; the write reports the same counts
+  // with `dry_run: false`. A document the instance does not understand is refused in its
+  // own words, which is the sentence the console must show unchanged.
+  await page.route(/\/api\/v1\/admin\/settings\/import/, (route) => {
+    record(route)
+    const dryRun = new URL(route.request().url()).searchParams.get('dry_run') === 'true'
+    if (settingsRefusal) {
+      return json(route, { error: settingsRefusal }, 422)
+    }
+    const held = settingsReport ?? {
+      rules: { created: 1, updated: 0, unchanged: 0, skipped: 0, conflicts: [] },
+      escalation: { created: 0, updated: 1, unchanged: 0, skipped: 0, conflicts: [] },
+    }
+    return json(route, {
+      format: 'nodus-admin-settings',
+      version: 1,
+      dry_run: dryRun,
+      sections: held,
+    })
+  })
   // The block list as a file: the bytes are the answer, not a document around them.
   await page.route(/\/api\/v1\/admin\/domain-blocks\/export/, (route) => {
     record(route)

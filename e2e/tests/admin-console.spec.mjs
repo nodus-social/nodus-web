@@ -1207,3 +1207,99 @@ test('an instance without federation_delivery offers no delivery panel', async (
   await expect(page.getByRole('tab', { name: 'Deliveries' })).toHaveCount(0)
   await expect(page.getByText(/does not serve the delivery panel/)).toBeVisible()
 })
+
+test('an exported settings document is counted per section before it is saved', async ({ page }) => {
+  await consoleAs(page)
+  await open(page, '/admin/settings-transfer')
+
+  const arrived = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export document' }).click()
+  const file = await arrived
+  expect(file.suggestedFilename()).toBe('nodus-admin-settings.json')
+  const stream = await file.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  // The file is the instance's own document: the client saved the bytes it was handed.
+  const document = JSON.parse(Buffer.concat(chunks).toString())
+  expect(document.format).toBe('nodus-admin-settings')
+  expect(document.sections.rules).toHaveLength(1)
+
+  // And the screen counts what the file holds, empty sections included, so nobody exports
+  // seven empty sections believing they carry something.
+  await expect(page.getByText('The document holds 2 entries.')).toBeVisible()
+  const counts = page.getByTestId('settings-count')
+  await expect(counts).toHaveCount(9)
+  await expect(counts.filter({ hasText: 'Moderation rules' })).toContainText('1')
+  await expect(counts.filter({ hasText: 'Instance rules' })).toContainText('0')
+})
+
+test('an import is counted before Apply is offered, and a refusal is read before it is applied', async ({
+  page,
+}) => {
+  const reason =
+    'refusing to lower severity from suspend to silence; a block already in force must not be softened'
+  const calls = await consoleAs(page, {
+    settingsReport: {
+      domain_blocks: {
+        created: 0,
+        updated: 0,
+        unchanged: 1,
+        skipped: 1,
+        conflicts: [{ section: 'domain_blocks', name: 'spam.example', reason }],
+      },
+    },
+  })
+  await open(page, '/admin/settings-transfer')
+
+  const apply = page.getByRole('button', { name: 'Apply' })
+  // Nothing has been counted, so there is nothing to agree to: Apply is not offered yet.
+  await expect(apply).toBeDisabled()
+
+  await page.getByLabel('Settings document').fill('{"format":"nodus-admin-settings","version":1}')
+  await page.getByRole('button', { name: 'Check document' }).click()
+
+  // The first request is the dry run, and it is the only one until the operator asks.
+  const checked = await sent(calls, (call) => call.url.includes('/api/v1/admin/settings/import'))
+  expect(checked.url).toContain('dry_run=true')
+  expect(
+    calls.filter((call) => call.url.includes('/api/v1/admin/settings/import') && call.url.includes('dry_run=false')),
+  ).toHaveLength(0)
+
+  await expect(page.getByTestId('settings-conflict')).toHaveCount(1)
+  // The refusal keeps its own line and its whole sentence: it is the reason the rest of
+  // the document is being asked about.
+  await expect(page.getByTestId('settings-conflict')).toContainText('Domain blocks: spam.example')
+  await expect(page.getByTestId('settings-conflict')).toContainText(reason)
+  await expect(page.getByText('Nothing has been written yet.')).toBeVisible()
+  await expect(apply).toBeDisabled()
+
+  await page
+    .getByLabel('I have read why these rows were refused, and want the rest applied.')
+    .check()
+  await expect(apply).toBeEnabled()
+  await apply.click()
+
+  const written = await sent(
+    calls,
+    (call) =>
+      call.url.includes('/api/v1/admin/settings/import') && call.url.includes('dry_run=false'),
+  )
+  expect(written.method).toBe('POST')
+  await expect(page.getByText('The document was applied: 0 written.')).toBeVisible()
+})
+
+test('a document version the instance does not know is shown in the instance sentence', async ({
+  page,
+}) => {
+  const refusal =
+    'this instance understands version 1 of nodus-admin-settings, not version 9'
+  await consoleAs(page, { settingsRefusal: refusal })
+  await open(page, '/admin/settings-transfer')
+
+  await page.getByLabel('Settings document').fill('{"format":"nodus-admin-settings","version":9}')
+  await page.getByRole('button', { name: 'Check document' }).click()
+
+  // Verbatim: the instance's sentence, not a generic "import failed".
+  await expect(page.getByRole('alert')).toContainText(refusal)
+  await expect(page.getByRole('button', { name: 'Apply' })).toBeDisabled()
+})

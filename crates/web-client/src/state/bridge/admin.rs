@@ -648,6 +648,221 @@ pub struct ImportReport {
     pub invalid: Vec<ImportProblem>,
 }
 
+/// Every section a settings document can carry, in the order an import applies them.
+///
+/// The instance's own order, so a document written here applies in the same sequence
+/// elsewhere: content sets before the rules that name a scanner, the domain lists before
+/// the single policy rows, and moderation rules last.
+pub const SETTINGS_SECTIONS: [&str; 9] = [
+    "rules",
+    "instance_rules",
+    "warning_presets",
+    "escalation",
+    "domain_pauses",
+    "domain_blocks",
+    "email_domain_blocks",
+    "scanner_rules",
+    "scanner_sets",
+];
+
+/// What a settings document holds for one section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsSectionCount {
+    /// The section's name, as the wire spells it.
+    pub key: String,
+    /// How many entries the document carries for it: rows, or the one policy row.
+    pub count: usize,
+}
+
+/// A settings document as downloaded, with what it holds.
+///
+/// The bytes are kept beside the counts because they are the file: what a browser saves
+/// must be what the instance answered, not a re-encoding of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsDocument {
+    /// The document's name, as the instance wrote it.
+    pub format: String,
+    /// The version it was written in.
+    pub version: u64,
+    /// The instance it came from, when the answer names one.
+    pub instance: Option<String>,
+    /// How much it carries per section, in [`SETTINGS_SECTIONS`] order.
+    pub counts: Vec<SettingsSectionCount>,
+    /// The document itself.
+    pub raw: Vec<u8>,
+}
+
+/// One conflict: a row the instance understood and refused or could not place.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct SettingsConflict {
+    /// The section the row belongs to.
+    #[serde(default)]
+    pub section: String,
+    /// The row's own name, so the operator can find it in the document.
+    #[serde(default)]
+    pub name: String,
+    /// Why it was not applied, in the instance's words. Shown whole: this is the sentence
+    /// that decides whether the operator wants the import at all.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// What one section's import would do, or did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct SettingsOutcome {
+    /// Rows the instance does not hold yet.
+    #[serde(default)]
+    pub created: u64,
+    /// Rows it holds and would change.
+    #[serde(default)]
+    pub updated: u64,
+    /// Rows it already matches.
+    #[serde(default)]
+    pub unchanged: u64,
+    /// Rows it cannot apply.
+    #[serde(default)]
+    pub skipped: u64,
+    /// Every row it refused or could not place, each with its reason.
+    #[serde(default)]
+    pub conflicts: Vec<SettingsConflict>,
+}
+
+/// An import's answer: what each section would do, or did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsImport {
+    /// Whether the instance only counted. It says so itself rather than the client
+    /// trusting which request it sent.
+    pub dry_run: bool,
+    /// One outcome per section the document carried, in [`SETTINGS_SECTIONS`] order.
+    pub sections: Vec<(String, SettingsOutcome)>,
+}
+
+/// The query string naming only the sections asked for.
+///
+/// An empty list is left off entirely: the instance reads a missing `sections` as "all of
+/// them", and spelling out nothing at all would be a different request.
+fn settings_query(sections: &[String]) -> String {
+    let chosen: Vec<&str> = SETTINGS_SECTIONS
+        .iter()
+        .copied()
+        .filter(|key| sections.iter().any(|asked| asked == key))
+        .collect();
+    chosen.join(",")
+}
+
+/// `GET /api/v1/admin/settings/export` — the settings document, and what it holds.
+pub async fn settings_export(sections: &[String]) -> Result<SettingsDocument, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/settings/export")
+        .map_err(|error| error.to_string())?;
+    let query = settings_query(sections);
+    if !query.is_empty() {
+        url.query_pairs_mut().append_pair("sections", &query);
+    }
+    let raw = transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())?;
+    let document: serde_json::Value = serde_json::from_slice(&raw).map_err(|error| {
+        format!("The instance answered with something that is not a settings document: {error}")
+    })?;
+    let format = document
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let version = document
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let instance = document
+        .get("instance")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let held = document.get("sections").and_then(serde_json::Value::as_object);
+    // Counted here rather than by the screen: a section the document does not carry at all
+    // is shown as missing, and a section it carries empty is shown as zero. The two are
+    // different facts, and an operator exporting a file needs to know which they have.
+    let counts = SETTINGS_SECTIONS
+        .iter()
+        .filter_map(|key| {
+            let value = held?.get(*key)?;
+            Some(SettingsSectionCount {
+                key: (*key).to_owned(),
+                count: match value {
+                    serde_json::Value::Array(rows) => rows.len(),
+                    serde_json::Value::Object(fields) => usize::from(!fields.is_empty()),
+                    serde_json::Value::Null => 0,
+                    _ => 1,
+                },
+            })
+        })
+        .collect();
+    Ok(SettingsDocument {
+        format,
+        version,
+        instance,
+        counts,
+        raw,
+    })
+}
+
+/// `POST /api/v1/admin/settings/import` — what would change, or the change itself.
+///
+/// The body is the document exactly as it arrived: the instance reads the format and the
+/// version out of it, and refuses what it does not know with a 422 whose sentence is the
+/// only explanation the operator gets.
+pub async fn settings_import(
+    document: &str,
+    sections: &[String],
+    dry_run: bool,
+) -> Result<SettingsImport, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/settings/import")
+        .map_err(|error| error.to_string())?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("dry_run", if dry_run { "true" } else { "false" });
+        let query = settings_query(sections);
+        if !query.is_empty() {
+            pairs.append_pair("sections", &query);
+        }
+    }
+    let answer: serde_json::Value = transport
+        .fetch(transport.post_body(
+            url,
+            "application/json",
+            document.as_bytes().to_vec(),
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+    let reported = answer
+        .get("dry_run")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(dry_run);
+    let held = answer.get("sections").and_then(serde_json::Value::as_object);
+    let mut outcomes = Vec::new();
+    if let Some(held) = held {
+        for key in SETTINGS_SECTIONS {
+            let Some(value) = held.get(key) else { continue };
+            let outcome = serde_json::from_value::<SettingsOutcome>(value.clone()).map_err(
+                |error| format!("The instance's answer for {key} is not an import report: {error}"),
+            )?;
+            outcomes.push((key.to_owned(), outcome));
+        }
+    }
+    Ok(SettingsImport {
+        dry_run: reported,
+        sections: outcomes,
+    })
+}
+
 /// The bytes of a block list, in the format asked for.
 ///
 /// The export is streamed CSV or JSON rather than a DTO, so it is fetched as bytes and

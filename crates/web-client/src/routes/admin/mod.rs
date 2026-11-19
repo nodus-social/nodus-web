@@ -35,6 +35,7 @@ use self::overview::Overview;
 use self::protocol::Protocol;
 use self::replies::Replies;
 use self::scanners::Scanners;
+use self::settings_transfer::SettingsTransfer;
 
 mod announcements;
 mod audit;
@@ -46,6 +47,7 @@ mod overview;
 mod protocol;
 mod replies;
 mod scanners;
+mod settings_transfer;
 mod topology;
 
 /// The administration area for one section.
@@ -131,6 +133,9 @@ pub fn Admin(section: String) -> impl IntoView {
     let scanners = feature("scanners");
     let topology = feature("topology");
     let protocol = feature("protocol");
+    // Transfer is a Nodus extension: an instance that does not publish the name does not
+    // serve the two endpoints, so the section is neither drawn nor offered.
+    let transfer = feature("settings_transfer");
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
@@ -140,6 +145,7 @@ pub fn Admin(section: String) -> impl IntoView {
                 Section::Federation => delivery.get(),
                 Section::Topology => topology.get(),
                 Section::Protocol => protocol.get(),
+                Section::SettingsTransfer => transfer.get(),
                 _ => true,
             })
             .map(|section| section.slug().to_owned())
@@ -187,10 +193,21 @@ pub fn Admin(section: String) -> impl IntoView {
                     Section::Topology => view! { <topology::System/> }.into_any(),
                     Section::Protocol if !protocol.get() => missing("protocol"),
                     Section::Protocol => view! { <Protocol/> }.into_any(),
+                    Section::SettingsTransfer if !transfer.get() => missing("settings transfer"),
+                    Section::SettingsTransfer => view! { <SettingsTransfer/> }.into_any(),
                 }
             }}
         </AdminPage>
     }
+}
+
+/// The bytes of a chosen file as text, or the sentence to show when they cannot be read.
+async fn read_document_file(file: web_sys::File) -> Result<String, String> {
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
+        .await
+        .map_err(|error| format!("Could not read that file: {error:?}"))?;
+    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+    String::from_utf8(bytes).map_err(|_| "That file is not UTF-8 text.".to_owned())
 }
 
 /// A section the instance's `/api/v1/meta` answer does not advertise.

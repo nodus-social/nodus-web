@@ -26,6 +26,7 @@ pub mod overview;
 pub mod protocol;
 pub mod replies;
 pub mod scanners;
+pub mod settings_transfer;
 pub mod topology;
 
 /// One section of the administration area.
@@ -53,11 +54,13 @@ pub enum Section {
     Topology,
     /// What API this server publishes.
     Protocol,
+    /// This instance's moderation settings, carried out of it or into it.
+    SettingsTransfer,
 }
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Overview,
         Self::Scanners,
         Self::Domains,
@@ -69,6 +72,7 @@ impl Section {
         Self::Audit,
         Self::Topology,
         Self::Protocol,
+        Self::SettingsTransfer,
     ];
 
     /// The last path segment, which is also the strip's key.
@@ -86,6 +90,7 @@ impl Section {
             Self::Audit => "audit",
             Self::Topology => "system",
             Self::Protocol => "protocol",
+            Self::SettingsTransfer => "settings-transfer",
         }
     }
 
@@ -113,6 +118,7 @@ impl Section {
             Self::Audit => "Audit log",
             Self::Topology => "System",
             Self::Protocol => "Protocol",
+            Self::SettingsTransfer => "Settings transfer",
         }
     }
 
@@ -131,6 +137,9 @@ impl Section {
             Self::Audit => "Administrative actions recorded by this server",
             Self::Topology => "What each process is doing, and what it just said",
             Self::Protocol => "The client API the SDK selects for this server",
+            Self::SettingsTransfer => {
+                "Carry moderation settings to another instance, or bring them in"
+            }
         }
     }
 
@@ -148,6 +157,7 @@ impl Section {
             Self::Announcements => Icon::Bell,
             Self::Audit => Icon::List,
             Self::Topology => Icon::List,
+            Self::SettingsTransfer => Icon::List,
         }
     }
 
