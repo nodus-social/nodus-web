@@ -621,6 +621,176 @@ pub async fn delete_domain_allow(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// One line the block-list importer could not read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ImportProblem {
+    /// The line number in the list that was sent, counting the header as line one.
+    pub line: usize,
+    /// Why the line could not become a block.
+    pub reason: String,
+}
+
+/// What importing a list did, or would do.
+///
+/// The same shape answers a dry run and an apply: a preview that counts differently from
+/// the write it previews would be worse than no preview.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ImportReport {
+    /// Every line the parser looked at, valid or not.
+    pub parsed: usize,
+    /// Blocks the list would add.
+    pub new: usize,
+    /// Blocks already held whose severity or flags the list changes.
+    pub updated: usize,
+    /// Blocks the list repeats exactly.
+    pub unchanged: usize,
+    /// The lines that could not be read, each with its reason and line number.
+    pub invalid: Vec<ImportProblem>,
+}
+
+/// The bytes of a block list, in the format asked for.
+///
+/// The export is streamed CSV or JSON rather than a DTO, so it is fetched as bytes and
+/// handed to the download helper as they arrived: re-encoding it here would only be a way
+/// to write a different file than the instance produced.
+pub async fn export_block_list(format: &str) -> Result<Vec<u8>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/domain-blocks/export")
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut().append_pair("format", format);
+    transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Parses a block list, or applies it when `dry_run` is false.
+///
+/// The body is the list itself, not a form around it: the instance sniffs CSV from JSON by
+/// the first non-space character, so the content type only has to be honest.
+pub async fn import_block_list(text: &str, dry_run: bool) -> Result<ImportReport, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/domain-blocks/import")
+        .map_err(|error| error.to_string())?;
+    // Spelled either way rather than left off for the apply: the request records which of
+    // the two it was, so a log of an import never needs the surrounding state to say whether
+    // anything was written.
+    url.query_pairs_mut()
+        .append_pair("dry_run", if dry_run { "true" } else { "false" });
+    let content_type = if text.trim_start().starts_with(['[', '{']) {
+        "application/json"
+    } else {
+        "text/csv"
+    };
+    transport
+        .fetch(transport.post_body(url, content_type, text.as_bytes().to_vec()))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// A block list this instance follows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BlockSubscription {
+    pub id: String,
+    /// Where the list is fetched from.
+    pub url: String,
+    /// `csv` or `json`, as the peer publishes it.
+    pub format: String,
+    /// Whether the sweep still refreshes it.
+    #[serde(default)]
+    pub enabled: bool,
+    /// When the list was last read successfully.
+    #[serde(default)]
+    pub last_synced_at: Option<String>,
+    /// Why the last attempt failed, when it did. The row stays listed with this on it.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+/// The lists this instance follows, with the result of each one's last attempt.
+pub async fn block_subscriptions() -> Result<Vec<BlockSubscription>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/domain-blocks/subscriptions")
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Follows one published list.
+pub async fn subscribe_block_list(url: &str, format: &str) -> Result<BlockSubscription, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let target = transport
+        .url("/api/v1/admin/domain-blocks/subscriptions")
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({ "url": url, "format": format }))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.post_body(target, "application/json", body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Stops following one list. The blocks it already brought in stay.
+pub async fn unsubscribe_block_list(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "domain-blocks", "subscriptions", id])
+        .map_err(|error| error.to_string())?;
+    transport
+        .send_empty(transport.delete(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// What pulling one subscription just did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct SyncReport {
+    /// `applied` when the peer sent a list, `not_modified` when it answered `304`.
+    pub status: String,
+    pub parsed: usize,
+    pub new: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    pub invalid: usize,
+}
+
+/// Pulls one list now instead of waiting for the sweep.
+pub async fn sync_block_subscription(id: &str) -> Result<SyncReport, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&[
+            "api",
+            "v1",
+            "admin",
+            "domain-blocks",
+            "subscriptions",
+            id,
+            "sync",
+        ])
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.post(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// How moderation performed in one window, as `GET /api/v1/admin/stats` answers it.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct AdminStats {

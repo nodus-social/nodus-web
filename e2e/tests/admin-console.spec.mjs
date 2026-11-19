@@ -10,6 +10,7 @@ import {
   ACCOUNT_ID,
   adminAccount,
   adminApi,
+  blockSubscription,
   captureChartSpecs,
   chartSpecs,
   granted,
@@ -274,6 +275,74 @@ test('a peer that blocks an account is listed and can be cleared', async ({ page
   const cleared = await sent(calls, (call) => call.method === 'DELETE' && call.url.endsWith('/api/v1/admin/federation/remote-blocks'))
   expect(JSON.parse(cleared.body)).toEqual({ host: 'peer.example' })
   await expect(page.getByText('No peer has blocked us.')).toBeVisible()
+})
+
+test('the block list is exported as the bytes the instance sent', async ({ page }) => {
+  await consoleAs(page)
+  await open(page, '/admin/domains')
+
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export CSV' }).click()
+  const file = await download
+  expect(file.suggestedFilename()).toBe('domain-blocks.csv')
+  const stream = await file.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  expect(Buffer.concat(chunks).toString()).toContain('domain,severity')
+})
+
+test('an import is counted before it is applied, and a bad line is named', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    blockImport: {
+      parsed: 3,
+      new: 2,
+      updated: 1,
+      unchanged: 0,
+      invalid: [{ line: 4, reason: 'not a domain' }],
+    },
+  })
+  await open(page, '/admin/domains')
+
+  await page.getByLabel('Block list', { exact: true }).fill('domain,severity\nspam.example,suspend\nbad')
+  await page.getByRole('button', { name: 'Check list' }).click()
+
+  await expect(page.getByText('Parsed', { exact: true })).toBeVisible()
+  await expect(page.getByText('Nothing has been written yet.')).toBeVisible()
+  await expect(page.getByText('Line 4: not a domain')).toBeVisible()
+  // The preview is a dry run: the first request must not have written anything.
+  const checks = calls.filter((call) => call.url.includes('/admin/domain-blocks/import'))
+  expect(checks).toHaveLength(1)
+  expect(checks[0].url).toContain('dry_run=true')
+
+  await page.getByRole('button', { name: 'Apply', exact: true }).click()
+  const applied = await sent(calls, (call) => call.url.includes('/admin/domain-blocks/import?dry_run=false'))
+  expect(applied.method).toBe('POST')
+  await expect(page.getByText('The list was applied.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toHaveCount(0)
+})
+
+test('a followed list shows why it failed and can be synced now', async ({ page }) => {
+  const calls = await consoleAs(page, {
+    blockSubscriptions: [blockSubscription({ last_error: 'the list timed out' })],
+  })
+  await open(page, '/admin/domains')
+
+  await expect(page.getByText('Subscribed lists')).toBeVisible()
+  const broken = page.getByText('the list timed out')
+  await expect(broken).toBeVisible()
+  await expect(broken).toHaveClass(/text-error/)
+  // A list that failed is still listed: its row is how the moderator sees the failure.
+  await expect(page.getByText('https://lists.example/blocklist.csv')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Sync now' }).click()
+  const sync = await sent(calls, (call) => call.url.endsWith('/api/v1/admin/domain-blocks/subscriptions/sub-1/sync'))
+  expect(sync.method).toBe('POST')
+
+  await page.getByLabel('List address').fill('https://other.example/list.json')
+  await page.getByLabel('List format').selectOption('json')
+  await page.getByRole('button', { name: 'Follow list' }).click()
+  const follow = await sent(calls, (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/domain-blocks/subscriptions'))
+  expect(JSON.parse(follow.body)).toEqual({ url: 'https://other.example/list.json', format: 'json' })
 })
 
 test('a canned reply is saved with its title and text', async ({ page }) => {

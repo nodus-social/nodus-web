@@ -336,6 +336,22 @@ export function remoteBlock(overrides = {}) {
   }
 }
 
+/** One followed block list, as the instance reports it after a sync. */
+export function blockSubscription(overrides = {}) {
+  return {
+    id: 'sub-1',
+    url: 'https://lists.example/blocklist.csv',
+    format: 'csv',
+    enabled: true,
+    etag: 'W/"8"',
+    last_modified: '2026-11-18T09:00:00Z',
+    last_synced_at: '2026-11-18T09:05:00Z',
+    last_error: null,
+    created_at: '2026-11-17T09:00:00Z',
+    ...overrides,
+  }
+}
+
 /** The performance document for one window, with every counter the screen shows. */
 export function performanceStats(overrides = {}) {
   return {
@@ -384,6 +400,15 @@ export async function adminApi(
     audit = [],
     announcements = [],
     bulkRefusals = {},
+    blockImport = {
+      parsed: 3,
+      new: 2,
+      updated: 1,
+      unchanged: 0,
+      invalid: [{ line: 4, reason: 'not a domain' }],
+    },
+    blockSubscriptions = [],
+    blockSync = { status: 'ok', parsed: 3, new: 2, updated: 1, unchanged: 0, invalid: 0 },
     stats = performanceStats(),
   } = {},
 ) {
@@ -533,6 +558,41 @@ export async function adminApi(
   })
   await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))
   await page.route(/\/api\/v1\/admin\/measures/, (route) => json(route, measures))
+  // The block list as a file: the bytes are the answer, not a document around them.
+  await page.route(/\/api\/v1\/admin\/domain-blocks\/export/, (route) => {
+    record(route)
+    const format = new URL(route.request().url()).searchParams.get('format') ?? 'csv'
+    const body =
+      format === 'json'
+        ? JSON.stringify([{ domain: 'spam.example', severity: 'suspend' }])
+        : 'domain,severity\nspam.example,suspend\n'
+    return route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': format === 'json' ? 'application/json' : 'text/csv' },
+      body,
+    })
+  })
+  await page.route(/\/api\/v1\/admin\/domain-blocks\/import/, (route) => {
+    const dryRun = new URL(route.request().url()).searchParams.get('dry_run') === 'true'
+    return json(route, { ...blockImport, applied: !dryRun })
+  })
+  await page.route(/\/api\/v1\/admin\/domain-blocks\/subscriptions\/[^/]+\/sync$/, (route) =>
+    json(route, blockSync),
+  )
+  await page.route(/\/api\/v1\/admin\/domain-blocks\/subscriptions$/, (route) => {
+    if (route.request().method() === 'POST') {
+      const body = JSON.parse(route.request().postData() ?? '{}')
+      return json(route, blockSubscription({ id: 'sub-new', url: body.url, format: body.format }))
+    }
+    return json(route, blockSubscriptions)
+  })
+  await page.route(/\/api\/v1\/admin\/domain-blocks\/subscriptions\/[^/]+$/, (route) => {
+    if (route.request().method() === 'DELETE') {
+      record(route)
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    return json(route, blockSubscriptions[0] ?? blockSubscription())
+  })
   // The window is answered from the fixture rather than echoed back: the console must read
   // the numbers it was sent, not the ones it asked for.
   await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))
