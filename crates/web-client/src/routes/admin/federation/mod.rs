@@ -2,6 +2,10 @@
 //!
 //! Reading is `admin:read` and retrying is `admin:write`; the page draws the levers it may
 //! press from the grant, and this half is the part that sends.
+//!
+//! The paused domains sit beside the queue on this screen because both answer the same
+//! question — what is this instance doing, or not doing, with a peer — and a pause is the
+//! one lever here that a moderator must not mistake for a block.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -9,7 +13,11 @@ use leptos::task::spawn_local;
 use nodus_pages::pages::admin::federation::{Counts, DeliveriesPage, Delivery, Query, PAGE};
 
 use crate::state::alive::Alive;
-use crate::state::bridge::admin;
+use crate::state::bridge::{admin, feature};
+
+mod pauses;
+
+pub use self::pauses::DomainPauses;
 
 /// What the instance answered, translated once into the page's own shape.
 fn delivery_of(row: admin::Delivery) -> Delivery {
@@ -145,6 +153,7 @@ pub fn Deliveries() -> impl IntoView {
     });
 
     view! {
+        <div class="flex flex-col gap-4">
         <DeliveriesPage
             rows=rows
             counts=Signal::derive(move || counts_of(counts.get()))
@@ -159,5 +168,9 @@ pub fn Deliveries() -> impl IntoView {
             on_retry=on_retry
             on_retry_failed=on_retry_failed
         />
+        <Show when=move || feature("domain_pauses").get()>
+            <DomainPauses/>
+        </Show>
+        </div>
     }
 }

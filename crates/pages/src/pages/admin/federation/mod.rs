@@ -17,6 +17,8 @@ use crate::components::panel::Panel;
 use crate::props::{writable, NO_WRITE};
 use crate::Note;
 
+pub mod pauses;
+
 /// How many rows one page asks for.
 pub const PAGE: u16 = 20;
 

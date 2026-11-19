@@ -20,6 +20,7 @@ import {
   granted,
   hydrated,
   moderationRule,
+  pausedDomain,
   performanceStats,
   remoteBlock,
   report,
@@ -1081,6 +1082,117 @@ test('an empty queue says nothing is waiting', async ({ page }) => {
   await open(page, '/admin/federation')
 
   await expect(page.getByTestId('delivery-empty')).toHaveText('Nothing is waiting to be delivered.')
+})
+
+test('a paused domain says what a pause is, and who set it and until when', async ({ page }) => {
+  await consoleAs(page, {
+    domainPauses: [
+      pausedDomain({ domain: 'quiet.example', reason: 'their queue is flooding us' }),
+    ],
+  })
+  await open(page, '/admin/federation')
+
+  await expect(page.getByRole('heading', { name: 'Paused domains' })).toBeVisible()
+  // The difference from a block is in words, twice: once for the panel and once in the
+  // row's standing. A pause lapses and is never announced; a block is permanent and told.
+  const difference = page.getByTestId('pause-versus-block')
+  await expect(difference).toContainText('temporary and unannounced')
+  await expect(difference).toContainText('the peer is never told')
+  await expect(difference).toContainText('permanent and announced')
+
+  await expect(page.getByTestId('pause-row')).toHaveCount(1)
+  await expect(page.getByTestId('pause-row-domain')).toHaveText('quiet.example')
+  await expect(page.getByTestId('pause-state')).toHaveText('Paused')
+  await expect(page.getByTestId('pause-standing')).toContainText('Paused until 2026-11-25')
+  await expect(page.getByTestId('pause-standing')).toContainText('resume on their own')
+  await expect(page.getByTestId('pause-reason-text')).toHaveText('their queue is flooding us')
+  await expect(page.getByTestId('pause-attribution')).toHaveText(
+    'Paused by ada on 2026-11-18',
+  )
+})
+
+test('a lapsed pause reads as expired rather than as paused', async ({ page }) => {
+  await consoleAs(page, {
+    domainPauses: [
+      pausedDomain({
+        domain: 'old.example',
+        expires_at: '2026-11-01T00:00:00Z',
+        // The instance's own answer: it has already lapsed.
+        expired: true,
+      }),
+    ],
+  })
+  await open(page, '/admin/federation')
+
+  // The mistake this guards: a lapsed row that still reads as in force makes a list of
+  // five look like five live pauses, and sends a moderator looking for a lift it does not
+  // need. Expired is a word in the badge and a sentence in the row.
+  await expect(page.getByTestId('pause-state')).toHaveText('Expired')
+  await expect(page.getByTestId('pause-standing')).toContainText('Expired on 2026-11-01')
+  await expect(page.getByTestId('pause-standing')).toContainText('no longer in force')
+  // Nothing to lift: the pause has already stopped by itself.
+  await expect(page.getByTestId('pause-lift')).toHaveCount(0)
+})
+
+test('a pause with no expiry says it lasts until it is lifted', async ({ page }) => {
+  await consoleAs(page, {
+    domainPauses: [pausedDomain({ domain: 'steady.example', expires_at: null })],
+  })
+  await open(page, '/admin/federation')
+
+  await expect(page.getByTestId('pause-standing')).toContainText(
+    'Paused with no expiry: it lasts until it is lifted',
+  )
+})
+
+test('an empty pause list says no domain is paused', async ({ page }) => {
+  await consoleAs(page, { domainPauses: [] })
+  await open(page, '/admin/federation')
+
+  await expect(page.getByTestId('pause-empty')).toHaveText('No domain is paused.')
+})
+
+test('pausing a domain sends its reason and the day it lapses', async ({ page }) => {
+  const calls = await consoleAs(page, { domainPauses: [] })
+  await open(page, '/admin/federation')
+
+  await page.getByTestId('pause-domain').fill('noisy.example')
+  await page.getByTestId('pause-reason').fill('waiting for their admin to answer')
+  await page.getByTestId('pause-expiry').fill('2026-12-01')
+  await page.getByTestId('pause-submit').click()
+
+  const written = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/federation/domain-pauses'),
+  )
+  const body = JSON.parse(written.body)
+  expect(body.domain).toBe('noisy.example')
+  expect(body.reason).toBe('waiting for their admin to answer')
+  // A date input names a day; the endpoint takes an instant, so the day is widened to its
+  // start rather than the pause silently losing its expiry.
+  expect(body.expires_at).toBe('2026-12-01T00:00:00Z')
+  await expect(page.getByTestId('pause-notice')).toContainText('noisy.example is paused')
+  await expect(page.getByTestId('pause-row-domain')).toHaveText('noisy.example')
+})
+
+test('lifting a pause asks a second time, and says what resumes', async ({ page }) => {
+  const calls = await consoleAs(page, { domainPauses: [pausedDomain({ domain: 'quiet.example' })] })
+  await open(page, '/admin/federation')
+
+  await page.getByTestId('pause-lift').click()
+  await expect(page.getByTestId('pause-lift-confirm')).toBeVisible()
+  // The first press only asks: nothing leaves until it is answered.
+  expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(0)
+
+  await page.getByTestId('pause-lift-confirm').click()
+  const written = await sent(
+    calls,
+    (call) =>
+      call.method === 'DELETE' &&
+      call.url.endsWith('/api/v1/admin/federation/domain-pauses/quiet.example'),
+  )
+  expect(written.url).toContain('/domain-pauses/quiet.example')
+  await expect(page.getByTestId('pause-notice')).toContainText('The pause on quiet.example is lifted')
 })
 
 test('an instance without federation_delivery offers no delivery panel', async ({ page }) => {

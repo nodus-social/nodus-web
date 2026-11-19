@@ -2642,3 +2642,105 @@ pub async fn retry_failed(host: Option<&str>) -> Result<i64, String> {
         .map(|answer| answer.requeued)
         .map_err(|error| error.to_string())
 }
+
+/// One paused domain, as `GET /api/v1/admin/federation/domain-pauses` sends it.
+///
+/// An expired pause stays in the list: the row is a record of something that happened, and
+/// the instance's `expired` says whether it is still biting.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PausedDomain {
+    /// The bare hostname the pause was set on.
+    pub domain: String,
+    /// Why, as the administrator wrote it.
+    #[serde(default)]
+    pub reason: String,
+    /// When it lapses, in RFC 3339, when it does.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Whether the instance's clock has already passed that moment.
+    #[serde(default)]
+    pub expired: bool,
+    /// When it was set.
+    pub created_at: String,
+    /// Who set it, as a name this instance still knows.
+    #[serde(default)]
+    pub created_by_handle: Option<String>,
+}
+
+/// Every domain this instance has paused, expired ones included.
+///
+/// A Nodus extension: an instance whose `/api/v1/meta` does not name `domain_pauses` is not
+/// asked, and the panel is not drawn.
+pub async fn domain_pauses() -> Result<Vec<PausedDomain>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/federation/domain-pauses")
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("limit", &PAGE.to_string());
+    // A bare array rather than an envelope: the row list is the whole answer.
+    transport
+        .fetch::<Vec<PausedDomain>>(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Pauses one domain, with the reason it was set and an optional expiry day.
+///
+/// `expires_on` is the date input's own `YYYY-MM-DD`, empty for a pause with no expiry; the
+/// endpoint takes a timestamp, so the day is widened to the instant it starts. A pause is
+/// not a block: it lapses, and the peer is never told.
+pub async fn pause_domain(
+    domain: &str,
+    reason: &str,
+    expires_on: &str,
+) -> Result<PausedDomain, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/federation/domain-pauses")
+        .map_err(|error| error.to_string())?;
+    let mut body = serde_json::json!({ "domain": domain.trim(), "reason": reason.trim() });
+    match expires_on.trim() {
+        "" => {}
+        day if day.len() == 10 => {
+            body["expires_at"] = serde_json::Value::String(format!("{day}T00:00:00Z"));
+        }
+        other => body["expires_at"] = serde_json::Value::String(other.to_owned()),
+    }
+    let body = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
+    let mut request = transport.post(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch::<PausedDomain>(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Lifts one domain's pause now, naming the domain in the path.
+pub async fn lift_domain_pause(domain: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&[
+            "api",
+            "v1",
+            "admin",
+            "federation",
+            "domain-pauses",
+            domain,
+        ])
+        .map_err(|error| error.to_string())?;
+    // A `DELETE` with no body: the domain is already the path's segment.
+    transport
+        .send_empty(transport.delete(url))
+        .await
+        .map_err(|error| error.to_string())
+}

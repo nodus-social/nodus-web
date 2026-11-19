@@ -100,6 +100,7 @@ export const FEATURES = [
   'media_quarantine',
   'moderation_rules',
   'federation_delivery',
+  'domain_pauses',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
@@ -412,6 +413,25 @@ export function remoteBlock(overrides = {}) {
   }
 }
 
+/**
+ * One paused domain, as the admin endpoint answers it.
+ *
+ * Defaults to a pause still in force, with an expiry three days out: the row most of a
+ * paused list is in. `expired` is the instance's answer, not the console's arithmetic.
+ */
+export function pausedDomain(overrides = {}) {
+  return {
+    domain: 'quiet.example',
+    reason: 'their queue is flooding us',
+    expires_at: '2026-11-25T00:00:00Z',
+    expired: false,
+    created_at: '2026-11-18T09:00:00Z',
+    created_by: ACCOUNT_ID,
+    created_by_handle: 'ada',
+    ...overrides,
+  }
+}
+
 /** One followed block list, as the instance reports it after a sync. */
 export function blockSubscription(overrides = {}) {
   return {
@@ -535,8 +555,12 @@ export async function adminApi(
     escalationRefusal = null,
     deliveries = [],
     deliveryCounts: counts = null,
+    domainPauses = [],
   } = {},
 ) {
+  // The list answers with the rows it holds: a pause the console sends is pushed here, so
+  // the re-read after a write shows the same list the instance would.
+  let paused = [...domainPauses]
   const calls = []
   const node = (name, status, extra = {}) => ({
     name,
@@ -623,6 +647,34 @@ export async function adminApi(
     const counted = deliveryCounts()
     for (const row of deliveries) counted[row.state] = (counted[row.state] ?? 0) + 1
     return json(route, { deliveries, counts: counts ?? counted })
+  })
+  // Domain pauses: a temporary stop that lapses, unlike a block. The row the instance
+  // answers with carries its own `expired`, which the console must not recompute.
+  await page.route(/\/api\/v1\/admin\/federation\/domain-pauses(\?|$)/, (route) => {
+    if (route.request().method() === 'GET') return json(route, paused)
+    record(route)
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    const row = pausedDomain({
+      domain: body.domain,
+      reason: body.reason ?? '',
+      expires_at: body.expires_at ?? null,
+      created_at: '2026-11-19T08:00:00Z',
+    })
+    paused = [...paused.filter((held) => held.domain !== row.domain), row]
+    return route.fulfill({ status: 201, headers: CORS, json: row })
+  })
+  await page.route(/\/api\/v1\/admin\/federation\/domain-pauses\/[^/]+$/, (route) => {
+    record(route)
+    const domain = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1))
+    if (route.request().method() === 'PUT') {
+      const body = JSON.parse(route.request().postData() ?? '{}')
+      const row = paused.find((held) => held.domain === domain)
+      const updated = pausedDomain({ ...row, reason: body.reason, expires_at: body.expires_at ?? null })
+      paused = paused.map((held) => (held.domain === domain ? updated : held))
+      return json(route, updated)
+    }
+    paused = paused.filter((held) => held.domain !== domain)
+    return route.fulfill({ status: 204, headers: CORS })
   })
   await page.route(/\/api\/v1\/admin\/federation\/deliveries\/[^/]+\/retry$/, (route) =>
     json(route, { id: route.request().url().split('/').at(-2), state: 'pending' }),
