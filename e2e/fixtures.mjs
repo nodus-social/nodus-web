@@ -336,6 +336,26 @@ export function adminAccount(overrides = {}) {
   }
 }
 
+/**
+ * One strike in an account's history, as `GET /api/v1/admin/accounts/{id}/strikes` sends it.
+ *
+ * There is no moderator field: the instance stores the action and the reason, not the person.
+ */
+export function strike(overrides = {}) {
+  return {
+    id: 's1',
+    account_id: ACCOUNT_ID,
+    rule_id: null,
+    rule_name: null,
+    action: 'warn',
+    reason: 'Selling something.',
+    created_at: '2026-11-18T09:00:00.000Z',
+    expires_at: '2026-12-18T09:00:00.000Z',
+    live: true,
+    ...overrides,
+  }
+}
+
 /** A report as the moderator console receives it, with the account it is about. */
 export function report(overrides = {}) {
   return {
@@ -580,6 +600,9 @@ export async function adminApi(
     },
     settingsReport = null,
     settingsRefusal = null,
+    strikes = [],
+    roleRefusal = null,
+    warnRefusal = null,
   } = {},
 ) {
   // The list answers with the rows it holds: a pause the console sends is pushed here, so
@@ -600,6 +623,12 @@ export async function adminApi(
     created_at: '2026-11-19T08:00:00Z',
     updated_at: '2026-11-19T08:00:00Z',
   })
+  // The roster the console reads, and the strikes it has charged: a role change and a
+  // warning both answer with the row as the instance now holds it, and a later read of
+  // either sees the same row.
+  const roster = [...accounts]
+  const charged = [...strikes]
+  const byId = (id) => roster.find((held) => held.id === id) ?? roster[0] ?? adminAccount()
   const calls = []
   const node = (name, status, extra = {}) => ({
     name,
@@ -727,13 +756,44 @@ export async function adminApi(
     ).length
     return json(route, { requeued })
   })
-  await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
-  await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))
-  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/action$/, (route) => json(route, accounts[0] ?? adminAccount()))
+  await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, roster))
+  await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, roster))
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/action$/, (route) => json(route, roster[0] ?? adminAccount()))
   await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/notes$/, (route) => json(route, { body: 'Noted.' }))
   await page.route(/\/api\/v1\/admin\/accounts\/[^/]+$/, (route) => {
     if (route.request().method() === 'DELETE') return json(route, {})
-    return json(route, { ...(accounts[0] ?? adminAccount()), notes: [], flags: [], reports_against: 0 })
+    return json(route, { ...(roster[0] ?? adminAccount()), notes: [], flags: [], reports_against: 0 })
+  })
+  // The two per-row staff powers: the role an account holds, and a warning — which the
+  // instance writes as a notification and a strike in one call, so the stub does the same.
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/role$/, (route) => {
+    const id = route.request().url().split('/').at(-2)
+    if (roleRefusal) {
+      record(route)
+      return route.fulfill({ status: 400, headers: CORS, json: { error: roleRefusal } })
+    }
+    const wanted = JSON.parse(route.request().postData() ?? '{}').role
+    const held = byId(id)
+    Object.assign(held, { role: wanted, admin: wanted === 'admin' })
+    return json(route, held)
+  })
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/warn$/, (route) => {
+    const id = route.request().url().split('/').at(-2)
+    if (warnRefusal) {
+      record(route)
+      return route.fulfill({ status: 422, headers: CORS, json: { error: warnRefusal } })
+    }
+    const form = JSON.parse(route.request().postData() ?? '{}')
+    const words =
+      form.text || presets.find((held) => held.id === form.preset_id)?.text || 'A warning.'
+    const held = byId(id)
+    charged.unshift(strike({ id: `s${charged.length + 1}`, account_id: id, reason: words }))
+    held.strike_count = (held.strike_count ?? 0) + 1
+    return json(route, held)
+  })
+  await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/strikes$/, (route) => {
+    const id = route.request().url().split('/').at(-2)
+    return json(route, charged.filter((row) => row.account_id === id))
   })
   await page.route(/\/api\/v1\/admin\/scanners$/, (route) => json(route, scanners))
   await page.route(/\/api\/v1\/admin\/scanners\/[^/]+\/(refresh|rules)$/, (route) => json(route, scanners[0] ?? scanner()))

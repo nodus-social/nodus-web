@@ -11,6 +11,7 @@ import {
   ACCOUNT_ID,
   FEATURES,
   GRANT_KEY,
+  adminAccount,
   adminApi,
   appeal,
   granted,
@@ -765,4 +766,125 @@ test('the federation screen says when nothing was forwarded', async ({ page }) =
   await hydrated(page)
 
   await expect(page.getByTestId('forwarded-empty')).toHaveText('Nothing has been forwarded.')
+})
+
+/** One warning preset as the instance keeps it: a title a moderator reads, and the words. */
+const PRESET = {
+  id: '11',
+  title: 'First warning',
+  text: 'Be kind to the people you reply to.',
+  created_at: '2026-11-01T00:00:00Z',
+}
+
+/** The account list as two people live on it: the signed-in administrator, and another. */
+function twoAccounts(extra = {}) {
+  return [
+    adminAccount({ id: ACCOUNT_ID, username: 'ada', role: 'admin' }),
+    adminAccount({ id: '2', username: 'grace', account: otherAccount, role: 'none', ...extra }),
+  ]
+}
+
+test('an administrator moves another account onto the staff roll', async ({ page }) => {
+  await stubApi(page, { role: 'admin' })
+  const calls = await adminApi(page, { role: 'admin', accounts: twoAccounts() })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/accounts')
+  await hydrated(page)
+
+  const grace = row(page, '@grace')
+  await expect(grace.getByTestId('account-role')).toHaveText('Role: No staff role')
+
+  const select = grace.getByRole('combobox', { name: 'Role for @grace' })
+  await select.selectOption('moderator')
+
+  // The row redraws from the instance's answer, which is the role the account now holds.
+  await expect(grace.getByTestId('account-role')).toHaveText('Role: Moderator')
+  const asked = await sent(calls, (call) => call.url.endsWith('/api/v1/admin/accounts/2/role'))
+  expect(asked.method).toBe('PUT')
+  expect(JSON.parse(asked.body)).toEqual({ role: 'moderator' })
+
+  // The administrator's own row offers no select at all: the server refuses the demotion,
+  // so the row says who can do it instead of offering a press that always fails.
+  const mine = row(page, '@ada')
+  await expect(mine.getByTestId('own-role-note')).toHaveText(
+    'Your role — another administrator has to change it.',
+  )
+  await expect(mine.getByRole('combobox', { name: /^Role for/ })).toHaveCount(0)
+})
+
+test('a moderator sees the role an account holds and no way to change it', async ({ page }) => {
+  await stubApi(page, { role: 'moderator' })
+  await adminApi(page, { role: 'moderator', accounts: twoAccounts() })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/accounts')
+  await hydrated(page)
+
+  // The role is still said, because it is a fact about the account the moderator is judging.
+  await expect(row(page, '@grace').getByTestId('account-role')).toHaveText('Role: No staff role')
+  // The control is not drawn at all: `PUT .../role` answers to an administrator.
+  await expect(page.getByRole('combobox', { name: /^Role for/ })).toHaveCount(0)
+  await expect(page.getByTestId('own-role-note')).toHaveCount(0)
+})
+
+test('a warning picked from a preset says what the account now carries', async ({ page }) => {
+  await stubApi(page, { role: 'admin' })
+  const calls = await adminApi(page, {
+    role: 'admin',
+    accounts: twoAccounts(),
+    presets: [PRESET],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/accounts')
+  await hydrated(page)
+
+  const grace = row(page, '@grace')
+  await grace.getByRole('button', { name: 'Warn @grace' }).click()
+  await grace.getByLabel('Warning preset').selectOption(PRESET.id)
+  // The words come with the preset, so the form needs no typing to be sent.
+  await expect(grace.getByRole('button', { name: 'Send warning to @grace' })).toBeEnabled()
+  await grace.getByRole('button', { name: 'Send warning to @grace' }).click()
+
+  // The instance writes the notification and the strike in one call; the row says so rather
+  // than a bare "saved" that could equally describe a silence.
+  await expect(page.getByTestId('warning-notice')).toHaveText('Warned grace: 1 warning in force')
+  await expect(grace.getByTestId('account-strikes')).toHaveText(
+    '1 strike, next: nothing — the ladder ends here',
+  )
+  const warned = await sent(calls, (call) => call.url.endsWith('/api/v1/admin/accounts/2/warn'))
+  expect(warned.method).toBe('POST')
+  expect(JSON.parse(warned.body)).toEqual({ text: '', preset_id: PRESET.id })
+})
+
+test('the strike count opens the history, fetched on demand', async ({ page }) => {
+  await stubApi(page, { role: 'admin' })
+  const calls = await adminApi(page, { role: 'admin', accounts: twoAccounts() })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/accounts')
+  await hydrated(page)
+
+  const grace = row(page, '@grace')
+  const reason = 'Selling copies of a book they did not write.'
+  await grace.getByRole('button', { name: 'Warn @grace' }).click()
+  await grace.getByLabel('Warning text').fill(reason)
+  await grace.getByRole('button', { name: 'Send warning to @grace' }).click()
+  await expect(page.getByTestId('warning-notice')).toHaveText('Warned grace: 1 warning in force')
+
+  // Nothing has been read yet: the history is a second request, made when it is wanted.
+  expect(calls.filter((call) => call.url.endsWith('/strikes')).length).toBe(0)
+  await grace.getByTestId('account-strikes').click()
+
+  const panel = grace.getByTestId('strike-history')
+  await expect(panel).toHaveCount(1)
+  await expect(panel.getByTestId('strike-row')).toHaveCount(1)
+  // What was charged, why, under which rule, and whether it still counts — the whole row
+  // says it, including the warning given a moment ago.
+  await expect(panel).toContainText('warn · 2026-11-18')
+  await expect(panel).toContainText(reason)
+  await expect(panel).toContainText('no rule cited · counts until 2026-12-18')
+  await expect(panel).toContainText('the audit log holds the name')
+  await sent(calls, (call) => call.url.endsWith('/api/v1/admin/accounts/2/strikes'))
 })

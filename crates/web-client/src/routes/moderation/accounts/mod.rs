@@ -5,8 +5,13 @@ use std::collections::HashMap;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use nodus_client_core::model::{AccountDetail, AdminAccount, AdminAccountQuery, ModerationAction};
-use nodus_pages::pages::moderation::accounts::{AccountsPage, NextStep, StrikeHint};
+use nodus_client_core::model::{
+    AccountDetail, AdminAccount, AdminAccountQuery, ModerationAction, WarningPreset,
+};
+use nodus_pages::pages::moderation::accounts::{
+    AccountsPage, NextStep, RowFacts, StrikeHistory, StrikeHint, StrikeRecord, Warning,
+    WarningNotice,
+};
 use nodus_pages::pages::moderation::{AccountBatch, BulkOutcome};
 
 use crate::state::alive::Alive;
@@ -19,29 +24,69 @@ use crate::state::bridge::admin;
 /// default.
 const PAGE: u16 = 20;
 
-/// Splits a page of rows into the accounts the list draws and the strikes it says beside them.
+/// Splits a page of rows into the accounts the list draws and what each row knows beyond
+/// its payload.
 ///
-/// An instance that predates the escalation policy sends neither field, and a row without
-/// one simply has no hint: the list is the same list either way.
-fn split(rows: Vec<admin::AccountRow>) -> (Vec<AdminAccount>, HashMap<String, StrikeHint>) {
+/// An instance that predates the escalation policy sends neither strike field, and one that
+/// predates roles sends no role: a row without either simply has no hint, and the role falls
+/// back to the administrator flag the directory has always carried.
+fn split(rows: Vec<admin::AccountRow>) -> (Vec<AdminAccount>, HashMap<String, RowFacts>) {
     let mut list = Vec::with_capacity(rows.len());
-    let mut strikes = HashMap::new();
+    let mut facts = HashMap::new();
     for row in rows {
-        if let Some(count) = row.strike_count {
-            strikes.insert(
-                row.account.id.clone(),
-                StrikeHint {
-                    count,
-                    next: row.next_escalation.map(|next| NextStep {
-                        strikes: next.strikes,
-                        action: next.action,
-                    }),
-                },
-            );
-        }
+        let role = row.role.clone().unwrap_or_else(|| {
+            if row.account.admin {
+                "admin".to_owned()
+            } else {
+                "none".to_owned()
+            }
+        });
+        let strikes = row.strike_count.map(|count| StrikeHint {
+            count,
+            next: row.next_escalation.map(|next| NextStep {
+                strikes: next.strikes,
+                action: next.action,
+            }),
+        });
+        facts.insert(row.account.id.clone(), RowFacts { role, strikes });
         list.push(row.account);
     }
-    (list, strikes)
+    (list, facts)
+}
+
+/// Rewrites one row's facts from what the instance answered.
+///
+/// The answer, not the request, is what the row shows: a warning's strike count includes the
+/// strikes the account already carried, and the role is the one the instance now holds.
+fn apply(facts: &mut HashMap<String, RowFacts>, id: &str, answer: &admin::AccountAfter) {
+    let Some(row) = facts.get_mut(id) else { return };
+    if !answer.role.is_empty() {
+        row.role = answer.role.clone();
+    }
+    if let Some(count) = answer.strike_count {
+        row.strikes = Some(StrikeHint {
+            count,
+            next: answer.next_escalation.as_ref().map(|next| NextStep {
+                strikes: next.strikes,
+                action: next.action.clone(),
+            }),
+        });
+    }
+}
+
+/// One strike as the history panel draws it.
+fn strike_of(row: admin::Strike) -> StrikeRecord {
+    StrikeRecord {
+        id: row.id,
+        action: row.action,
+        reason: row.reason,
+        // The name is what a moderator recognises; the id is all that is left once the rule
+        // is deleted, and it is still better than saying nothing.
+        rule: row.rule_name.or(row.rule_id),
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        live: row.live,
+    }
 }
 
 /// One page of accounts, the search that narrows it, and the account a moderator picked.
@@ -53,7 +98,12 @@ pub fn AccountList() -> impl IntoView {
         limit: Some(PAGE),
         ..AdminAccountQuery::default()
     });
-    let (strikes, set_strikes) = signal(HashMap::<String, StrikeHint>::new());
+    let (facts, set_facts) = signal(HashMap::<String, RowFacts>::new());
+    let (presets, set_presets) = signal(Vec::<WarningPreset>::new());
+    let (notice, set_notice) = signal(None::<WarningNotice>);
+    let (history, set_history) = signal(None::<StrikeHistory>);
+    // The signed-in account's own id: its row is the one that cannot change its own role.
+    let own = Signal::derive(move || crate::state::bridge::admin_scope().map(|(_, id)| id));
     let (detail, set_detail) = signal(None::<AccountDetail>);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
@@ -71,13 +121,23 @@ pub fn AccountList() -> impl IntoView {
                     Ok(rows) => {
                         let (list, hints) = split(rows);
                         set_accounts.set(list);
-                        set_strikes.set(hints);
+                        set_facts.set(hints);
                         set_error.set(None);
                     }
                     Err(message) => set_error.set(Some(message)),
                 }
                 set_busy.set(false);
             });
+        });
+    });
+
+    // The presets are a read of their own: the list is useful without them, so a refusal
+    // here leaves the form with the moderator's own words rather than an empty page.
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if let Ok(list) = admin::warning_presets().await {
+                alive.if_alive(|| set_presets.set(list));
+            }
         });
     });
 
@@ -92,7 +152,7 @@ pub fn AccountList() -> impl IntoView {
                     Ok(rows) => {
                         let (list, hints) = split(rows);
                         set_accounts.set(list);
-                        set_strikes.set(hints);
+                        set_facts.set(hints);
                         set_error.set(None);
                     }
                     Err(message) => set_error.set(Some(message)),
@@ -110,7 +170,7 @@ pub fn AccountList() -> impl IntoView {
                 Ok(rows) => alive.if_alive(|| {
                     let (list, hints) = split(rows);
                     set_accounts.update(|held| held.extend(list));
-                    set_strikes.update(|held| held.extend(hints));
+                    set_facts.update(|held| held.extend(hints));
                 }),
                 Err(message) => alive.if_alive(|| set_error.set(Some(message))),
             }
@@ -229,11 +289,79 @@ pub fn AccountList() -> impl IntoView {
         });
     });
 
+    // A role change touches one row, and the answer is that row as the instance now holds
+    // it: the list is not re-read, so the reader keeps their place in it.
+    let role = Callback::new(move |(id, role): (String, String)| {
+        spawn_local(async move {
+            match admin::set_role(&id, &role).await {
+                Ok(answer) => alive.if_alive(|| {
+                    set_facts.update(|held| apply(held, &id, &answer));
+                    set_error.set(None);
+                    set_notice.set(None);
+                }),
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
+    // A warning is written and counted by the instance in one call, so the notice says what
+    // the account now carries rather than what was sent.
+    let warn = Callback::new(move |(id, warning): (String, Warning)| {
+        spawn_local(async move {
+            let outcome =
+                admin::send_warning(&id, warning.preset_id.as_deref(), &warning.text).await;
+            match outcome {
+                Ok(answer) => alive.if_alive(|| {
+                    set_facts.update(|held| apply(held, &id, &answer));
+                    let name = if answer.username.is_empty() {
+                        id.clone()
+                    } else {
+                        answer.username.clone()
+                    };
+                    let sentence = match answer.strike_count.unwrap_or(0) {
+                        1 => format!("Warned {name}: 1 warning in force"),
+                        count => format!("Warned {name}: {count} warnings in force"),
+                    };
+                    set_notice.set(Some(WarningNotice {
+                        account: id.clone(),
+                        sentence,
+                    }));
+                    set_error.set(None);
+                    // An open history was read before this strike existed.
+                    set_history.set(None);
+                }),
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
+    let strikes = Callback::new(move |id: String| {
+        spawn_local(async move {
+            match admin::account_strikes(&id).await {
+                Ok(rows) => alive.if_alive(|| {
+                    set_history.set(Some(StrikeHistory {
+                        account: id,
+                        rows: rows.into_iter().map(strike_of).collect(),
+                    }));
+                }),
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+        });
+    });
+
     view! {
         <AccountsPage
             accounts=accounts
             query=query
-            strikes=strikes
+            facts=facts
+            presets=presets
+            notice=notice
+            history=history
+            own=own
+            on_role=role
+            on_warn=warn
+            on_strikes=strikes
+            on_strikes_close=Callback::new(move |()| set_history.set(None))
             detail=detail
             busy=busy
             error=error

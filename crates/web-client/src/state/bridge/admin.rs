@@ -2753,6 +2753,10 @@ pub struct AccountRow {
     /// The rung the next strike would meet, or `None` when the ladder has run out.
     #[serde(default)]
     pub next_escalation: Option<NextEscalation>,
+    /// The staff role the instance spells out: `none`, `moderator` or `admin`. Absent on an
+    /// instance that predates roles, where the administrator flag is the only word for it.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 /// The account directory, narrowed by the query, with the escalation each row carries.
@@ -2799,6 +2803,113 @@ pub async fn search_accounts(query: &AdminAccountQuery) -> Result<Vec<AccountRow
     }
     transport
         .fetch::<Vec<AccountRow>>(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One strike in an account's history, as `GET /api/v1/admin/accounts/{id}/strikes` sends it.
+///
+/// There is no moderator field in the answer: the instance stores the action and the reason,
+/// not the person, so a screen can say what happened but not who did it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Strike {
+    pub id: String,
+    /// The rule the strike was charged under, when one was named.
+    #[serde(default)]
+    pub rule_id: Option<String>,
+    /// The rule's name as the instance holds it now; `None` once the rule is gone.
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    /// `warn`, `flag`, `silence` or `suspend`.
+    pub action: String,
+    #[serde(default)]
+    pub reason: String,
+    pub created_at: String,
+    pub expires_at: String,
+    /// Whether the strike still counts against the account.
+    #[serde(default)]
+    pub live: bool,
+}
+
+/// What a role change or a warning answered: the account as the instance now holds it.
+///
+/// Only the fields the two controls report are read — the role for one, the live strike
+/// count and the next rung for the other. Restating the whole directory row here would be a
+/// second copy of a shape that already exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct AccountAfter {
+    /// `none`, `moderator` or `admin`, as the instance now spells it.
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub username: String,
+    /// Live strikes inside the policy window, after the write.
+    #[serde(default)]
+    pub strike_count: Option<i64>,
+    /// The rung the next strike would meet.
+    #[serde(default)]
+    pub next_escalation: Option<NextEscalation>,
+}
+
+/// Sets one account's staff role (`none`, `moderator` or `admin`).
+///
+/// The route answers to `role == admin`, and the instance refuses to demote the last
+/// administrator or the caller's own account; either refusal comes back as the instance's
+/// own sentence, which the screen shows as it stands.
+pub async fn set_role(id: &str, role: &str) -> Result<AccountAfter, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "accounts", id, "role"])
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({ "role": role }))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.put_body(url, body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Warns one account, with a preset's words or the moderator's own.
+///
+/// The instance writes the notification and the strike in one call — there is no quiet
+/// variant — so the answer's strike count is what the row shows, and the sentence beside it
+/// says the account was told.
+pub async fn send_warning(
+    id: &str,
+    preset_id: Option<&str>,
+    text: &str,
+) -> Result<AccountAfter, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "accounts", id, "warn"])
+        .map_err(|error| error.to_string())?;
+    let mut body = serde_json::Map::new();
+    body.insert("text".to_owned(), serde_json::Value::from(text));
+    if let Some(preset_id) = preset_id.filter(|value| !value.is_empty()) {
+        body.insert("preset_id".to_owned(), serde_json::Value::from(preset_id));
+    }
+    let body = serde_json::to_vec(&serde_json::Value::Object(body))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.post_body(url, "application/json", body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Every strike on one account, newest first. Requires `admin:read`.
+pub async fn account_strikes(id: &str) -> Result<Vec<Strike>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "accounts", id, "strikes"])
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.get(url))
         .await
         .map_err(|error| error.to_string())
 }

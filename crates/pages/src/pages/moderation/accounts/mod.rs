@@ -7,6 +7,7 @@
 use leptos::prelude::*;
 use nodus_client_core::model::{
     AccountDetail, AccountOrigin, AccountStatus, AdminAccount, AdminAccountQuery, ModerationAction,
+    WarningPreset,
 };
 
 use std::collections::HashMap;
@@ -61,6 +62,83 @@ pub fn strike_line(hint: &StrikeHint) -> String {
     }
 }
 
+/// What a row knows beyond the account payload: its staff role, and its live strikes when
+/// the payload carried them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowFacts {
+    /// `none`, `moderator` or `admin`, as the instance spelled it.
+    pub role: String,
+    /// Live strikes and the rung after them, when the account payload said.
+    pub strikes: Option<StrikeHint>,
+}
+
+/// One strike in an account's history, as the instance keeps it.
+///
+/// There is no moderator field: the instance records the action, the reason and the rule,
+/// not the person, so the panel says that rather than inventing an author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrikeRecord {
+    pub id: String,
+    /// `warn`, `flag`, `silence` or `suspend`.
+    pub action: String,
+    pub reason: String,
+    /// The rule the strike was charged under, when the instance still names one.
+    pub rule: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+    /// Whether the strike still counts against the account.
+    pub live: bool,
+}
+
+/// One account's strike history, from a read the moderator asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrikeHistory {
+    pub account: String,
+    pub rows: Vec<StrikeRecord>,
+}
+
+/// The staff roles a role control offers, with the words it shows for them.
+pub const ROLES: [(&str, &str); 3] = [
+    ("none", "No staff role"),
+    ("moderator", "Moderator"),
+    ("admin", "Administrator"),
+];
+
+/// A role's name as people read it. A spelling this console does not know is shown as the
+/// instance sent it rather than flattened to "none", which would be a claim about an
+/// answer we did not understand.
+#[must_use]
+pub fn role_name(wire: &str) -> &str {
+    ROLES
+        .iter()
+        .find(|(id, _)| *id == wire)
+        .map_or(wire, |(_, name)| *name)
+}
+
+/// What a moderator typed into the warning form.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Warning {
+    /// The preset whose words are sent when the text is empty.
+    pub preset_id: Option<String>,
+    pub text: String,
+}
+
+impl Warning {
+    /// Whether there is anything to send: the instance refuses a warning with neither.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty() && self.preset_id.is_none()
+    }
+}
+
+/// The sentence a warning came back with, and the row whose numbers it changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WarningNotice {
+    pub account: String,
+    /// "Warned ada: 1 warning in force", from the answer's own strike count.
+    pub sentence: String,
+}
+
 /// Account list, its search row, and the detail of the account a moderator picked.
 #[component]
 pub fn AccountsPage(
@@ -70,9 +148,9 @@ pub fn AccountsPage(
     /// The search in force.
     #[prop(into)]
     query: Signal<AdminAccountQuery>,
-    /// Live strikes per account id, for the rows whose payload carried them.
+    /// What each row knows beyond its payload: its role, and its strikes when they came.
     #[prop(into)]
-    strikes: Signal<HashMap<String, StrikeHint>>,
+    facts: Signal<HashMap<String, RowFacts>>,
     /// The account a moderator picked, once its detail has been read.
     #[prop(into)]
     detail: Signal<Option<AccountDetail>>,
@@ -130,6 +208,30 @@ pub fn AccountsPage(
     /// Applies one action to every ticked account.
     #[prop(optional)]
     on_bulk: Option<Callback<AccountBatch>>,
+    /// The warning presets the form offers, as the caller last read them.
+    #[prop(into)]
+    presets: Signal<Vec<WarningPreset>>,
+    /// What the last warning answered, when it was this page that sent it.
+    #[prop(into)]
+    notice: Signal<Option<WarningNotice>>,
+    /// The strike history a moderator opened, once it has been read.
+    #[prop(into)]
+    history: Signal<Option<StrikeHistory>>,
+    /// The signed-in account's own id, so its row can say who changes its role.
+    #[prop(into)]
+    own: Signal<Option<String>>,
+    /// Sets one account's staff role.
+    #[prop(optional)]
+    on_role: Option<Callback<(String, String)>>,
+    /// Warns one account, with a preset or the moderator's own words.
+    #[prop(optional)]
+    on_warn: Option<Callback<(String, Warning)>>,
+    /// Reads one account's strike history.
+    #[prop(optional)]
+    on_strikes: Option<Callback<String>>,
+    /// Closes the strike history.
+    #[prop(optional)]
+    on_strikes_close: Option<Callback<()>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
     let administrator = crate::props::administrator(administrator);
@@ -151,6 +253,15 @@ pub fn AccountsPage(
                 held.retain(|ticked| ticked != &id);
             }
         });
+    });
+    // A warning is typed in one row at a time: which row the form is open on, the preset it
+    // picked, and the words it holds. Opening the form starts empty — words meant for one
+    // account should not be waiting in another's form.
+    let warning_for = RwSignal::new(None::<String>);
+    let warning_text = RwSignal::new(String::new());
+    let warning_preset = RwSignal::new(None::<String>);
+    let warning_ready = Signal::derive(move || {
+        !warning_text.get().trim().is_empty() || warning_preset.get().is_some()
     });
     view! {
         <Show when=move || error.get().is_some()>
@@ -394,6 +505,17 @@ pub fn AccountsPage(
                     let reports = account.open_reports;
                     let notes = account.notes_count;
                     let label = format!("Select {name}");
+                    // A row is "mine" when the instance says the signed-in account is this
+                    // one: the role control is absent there, because the server refuses a
+                    // self-demotion and a select that always fails is not a control.
+                    let mine = Signal::derive(move || {
+                        own.get().is_some_and(|own| own == id.get_value())
+                    });
+                    let role_label = format!("Role for {name}");
+                    let warn_label = format!("Warn {name}");
+                    let strikes_label = format!("Strikes for {name}");
+                    let warn_name = name.clone();
+                    let close_warning = Callback::new(move |()| warning_for.set(None));
                     view! {
                         <li class="flex items-start gap-2">
                             <Show when=move || write.get()>
@@ -429,17 +551,6 @@ pub fn AccountsPage(
                                             format!(" · {email}")
                                         }}
                                     </p>
-                                    <Show when=move || strikes.get().contains_key(&id.get_value())>
-                                        <p class="truncate text-xs text-warning" data-testid="account-strikes">
-                                            {move || {
-                                                strikes
-                                                    .get()
-                                                    .get(&id.get_value())
-                                                    .map(strike_line)
-                                                    .unwrap_or_default()
-                                            }}
-                                        </p>
-                                    </Show>
                                 </div>
                                 <div class="shrink-0 text-right text-xs opacity-70">
                                     <p>{format!("{reports} open report(s)")}</p>
@@ -452,6 +563,84 @@ pub fn AccountsPage(
                                 <p class="mt-1 text-xs text-error" role="alert">
                                     {move || bulk.get().refusal_for(&id.get_value()).unwrap_or_default()}
                                 </p>
+                            </Show>
+                            <div class="mt-1 flex flex-wrap items-center gap-2">
+                                {role_cell(id, facts, mine, write, administrator, on_role, role_label)}
+                                <Show when=move || write.get() && !mine.get() && on_warn.is_some()>
+                                    <button
+                                        class="btn btn-ghost btn-xs"
+                                        aria-label=warn_label.clone()
+                                        on:click=move |_| {
+                                            warning_text.set(String::new());
+                                            warning_preset.set(None);
+                                            warning_for.set(Some(id.get_value()));
+                                        }
+                                    >
+                                        "Warn"
+                                    </button>
+                                </Show>
+                                <Show when=move || {
+                                    facts
+                                        .get()
+                                        .get(&id.get_value())
+                                        .is_some_and(|row| row.strikes.is_some())
+                                }>
+                                    <button
+                                        class="btn btn-ghost btn-xs text-warning"
+                                        data-testid="account-strikes"
+                                        aria-label=strikes_label.clone()
+                                        on:click=move |_| {
+                                            let open = history
+                                                .get()
+                                                .is_some_and(|open| open.account == id.get_value());
+                                            if open {
+                                                if let Some(on_strikes_close) = on_strikes_close {
+                                                    on_strikes_close.run(());
+                                                }
+                                            } else if let Some(on_strikes) = on_strikes {
+                                                on_strikes.run(id.get_value());
+                                            }
+                                        }
+                                    >
+                                        {move || {
+                                            facts
+                                                .get()
+                                                .get(&id.get_value())
+                                                .and_then(|row| row.strikes.as_ref())
+                                                .map(strike_line)
+                                                .unwrap_or_default()
+                                        }}
+                                    </button>
+                                </Show>
+                            </div>
+                            <Show when=move || {
+                                notice.get().is_some_and(|said| said.account == id.get_value())
+                            }>
+                                <p class="mt-1 text-xs" role="status" data-testid="warning-notice">
+                                    {move || notice.get().map(|said| said.sentence).unwrap_or_default()}
+                                </p>
+                            </Show>
+                            <Show when=move || {
+                                warning_for.get().is_some_and(|open| open == id.get_value())
+                            }>
+                                {warning_form(
+                                    id,
+                                    warn_name.clone(),
+                                    presets,
+                                    warning_text,
+                                    warning_preset,
+                                    warning_ready,
+                                    on_warn,
+                                    close_warning,
+                                )}
+                            </Show>
+                            <Show when=move || {
+                                history.get().is_some_and(|open| open.account == id.get_value())
+                            }>
+                                {move || match history.get() {
+                                    Some(open) => strike_history(open, on_strikes_close),
+                                    None => ().into_any(),
+                                }}
                             </Show>
                             </div>
                         </li>
@@ -714,4 +903,209 @@ fn action(
         </button>
     }
     .into_any()
+}
+
+/// A row's staff role, and — for an administrator, on somebody else's row — the select that
+/// changes it.
+///
+/// A moderator sees no select at all: the route answers to `role == admin`, so a control
+/// they could see would only be a press the instance refuses. The signed-in account's own
+/// row says who can change its role instead of offering a select that could leave an
+/// instance with no administrator.
+fn role_cell(
+    id: StoredValue<String>,
+    facts: Signal<HashMap<String, RowFacts>>,
+    mine: Signal<bool>,
+    write: Signal<bool>,
+    administrator: Signal<bool>,
+    on_role: Option<Callback<(String, String)>>,
+    label: String,
+) -> AnyView {
+    let current = Signal::derive(move || {
+        facts
+            .get()
+            .get(&id.get_value())
+            .map(|row| row.role.clone())
+            .unwrap_or_else(|| "none".to_owned())
+    });
+    view! {
+        <span class="text-xs opacity-70" data-testid="account-role">
+            {move || format!("Role: {}", role_name(&current.get()))}
+        </span>
+        <Show when=move || administrator.get() && !mine.get()>
+            <select
+                class="select select-bordered select-xs"
+                aria-label=label.clone()
+                disabled=move || !write.get() || on_role.is_none()
+                on:change=move |event| {
+                    if let Some(on_role) = on_role {
+                        on_role.run((id.get_value(), event_target_value(&event)));
+                    }
+                }
+            >
+                {ROLES
+                    .into_iter()
+                    .map(|(wire, name)| {
+                        let chosen = Signal::derive(move || current.get() == wire);
+                        view! {
+                            <option value=wire selected=move || chosen.get()>
+                                {name}
+                            </option>
+                        }
+                    })
+                    .collect_view()}
+            </select>
+        </Show>
+        <Show when=move || administrator.get() && mine.get()>
+            <span class="text-xs opacity-60" data-testid="own-role-note">
+                "Your role — another administrator has to change it."
+            </span>
+        </Show>
+    }
+    .into_any()
+}
+
+/// The warning form for one row: a preset or the moderator's own words, and a press that
+/// hands both to the caller.
+///
+/// There is no "send quietly" switch because the instance has none: `warn` writes the
+/// notification and the strike in one call, so the form says that instead of pretending the
+/// two could be separated.
+fn warning_form(
+    id: StoredValue<String>,
+    name: String,
+    presets: Signal<Vec<WarningPreset>>,
+    text: RwSignal<String>,
+    preset: RwSignal<Option<String>>,
+    ready: Signal<bool>,
+    on_warn: Option<Callback<(String, Warning)>>,
+    on_close: Callback<()>,
+) -> AnyView {
+    let send_label = format!("Send warning to {name}");
+    view! {
+        <div class="mt-1 flex flex-col gap-2 rounded-box border border-base-300 bg-base-200 p-2">
+            <select
+                class="select select-bordered select-xs"
+                aria-label="Warning preset"
+                on:change=move |event| {
+                    let value = event_target_value(&event);
+                    preset.set(Some(value).filter(|value| !value.is_empty()));
+                }
+            >
+                <option value="">"Write my own words"</option>
+                {move || {
+                    presets
+                        .get()
+                        .into_iter()
+                        .map(|preset| {
+                            view! {
+                                <option value=preset.id.clone()>{preset.title.clone()}</option>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </select>
+            <textarea
+                class="textarea textarea-bordered textarea-sm w-full"
+                aria-label="Warning text"
+                rows="2"
+                placeholder="The words they will read in their notifications"
+                prop:value=move || text.get()
+                on:input=move |event| text.set(event_target_value(&event))
+            ></textarea>
+            <p class="text-xs opacity-60">
+                "The instance sends this in their notifications and counts it as a strike; it cannot be sent quietly."
+            </p>
+            <div class="flex flex-wrap gap-1">
+                <button
+                    class="btn btn-warning btn-xs"
+                    aria-label=send_label
+                    disabled=move || !ready.get() || on_warn.is_none()
+                    on:click=move |_| {
+                        if let Some(on_warn) = on_warn {
+                            on_warn
+                                .run((
+                                    id.get_value(),
+                                    Warning {
+                                        preset_id: preset.get_untracked(),
+                                        text: text.get_untracked().trim().to_owned(),
+                                    },
+                                ));
+                        }
+                        on_close.run(());
+                    }
+                >
+                    "Warn"
+                </button>
+                <button class="btn btn-ghost btn-xs" on:click=move |_| on_close.run(())>
+                    "Cancel"
+                </button>
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// One account's strikes, as the instance keeps them: what it was charged with, why, under
+/// which rule, when, and whether the charge still counts.
+fn strike_history(open: StrikeHistory, on_close: Option<Callback<()>>) -> AnyView {
+    let empty = open.rows.is_empty();
+    let rows = open.rows;
+    view! {
+        <div class="mt-1 rounded-box border border-base-300 bg-base-200 p-2" data-testid="strike-history">
+            <div class="flex items-center gap-2">
+                <p class="text-xs font-medium">"Strike history"</p>
+                <button
+                    class="btn btn-ghost btn-xs ml-auto"
+                    on:click=move |_| {
+                        if let Some(on_close) = on_close {
+                            on_close.run(());
+                        }
+                    }
+                >
+                    "Close"
+                </button>
+            </div>
+            <Show when=move || empty>
+                <p class="text-xs opacity-70">"No strike on this account."</p>
+            </Show>
+            <ul class="flex flex-col gap-1">
+                <For each=move || rows.clone() key=|row| row.id.clone() let:row>
+                    {
+                        let when = day_of(&row.created_at);
+                        let kept = if row.live {
+                            format!("counts until {}", day_of(&row.expires_at))
+                        } else {
+                            format!("no longer counted (expired {})", day_of(&row.expires_at))
+                        };
+                        let rule = row
+                            .rule
+                            .clone()
+                            .map_or_else(|| "no rule cited".to_owned(), |rule| format!("rule: {rule}"));
+                        let action = row.action.clone();
+                        let reason = row.reason.clone();
+                        view! {
+                            <li class="text-xs" data-testid="strike-row">
+                                <p class="font-medium">{format!("{action} · {when}")}</p>
+                                <p class="opacity-80">{reason}</p>
+                                <p class="opacity-60">{format!("{rule} · {kept}")}</p>
+                            </li>
+                        }
+                    }
+                </For>
+            </ul>
+            <p class="mt-1 text-xs opacity-60">
+                "The instance records the action and its reason, not which moderator gave it; the audit log holds the name."
+            </p>
+        </div>
+    }
+    .into_any()
+}
+
+/// The date part of an RFC 3339 stamp, as the history reads it.
+fn day_of(stamp: &str) -> String {
+    stamp
+        .split_once('T')
+        .map_or(stamp, |(day, _)| day)
+        .to_owned()
 }
