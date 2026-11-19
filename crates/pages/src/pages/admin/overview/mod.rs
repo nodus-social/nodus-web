@@ -9,6 +9,36 @@ use nodus_client_core::model::{AdminAlert, AdminMeasure, AdminOverview, Scanning
 
 use crate::components::charts::{Chart, Kind, Series, Spec};
 
+/// The windows the performance panel offers, as the API spells them and as the buttons read.
+pub const STATS_RANGES: [(&str, &str); 3] = [
+    ("7d", "Last 7 days"),
+    ("30d", "Last 30 days"),
+    ("90d", "Last 90 days"),
+];
+
+/// How moderation performed in one window, as the page draws it.
+///
+/// The counts are kept as labelled pairs rather than as a struct of fields because every one
+/// of them is painted the same way: a number under its own label, readable without a hover.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PerformanceStats {
+    pub signups: i64,
+    pub active_accounts: i64,
+    pub posts: i64,
+    /// Report counts, labelled in the order the instance lists them.
+    pub reports: Vec<(&'static str, i64)>,
+    /// Decisions taken, by the action they applied.
+    pub decisions: Vec<(&'static str, i64)>,
+    /// `None` when the window holds no decision, which is not the same as zero seconds.
+    pub median_seconds: Option<f64>,
+    /// The accounts that filed the most reports, already named for reading.
+    pub top_reporters: Vec<(String, i64)>,
+    /// The domains the window's reports named most.
+    pub top_domains: Vec<(String, i64)>,
+    /// What the scanners did.
+    pub scanners: Vec<(&'static str, i64)>,
+}
+
 /// The measures the dashboard asks for, in the order the summary shows them.
 pub const MEASURES: [(&str, &str); 5] = [
     ("new_users", "New accounts"),
@@ -39,6 +69,21 @@ pub fn OverviewPage(
     /// The last read's refusal.
     #[prop(into)]
     error: Signal<Option<String>>,
+    /// The moderation performance document for the chosen window.
+    #[prop(into)]
+    stats: Signal<Option<PerformanceStats>>,
+    /// Which window the panel is counting over: `7d`, `30d` or `90d`.
+    #[prop(into)]
+    stats_range: Signal<String>,
+    /// Whether the performance read is on its way.
+    #[prop(into)]
+    stats_loading: Signal<bool>,
+    /// The performance read's refusal, when it had one.
+    #[prop(into)]
+    stats_error: Signal<Option<String>>,
+    /// Asks for another window. Absent where nothing can be sent.
+    #[prop(optional)]
+    on_range: Option<Callback<String>>,
     /// Acknowledges one alert. Absent where this token may not write.
     #[prop(optional)]
     on_acknowledge: Option<Callback<String>>,
@@ -107,6 +152,14 @@ pub fn OverviewPage(
                     {crate::props::NO_WRITE}
                 </crate::components::chrome::Note>
             </Show>
+
+            <PerformancePanel
+                stats=stats
+                range=stats_range
+                loading=stats_loading
+                error=stats_error
+                on_range=on_range
+            />
 
             {move || {
                 overview
@@ -269,6 +322,255 @@ pub fn OverviewPage(
                 </Show>
             </div>
         </div>
+    }
+}
+
+/// The moderation performance document, with its window switch.
+///
+/// Every number is painted with its label beside it, so the panel is readable without
+/// hovering and the two bar charts are a second reading of the same counts rather than the
+/// only place the counts exist. `NULL` median is shown as a sentence, because a window with
+/// no decision has no median to round to zero.
+#[component]
+fn PerformancePanel(
+    /// The document for the chosen window, or `None` while it is out.
+    #[prop(into)]
+    stats: Signal<Option<PerformanceStats>>,
+    /// Which window is chosen.
+    #[prop(into)]
+    range: Signal<String>,
+    /// Whether a read is on its way.
+    #[prop(into)]
+    loading: Signal<bool>,
+    /// The last read's refusal.
+    #[prop(into)]
+    error: Signal<Option<String>>,
+    /// Asks for another window. `None` where nothing can be sent.
+    on_range: Option<Callback<String>>,
+) -> impl IntoView {
+    let reports_chart = Signal::derive(move || {
+        stats.get().map(|stats| {
+            Spec::new(
+                Kind::Bar,
+                stats
+                    .reports
+                    .iter()
+                    .map(|(label, _)| (*label).to_owned())
+                    .collect(),
+                vec![Series::new(
+                    "Reports",
+                    stats
+                        .reports
+                        .iter()
+                        .map(|(_, value)| *value as f64)
+                        .collect(),
+                )],
+            )
+        })
+    });
+    let decisions_chart = Signal::derive(move || {
+        stats.get().map(|stats| {
+            Spec::new(
+                Kind::Bar,
+                stats
+                    .decisions
+                    .iter()
+                    .map(|(label, _)| (*label).to_owned())
+                    .collect(),
+                vec![Series::new(
+                    "Decisions",
+                    stats
+                        .decisions
+                        .iter()
+                        .map(|(_, value)| *value as f64)
+                        .collect(),
+                )],
+            )
+        })
+    });
+
+    view! {
+        <div class="rounded-box border border-base-300 bg-base-100 p-3">
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h2 class="text-sm font-semibold">"Moderation performance"</h2>
+                <div class="flex items-center gap-1" role="group" aria-label="Report range">
+                    {STATS_RANGES
+                        .iter()
+                        .map(|(value, label)| {
+                            let value = *value;
+                            let active = move || range.get() == value;
+                            view! {
+                                <button
+                                    class="btn btn-xs"
+                                    class:btn-active=active
+                                    aria-pressed=move || {
+                                        if range.get() == value { "true" } else { "false" }
+                                    }
+                                    disabled=move || on_range.is_none()
+                                    on:click=move |_| {
+                                        if let Some(on_range) = on_range {
+                                            on_range.run(value.to_owned());
+                                        }
+                                    }
+                                >
+                                    {*label}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+            </div>
+            <Show when=move || error.get().is_some()>
+                <p class="mb-2 text-sm text-error" role="alert">
+                    {move || error.get().unwrap_or_default()}
+                </p>
+            </Show>
+            <Show when=move || loading.get() && stats.get().is_none()>
+                <p class="text-sm opacity-60">"Reading this window…"</p>
+            </Show>
+
+            {move || {
+                stats
+                    .get()
+                    .map(|stats| {
+                        let median = match stats.median_seconds {
+                            Some(seconds) => duration(seconds),
+                            None => "No decision in this window".to_owned(),
+                        };
+                        let reporters = stats.top_reporters.clone();
+                        let domains = stats.top_domains.clone();
+                        view! {
+                            <dl class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                {metric("Signups", stats.signups)}
+                                {metric("Active accounts", stats.active_accounts)}
+                                {metric("Posts", stats.posts)}
+                            </dl>
+
+                            <p class="mt-3 text-xs font-medium uppercase opacity-60">"Reports"</p>
+                            <dl class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                {stats
+                                    .reports
+                                    .iter()
+                                    .map(|(label, value)| metric(label, *value))
+                                    .collect_view()}
+                            </dl>
+
+                            <p class="mt-3 text-xs font-medium uppercase opacity-60">"Decisions"</p>
+                            <dl class="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                                {stats
+                                    .decisions
+                                    .iter()
+                                    .map(|(label, value)| metric(label, *value))
+                                    .collect_view()}
+                            </dl>
+
+                            <dl class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                <div class="rounded-box bg-base-200/60 px-3 py-2">
+                                    <dt class="text-xs opacity-60">"Median time to decision"</dt>
+                                    <dd class="text-lg font-semibold">{median}</dd>
+                                </div>
+                                <div class="rounded-box bg-base-200/60 px-3 py-2">
+                                    <dt class="text-xs opacity-60">"Scanner queue"</dt>
+                                    <dd class="text-sm">
+                                        {stats
+                                            .scanners
+                                            .iter()
+                                            .map(|(label, value)| format!("{label} {value}"))
+                                            .collect::<Vec<_>>()
+                                            .join(" · ")}
+                                    </dd>
+                                </div>
+                            </dl>
+
+                            <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                                <div>
+                                    <Chart
+                                        spec=reports_chart
+                                        empty="No reports in this window."
+                                        caption="Reports".to_owned()
+                                    />
+                                </div>
+                                <div>
+                                    <Chart
+                                        spec=decisions_chart
+                                        empty="No decisions in this window."
+                                        caption="Decisions".to_owned()
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                                <div>
+                                    <p class="text-xs font-medium uppercase opacity-60">
+                                        "Top reporters"
+                                    </p>
+                                    <ul class="mt-1 flex flex-col gap-1 text-sm">
+                                        {reporters
+                                            .into_iter()
+                                            .map(|(label, count)| {
+                                                view! {
+                                                    <li class="flex items-baseline justify-between gap-2">
+                                                        <span class="truncate">{label}</span>
+                                                        <span class="font-semibold">{count}</span>
+                                                    </li>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </ul>
+                                    <Show when=move || stats.top_reporters.is_empty()>
+                                        <p class="text-sm opacity-60">"No reports were filed."</p>
+                                    </Show>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-medium uppercase opacity-60">
+                                        "Top reported domains"
+                                    </p>
+                                    <ul class="mt-1 flex flex-col gap-1 text-sm">
+                                        {domains
+                                            .into_iter()
+                                            .map(|(label, count)| {
+                                                view! {
+                                                    <li class="flex items-baseline justify-between gap-2">
+                                                        <span class="truncate">{label}</span>
+                                                        <span class="font-semibold">{count}</span>
+                                                    </li>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </ul>
+                                    <Show when=move || stats.top_domains.is_empty()>
+                                        <p class="text-sm opacity-60">"No reported domain."</p>
+                                    </Show>
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+        </div>
+    }
+}
+
+/// A count under its own label, which is the whole point of the panel.
+fn metric(label: &str, value: i64) -> impl IntoView {
+    view! {
+        <div class="rounded-box bg-base-200/60 px-3 py-2">
+            <dt class="truncate text-xs opacity-60">{label.to_owned()}</dt>
+            <dd class="text-lg font-semibold">{value}</dd>
+        </div>
+    }
+}
+
+/// A duration in the largest whole unit that keeps it readable.
+fn duration(seconds: f64) -> String {
+    let seconds = seconds.round().max(0.0) as i64;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h {}m", seconds / 3_600, (seconds % 3_600) / 60)
+    } else {
+        format!("{}d {}h", seconds / 86_400, (seconds % 86_400) / 3_600)
     }
 }
 

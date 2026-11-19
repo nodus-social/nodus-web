@@ -621,6 +621,80 @@ pub async fn delete_domain_allow(id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// How moderation performed in one window, as `GET /api/v1/admin/stats` answers it.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct AdminStats {
+    pub signups: i64,
+    pub active_accounts: i64,
+    pub posts: i64,
+    pub reports: ReportTally,
+    pub decisions_by_action: DecisionTally,
+    /// `null`, not `0`, when the window holds no decision.
+    pub median_time_to_decision_seconds: Option<f64>,
+    pub top_reporters: Vec<ReporterTally>,
+    pub top_reported_domains: Vec<DomainTally>,
+    pub scanners: ScannerTally,
+}
+
+/// Report counts in the window.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ReportTally {
+    pub opened: i64,
+    pub resolved: i64,
+    pub reopened: i64,
+    pub pending: i64,
+}
+
+/// Decisions taken in the window, by the action they applied.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct DecisionTally {
+    pub approve: i64,
+    pub reject: i64,
+    pub silence: i64,
+    pub suspend: i64,
+    pub enable: i64,
+}
+
+/// One account that filed reports in the window.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ReporterTally {
+    pub account_id: String,
+    pub username: String,
+    #[serde(default)]
+    pub domain: Option<String>,
+    pub count: i64,
+}
+
+/// One domain the window's reports named.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct DomainTally {
+    pub domain: String,
+    pub count: i64,
+}
+
+/// What the scanners did in the window.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ScannerTally {
+    pub queued: i64,
+    pub flagged: i64,
+    pub quarantined: i64,
+}
+
+/// The moderation performance document for one range: `7d`, `30d` or `90d`.
+pub async fn stats(range: &str) -> Result<AdminStats, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/stats")
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut().append_pair("range", range);
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// An inbound block, as the instance returns it: who was blocked, by which peer, and when.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct RemoteBlock {

@@ -336,6 +336,22 @@ export function remoteBlock(overrides = {}) {
   }
 }
 
+/** The performance document for one window, with every counter the screen shows. */
+export function performanceStats(overrides = {}) {
+  return {
+    signups: 5,
+    active_accounts: 4,
+    posts: 31,
+    reports: { opened: 3, resolved: 7, reopened: 1, pending: 2 },
+    decisions_by_action: { approve: 2, reject: 4, silence: 1, suspend: 0, enable: 1 },
+    median_time_to_decision_seconds: 5_400,
+    top_reporters: [{ account_id: '1', username: 'ada', domain: 'peer.example', count: 4 }],
+    top_reported_domains: [{ domain: 'spam.example', count: 3 }],
+    scanners: { queued: 1, flagged: 2, quarantined: 0 },
+    ...overrides,
+  }
+}
+
 /**
  * Stub the moderation and administration endpoints, and record what the console asked.
  *
@@ -368,6 +384,7 @@ export async function adminApi(
     audit = [],
     announcements = [],
     bulkRefusals = {},
+    stats = performanceStats(),
   } = {},
 ) {
   const calls = []
@@ -516,6 +533,9 @@ export async function adminApi(
   })
   await page.route(/\/api\/v1\/admin\/alerts/, (route) => json(route, alerts))
   await page.route(/\/api\/v1\/admin\/measures/, (route) => json(route, measures))
+  // The window is answered from the fixture rather than echoed back: the console must read
+  // the numbers it was sent, not the ones it asked for.
+  await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))
   await page.route(/\/api\/v1\/admin\/overview$/, (route) =>
     json(route, {
       accounts: 12,

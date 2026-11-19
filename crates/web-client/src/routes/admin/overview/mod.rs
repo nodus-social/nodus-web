@@ -6,7 +6,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_client_core::model::{AdminAlert, AdminMeasure, AdminOverview, ScanningSummary};
-use nodus_pages::pages::admin::overview::{MEASURES, OverviewPage};
+use nodus_pages::pages::admin::overview::{MEASURES, OverviewPage, PerformanceStats};
 
 use crate::state::alive::Alive;
 use crate::state::bridge::{admin, feature, revision};
@@ -24,6 +24,10 @@ pub fn Overview() -> impl IntoView {
     let (scanning, set_scanning) = signal(None::<ScanningSummary>);
     let (loading, set_loading) = signal(true);
     let (error, set_error) = signal(None::<String>);
+    let (stats, set_stats) = signal(None::<PerformanceStats>);
+    let (stats_range, set_stats_range) = signal("7d".to_owned());
+    let (stats_loading, set_stats_loading) = signal(true);
+    let (stats_error, set_stats_error) = signal(None::<String>);
     // The scanner panel is one capability of the instance, not part of the dashboard: an
     // instance whose features do not name `scanners` has no counts to show.
     let scanners = feature("scanners");
@@ -62,6 +66,83 @@ pub fn Overview() -> impl IntoView {
             });
         });
     });
+
+    // The performance document is one read per window: switching the range asks for that
+    // window alone and leaves the week of measures above it untouched.
+    //
+    // A read that comes back after the moderator has switched again is dropped rather than
+    // painted: the panel's numbers must belong to the window the pressed button names, not
+    // to whichever request finished last.
+    Effect::new(move |_| {
+        let range = stats_range.get();
+        revision.get();
+        let alive = Alive::new();
+        set_stats_loading.set(true);
+        spawn_local(async move {
+            let answer = admin::stats(&range).await;
+            let current = || stats_range.get_untracked() == range;
+            match answer {
+                Ok(stats) => alive.if_alive(|| {
+                    if !current() {
+                        return;
+                    }
+                    set_stats.set(Some(PerformanceStats {
+                        signups: stats.signups,
+                        active_accounts: stats.active_accounts,
+                        posts: stats.posts,
+                        reports: vec![
+                            ("Opened", stats.reports.opened),
+                            ("Resolved", stats.reports.resolved),
+                            ("Reopened", stats.reports.reopened),
+                            ("Pending", stats.reports.pending),
+                        ],
+                        decisions: vec![
+                            ("Approve", stats.decisions_by_action.approve),
+                            ("Reject", stats.decisions_by_action.reject),
+                            ("Silence", stats.decisions_by_action.silence),
+                            ("Suspend", stats.decisions_by_action.suspend),
+                            ("Enable", stats.decisions_by_action.enable),
+                        ],
+                        median_seconds: stats.median_time_to_decision_seconds,
+                        top_reporters: stats
+                            .top_reporters
+                            .into_iter()
+                            .map(|row| {
+                                let name = match row.domain {
+                                    Some(domain) => format!("{}@{domain}", row.username),
+                                    None => row.username,
+                                };
+                                (name, row.count)
+                            })
+                            .collect(),
+                        top_domains: stats
+                            .top_reported_domains
+                            .into_iter()
+                            .map(|row| (row.domain, row.count))
+                            .collect(),
+                        scanners: vec![
+                            ("Queued", stats.scanners.queued),
+                            ("Flagged", stats.scanners.flagged),
+                            ("Quarantined", stats.scanners.quarantined),
+                        ],
+                    }));
+                    set_stats_error.set(None);
+                }),
+                Err(problem) => alive.if_alive(|| {
+                    if current() {
+                        set_stats_error.set(Some(problem));
+                    }
+                }),
+            }
+            alive.if_alive(|| {
+                if current() {
+                    set_stats_loading.set(false);
+                }
+            });
+        });
+    });
+
+    let choose_range = Callback::new(move |range: String| set_stats_range.set(range));
 
     let acknowledge = Callback::new(move |id: String| {
         let alive = Alive::new();
@@ -106,6 +187,11 @@ pub fn Overview() -> impl IntoView {
             scanning=Signal::derive(move || if scanners.get() { scanning.get() } else { None })
             loading=loading
             error=error
+            stats=stats
+            stats_range=stats_range
+            stats_loading=stats_loading
+            stats_error=stats_error
+            on_range=choose_range
             on_acknowledge=acknowledge
             on_scan_now=scan_now
             write=Some(crate::state::bridge::admin::may_write())

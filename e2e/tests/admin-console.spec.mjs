@@ -14,6 +14,7 @@ import {
   chartSpecs,
   granted,
   hydrated,
+  performanceStats,
   remoteBlock,
   report,
   scanFlag,
@@ -82,13 +83,13 @@ test('the dashboard counts what the server reports', async ({ page }) => {
   await expect(page).toHaveTitle(/^Administration \u00b7 /)
   // The graphs are canvases: a spec that never reached Chart.js would leave the panel
   // showing its empty-state caption instead.
-  await expect(page.locator('canvas')).toHaveCount(4)
+  await expect(page.locator('canvas')).toHaveCount(6)
 
   // A canvas is not a graph. The wrapper reads properties off the spec, so a spec sent as
   // text draws an empty axis and still counts as a canvas — which is how an empty
   // dashboard shipped green. Assert the data, and the two series of the report chart.
   const specs = await chartSpecs(page)
-  expect(specs).toHaveLength(4)
+  expect(specs).toHaveLength(6)
   for (const spec of specs) {
     expect(spec.labels.length).toBeGreaterThan(0)
     expect(spec.series.some((series) => series.values.length > 0)).toBe(true)
@@ -97,6 +98,26 @@ test('the dashboard counts what the server reports', async ({ page }) => {
     spec.series.some((series) => series.label === 'Opened'),
   )
   expect(reports.series.map((series) => series.label)).toEqual(['Opened', 'Resolved'])
+
+  // The performance panel paints its counts as numbers, so the window can be read without
+  // hovering a chart: the median is a sentence-or-duration beside its label.
+  await expect(page.getByText('Median time to decision')).toBeVisible()
+  await expect(page.getByText('1h 30m')).toBeVisible()
+  await expect(page.getByText('ada@peer.example')).toBeVisible()
+})
+
+test('the performance panel asks for the window that was switched to', async ({ page }) => {
+  const calls = await consoleAs(page, { stats: performanceStats() })
+  await open(page, '/admin/overview')
+
+  await expect(page.getByText('Moderation performance')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'true')
+
+  await page.getByRole('button', { name: 'Last 30 days' }).click()
+  const asked = await sent(calls, (call) => call.url.includes('/api/v1/admin/stats?range=30d'))
+  expect(asked.method).toBe('GET')
+  await expect(page.getByRole('button', { name: 'Last 30 days' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Last 7 days' })).toHaveAttribute('aria-pressed', 'false')
 })
 
 test('the console asks the instance once, however often it redraws', async ({ page }) => {
