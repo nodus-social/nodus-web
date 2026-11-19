@@ -15,6 +15,7 @@ import {
   granted,
   grantRecord,
   hydrated,
+  remoteAccount,
   signedIn,
   stubApi,
 } from '../fixtures.mjs'
@@ -34,6 +35,17 @@ const ADMINISTRATION = [
   'System',
   'Protocol',
 ]
+
+/** The request the console sent, once it has sent it. */
+async function sent(calls, match) {
+  await expect.poll(() => calls.filter(match).length, { timeout: 5000 }).toBeGreaterThan(0)
+  return calls.filter(match).at(-1)
+}
+
+/** The row for one moderated account, found by the name people write it as. */
+function row(page, name) {
+  return page.locator('li', { hasText: name })
+}
 
 /** The strip's labels, without the icons beside them. */
 async function sections(page) {
@@ -227,4 +239,118 @@ test('a grant without admin:write is shown the controls it cannot use', async ({
   // Read-only staff: the panel paints, with the scope it is missing named beside it.
   await expect(page.getByText(/does not include admin:write/)).toBeVisible()
   await expect(page.getByText('Accounts', { exact: true })).toBeVisible()
+})
+
+test('a moderated remote account reads from its own row whether it is in force', async ({
+  page,
+}) => {
+  await stubApi(page)
+  await adminApi(page, {
+    remoteAccounts: [
+      // In force: no expiry, so it lapses only when someone lifts it.
+      remoteAccount(),
+      // Lapsed: the expiry has passed, and the row must not read like the one above.
+      remoteAccount({
+        actor_uri: 'https://peer.example/users/y',
+        handle: 'y',
+        action: 'silence',
+        reason: 'Repeated spam.',
+        expires_at: '2026-11-01T00:00:00Z',
+        expired: true,
+      }),
+    ],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  const live = row(page, 'x@peer.example')
+  await expect(live).toContainText('In force')
+  await expect(live).toContainText('Suspend in force, with no expiry')
+  await expect(live).toContainText('Ban evasion.')
+  await expect(live).toContainText('Applied by ada on 2026-11-18')
+  await expect(live).toContainText('https://peer.example/users/x')
+
+  // An action whose day has passed is still a record, and says in words that it is doing
+  // nothing: a reader must be able to trust the row without reading the date against today.
+  const lapsed = row(page, 'y@peer.example')
+  await expect(lapsed).toContainText('Expired on 2026-11-01: this silence is no longer in force')
+  await expect(lapsed).not.toContainText('In force')
+  await expect(lapsed).not.toContainText('in force until')
+})
+
+test('an account is suspended from its row and lifted after confirming', async ({ page }) => {
+  await stubApi(page)
+  const calls = await adminApi(page, {
+    remoteAccounts: [remoteAccount({ action: 'silence', reason: null })],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  const name = 'x@peer.example'
+  await page.getByLabel(`Action for ${name}`).selectOption('suspend')
+  await page.getByLabel(`Reason for ${name}`).fill('Ban evasion.')
+  await page.getByLabel(`Expiry for ${name}`).fill('2026-12-01')
+  await page.getByRole('button', { name: 'Apply', exact: true }).click()
+
+  const applied = await sent(calls, (call) => call.method === 'PUT')
+  // The account's whole address is the path's one segment, percent-encoded.
+  expect(decodeURIComponent(new URL(applied.url).pathname)).toContain(
+    `/federation/remote-accounts/https://peer.example/users/x`,
+  )
+  // A date input names a day; the endpoint takes the instant that day starts.
+  expect(JSON.parse(applied.body)).toEqual({
+    action: 'suspend',
+    reason: 'Ban evasion.',
+    expires_at: '2026-12-01T00:00:00Z',
+  })
+
+  // Lifting asks first: the row is the only record that the account was ever acted on.
+  await page.getByRole('button', { name: 'Lift', exact: true }).click()
+  await expect(page.getByText('Lift this action?')).toBeVisible()
+  await expect(row(page, name)).toBeVisible()
+  await page.getByRole('button', { name: 'Lift action' }).click()
+
+  const lifted = await sent(calls, (call) => call.method === 'DELETE')
+  expect(decodeURIComponent(new URL(lifted.url).pathname)).toContain(
+    `/federation/remote-accounts/https://peer.example/users/x`,
+  )
+  await expect(page.getByText('No remote account is moderated.')).toBeVisible()
+})
+
+test('a grant without admin:write can read moderated accounts but not move them', async ({
+  page,
+}) => {
+  await stubApi(page)
+  await adminApi(page, {
+    scopes: ['read', 'write', 'admin:read'],
+    remoteAccounts: [remoteAccount()],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  // The list is a read, so the row is painted with what it records.
+  await expect(row(page, 'x@peer.example')).toContainText('Ban evasion.')
+  // The three mutations need the second grant's write scope, and the row says so.
+  await expect(page.getByLabel('Action for x@peer.example')).toBeDisabled()
+  await expect(page.getByLabel('Reason for x@peer.example')).toBeDisabled()
+  await expect(page.getByLabel('Expiry for x@peer.example')).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Lift', exact: true })).toBeDisabled()
+})
+
+test('an instance that moderates no remote account says so', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  await expect(page.getByText('No remote account is moderated.')).toBeVisible()
 })

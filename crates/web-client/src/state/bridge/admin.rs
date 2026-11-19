@@ -679,6 +679,131 @@ pub async fn delete_remote_block(host: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// One account on another instance that this one silences or suspends.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RemoteAccount {
+    /// The account's absolute address, which is how it is changed and lifted.
+    pub actor_uri: String,
+    /// The account's local name on the instance it lives on.
+    pub handle: String,
+    /// The instance the account lives on, when the address named one.
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// `silence` or `suspend`, as the instance spells it.
+    pub action: String,
+    /// Why, as the administrator who applied it wrote it down.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// When it lapses, in RFC 3339, when it does.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Whether the instance's own clock has already passed that moment.
+    ///
+    /// The instance answers this rather than the console working it out, so a row and the
+    /// instance it describes cannot disagree about which actions are still biting.
+    #[serde(default)]
+    pub expired: bool,
+    /// When it was applied.
+    pub created_at: String,
+    /// Who applied it, as a name this instance still knows.
+    #[serde(default)]
+    pub created_by_handle: Option<String>,
+}
+
+/// The remote accounts this instance moderates, newest first.
+///
+/// A Nodus extension like the remote blocks beside it: an instance that does not advertise
+/// the surface is not asked.
+pub async fn remote_accounts() -> Result<Vec<RemoteAccount>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url_segments(&["api", "v1", "admin", "federation", "remote-accounts"])
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("limit", &PAGE.to_string());
+    // A bare array rather than an envelope: the row list is the whole answer.
+    transport
+        .fetch::<Vec<RemoteAccount>>(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Applies a silence or a suspension to one remote account.
+///
+/// `expires_on` is the date input's own `YYYY-MM-DD`, empty for an action that does not
+/// lapse; the endpoint takes a timestamp, so the day is widened to the instant it starts.
+/// The address is the path's one segment: `url_segments` percent-encodes it, and the route
+/// behind it is a wildcard so the encoded slashes arrive intact.
+pub async fn apply_remote_account(
+    actor_uri: &str,
+    action: &str,
+    reason: &str,
+    expires_on: &str,
+) -> Result<RemoteAccount, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&[
+            "api",
+            "v1",
+            "admin",
+            "federation",
+            "remote-accounts",
+            actor_uri,
+        ])
+        .map_err(|error| error.to_string())?;
+    let mut body = serde_json::json!({ "action": action });
+    if !reason.trim().is_empty() {
+        body["reason"] = serde_json::Value::String(reason.trim().to_owned());
+    }
+    match expires_on.trim() {
+        "" => {}
+        // A date input says which day, not which instant: an action that lapses on a day
+        // lapses when that day starts.
+        day if day.len() == 10 => {
+            body["expires_at"] = serde_json::Value::String(format!("{day}T00:00:00Z"));
+        }
+        other => body["expires_at"] = serde_json::Value::String(other.to_owned()),
+    }
+    let body = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
+    // A body on a `PUT` whose path names the row: the one shape no helper on the shared
+    // instance takes, so the request is built here.
+    let mut request = transport.put(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch::<RemoteAccount>(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Lifts one remote account's action, so whatever it was doing stops.
+pub async fn lift_remote_account(actor_uri: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&[
+            "api",
+            "v1",
+            "admin",
+            "federation",
+            "remote-accounts",
+            actor_uri,
+        ])
+        .map_err(|error| error.to_string())?;
+    // Nothing to send: the row's address is the whole request.
+    transport
+        .send_empty(transport.delete(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Accounts waiting for a moderator to decide.
 pub async fn pending_accounts() -> Result<Vec<AdminAccount>, String> {
     let transport = admin_transport()

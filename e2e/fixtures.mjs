@@ -309,6 +309,23 @@ export function scanFlag(overrides = {}) {
   }
 }
 
+/** One moderated remote account, as the console reads it back. */
+export function remoteAccount(overrides = {}) {
+  return {
+    actor_uri: 'https://peer.example/users/x',
+    handle: 'x',
+    domain: 'peer.example',
+    action: 'suspend',
+    reason: 'Ban evasion.',
+    expires_at: null,
+    expired: false,
+    created_at: '2026-11-18T17:00:00Z',
+    created_by: '1',
+    created_by_handle: 'ada',
+    ...overrides,
+  }
+}
+
 /** One inbound block, as the console reads it back. */
 export function remoteBlock(overrides = {}) {
   return {
@@ -347,6 +364,7 @@ export async function adminApi(
     logs = [],
     logStream = null,
     remoteBlocks = [],
+    remoteAccounts = [],
     audit = [],
     announcements = [],
     bulkRefusals = {},
@@ -454,6 +472,29 @@ export async function adminApi(
     }
     return json(route, { blocks: remoteBlocks })
   })
+  // The moderated accounts, one row each. The path carries the account's whole address as
+  // one percent-encoded segment, so the row route is matched on the character after the
+  // collection rather than on a slash.
+  await page.route(/\/api\/v1\/admin\/federation\/remote-accounts\/.+$/, (route) => {
+    if (route.request().method() === 'DELETE') {
+      record(route)
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    const held = remoteAccounts[0] ?? remoteAccount()
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    // The instance answers with the row as it now stands, which is what the list redraws.
+    return json(route, {
+      ...held,
+      action: body.action ?? held.action,
+      reason: body.reason ?? held.reason,
+      // A day is widened to the instant it starts, which is what the console sent.
+      expires_at: body.expires_at ?? null,
+      expired: false,
+    })
+  })
+  await page.route(/\/api\/v1\/admin\/federation\/remote-accounts(\?|$)/, (route) =>
+    json(route, remoteAccounts),
+  )
   await page.route(/\/api\/v1\/admin\/email_domain_blocks/, (route) => json(route, mail))
   await page.route(/\/api\/v1\/admin\/warning_presets/, (route) => json(route, presets))
   await page.route(/\/api\/v1\/admin\/warning_presets\/[^/]+$/, (route) => {
