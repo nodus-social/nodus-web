@@ -24,6 +24,7 @@ use self::accounts::AccountList;
 use self::appeals::Appeals;
 use self::federation::Federation;
 use self::flags::Scans;
+use self::media::QuarantinedMediaList;
 use self::registrations::Registrations;
 use self::reports::ReportQueue;
 
@@ -31,6 +32,7 @@ mod accounts;
 mod appeals;
 mod federation;
 mod flags;
+mod media;
 mod registrations;
 mod reports;
 
@@ -109,11 +111,15 @@ pub fn Moderation(section: String) -> impl IntoView {
     // Scans are a scanner feature: an instance that does not advertise `scanners` has no
     // flags to show, so the tab is not drawn and the address says why.
     let scanners = feature("scanners");
+    // Quarantined media is a capability of its own: an instance whose sets never touch an
+    // attachment publishes no `media_quarantine`, and there is no queue to open.
+    let quarantine = feature("media_quarantine");
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
             .filter(|section| match section {
                 Section::Scans => scanners.get(),
+                Section::Media => quarantine.get(),
                 _ => true,
             })
             .map(|section| section.slug().to_owned())
@@ -141,6 +147,13 @@ pub fn Moderation(section: String) -> impl IntoView {
                 }
                 .into_any(),
                 Section::Scans => view! { <Scans/> }.into_any(),
+                Section::Media if !quarantine.get() => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance does not quarantine media: its /api/v1/meta answer does not name media_quarantine among its features."
+                    </Note>
+                }
+                .into_any(),
+                Section::Media => view! { <QuarantinedMediaList/> }.into_any(),
                 Section::Accounts => view! { <AccountList/> }.into_any(),
                 Section::Registrations => view! { <Registrations/> }.into_any(),
                 Section::Federation => view! { <Federation/> }.into_any(),

@@ -2084,3 +2084,97 @@ pub async fn decide_appeal(id: &str, accept: bool, note: &str) -> Result<Decided
         Err(error) => Err(error.to_string()),
     }
 }
+
+/// One attachment a content set caught, as `GET /api/v1/admin/media/quarantined` answers it.
+///
+/// `set` is the name of the content set that matched, which is the name a moderator acts on;
+/// `status_id` is the post it hung on, absent for an attachment that never reached one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct QuarantinedMedia {
+    pub id: String,
+    #[serde(default)]
+    pub status_id: Option<String>,
+    #[serde(default)]
+    pub account_id: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub set: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    #[serde(default)]
+    pub perceptual_hash: Option<String>,
+    /// `quarantined` or `released`; deleting removes the row altogether.
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+/// Every attachment a content set has acted on, newest first.
+///
+/// The instance caps this read rather than paging it, so the screen shows what it was sent
+/// and does not claim there is nothing behind it.
+pub async fn quarantined_media() -> Result<Vec<QuarantinedMedia>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/media/quarantined")
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// What the instance answered when one attachment was cleared.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MediaVerdict {
+    pub id: String,
+    #[serde(default)]
+    pub released: bool,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub status_id: Option<String>,
+    #[serde(default)]
+    pub reports_resolved: u64,
+}
+
+/// What a decision attempt did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cleared {
+    /// The attachment was still waiting, and this answer just cleared it.
+    Row(MediaVerdict),
+    /// Somebody got there first, or the file is already gone. A `422` and a `404` both say
+    /// the row the moderator was reading is stale, and the screen reads the list again
+    /// rather than printing the refusal.
+    AlreadyCleared,
+}
+
+/// Clears one quarantined attachment; `release` keeps the picture, and anything else deletes
+/// the file. Both need a reason, which the instance records in the audit row.
+pub async fn decide_media(id: &str, release: bool, reason: &str) -> Result<Cleared, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "media", id, "quarantine"])
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "release": release,
+        "reason": reason.trim(),
+    }))
+    .map_err(|error| error.to_string())?;
+    match transport
+        .fetch::<MediaVerdict>(transport.post_body(url, "application/json", body))
+        .await
+    {
+        Ok(verdict) => Ok(Cleared::Row(verdict)),
+        Err(nodus_client_core::Error::Status { status: 404 | 422, .. }) => Ok(Cleared::AlreadyCleared),
+        Err(error) => Err(error.to_string()),
+    }
+}

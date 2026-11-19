@@ -18,6 +18,7 @@ pub mod accounts;
 pub mod appeals;
 pub mod federation;
 pub mod flags;
+pub mod media;
 pub mod registrations;
 pub mod reports;
 
@@ -36,6 +37,8 @@ pub enum Section {
     Appeals,
     /// Content the scanners flagged.
     Scans,
+    /// Attachments a content set caught, waiting for a person.
+    Media,
     /// Account standing.
     Accounts,
     /// Who is waiting to be let in.
@@ -46,10 +49,11 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Reports,
         Self::Appeals,
         Self::Scans,
+        Self::Media,
         Self::Accounts,
         Self::Registrations,
         Self::Federation,
@@ -62,6 +66,7 @@ impl Section {
             Self::Reports => "reports",
             Self::Appeals => "appeals",
             Self::Scans => "scans",
+            Self::Media => "media",
             Self::Accounts => "accounts",
             Self::Registrations => "registrations",
             Self::Federation => "federation",
@@ -84,6 +89,7 @@ impl Section {
             Self::Reports => "Reports",
             Self::Appeals => "Appeals",
             Self::Scans => "Scans",
+            Self::Media => "Media",
             Self::Accounts => "Accounts",
             Self::Registrations => "Registrations",
             Self::Federation => "Federation",
@@ -97,6 +103,7 @@ impl Section {
             Self::Reports => "Posts someone reported, and what was decided",
             Self::Appeals => "People who disagreed with a decision about their account",
             Self::Scans => "What the scanners found, and what a person decided",
+            Self::Media => "Attachments a content set caught, and what was decided",
             Self::Accounts => "Look an account up, and act on it",
             Self::Registrations => "Who is waiting, and how somebody may join",
             Self::Federation => "Domains this instance refuses",
@@ -110,6 +117,7 @@ impl Section {
             Self::Reports => Icon::Alert,
             Self::Appeals => Icon::Mail,
             Self::Scans => Icon::Image,
+            Self::Media => Icon::Image,
             Self::Accounts => Icon::Users,
             Self::Registrations => Icon::Check,
             Self::Federation => Icon::Shield,

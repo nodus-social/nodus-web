@@ -16,13 +16,22 @@ import {
   granted,
   grantRecord,
   hydrated,
+  quarantinedMedia,
   remoteAccount,
   signedIn,
   stubApi,
 } from '../fixtures.mjs'
 
 /** The sections the moderation screen offers, in reading order. */
-const MODERATION = ['Reports', 'Appeals', 'Scans', 'Accounts', 'Registrations', 'Federation']
+const MODERATION = [
+  'Reports',
+  'Appeals',
+  'Scans',
+  'Media',
+  'Accounts',
+  'Registrations',
+  'Federation',
+]
 
 /** The sections the administration screen offers, in reading order. */
 const ADMINISTRATION = [
@@ -489,4 +498,130 @@ test('an instance that moderates no remote account says so', async ({ page }) =>
   await hydrated(page)
 
   await expect(page.getByText('No remote account is moderated.')).toBeVisible()
+})
+
+test('a quarantined picture names its set and its post, and releasing keeps it', async ({
+  page,
+}) => {
+  await stubApi(page)
+  const calls = await adminApi(page, { quarantined: [quarantinedMedia()], audit: [] })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/media')
+  await hydrated(page)
+
+  // The row names the attachment, the set that matched, and the post it belonged to, which
+  // is the three things a moderator needs before either answer makes sense.
+  const held = row(page, 'ncii-known-hashes')
+  await expect(held).toContainText('Attachment 901 (image/png)')
+  await expect(held).toContainText('Matched the set ncii-known-hashes.')
+  await expect(held.getByRole('link', { name: 'Open the post it was on' })).toHaveAttribute(
+    'href',
+    '/s/9001',
+  )
+
+  // The two outcomes are not one dial with two ends: the words and the colours differ,
+  // because one keeps the picture and the other destroys it.
+  const keep = held.getByRole('button', { name: 'Release', exact: true })
+  const destroy = held.getByRole('button', { name: 'Delete', exact: true })
+  await expect(keep).toHaveClass(/btn-primary/)
+  await expect(destroy).toHaveClass(/btn-error/)
+  await expect(held).toContainText('Release keeps the picture')
+  await expect(held).toContainText('Delete destroys the file')
+
+  // Releasing asks its question and wants a reason before anything leaves.
+  await keep.click()
+  await expect(held).toContainText('Release this picture?')
+  const confirm = held.getByRole('button', { name: 'Release the picture' })
+  await expect(confirm).toBeDisabled()
+  await held
+    .getByLabel('Reason for the attachment 901')
+    .fill('A press photo, not the file on the list.')
+  await expect(confirm).toBeEnabled()
+  await confirm.click()
+
+  const cleared = await sent(calls, (call) => call.method === 'POST')
+  expect(decodeURIComponent(new URL(cleared.url).pathname)).toBe(
+    '/api/v1/admin/media/901/quarantine',
+  )
+  expect(JSON.parse(cleared.body)).toEqual({
+    release: true,
+    reason: 'A press photo, not the file on the list.',
+  })
+
+  // The picture is back, so the row leaves the work list and the sentence says what the
+  // instance did rather than what the button said.
+  await expect(page.getByText('No media is quarantined.')).toBeVisible()
+  await expect(page.getByText(/Released\. The picture is back on its post/)).toBeVisible()
+
+  // The decision is on record where every other staff action is.
+  await page.goto('/admin/audit')
+  await hydrated(page)
+  await expect(page.getByText('release_media_quarantine')).toBeVisible()
+  await expect(page.getByText(/media 901/)).toBeVisible()
+})
+
+test('deleting a quarantined picture destroys it and says so', async ({ page }) => {
+  await stubApi(page)
+  const calls = await adminApi(page, {
+    quarantined: [quarantinedMedia({ id: '902', status_id: null })],
+    audit: [],
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/media')
+  await hydrated(page)
+
+  const held = row(page, 'ncii-known-hashes')
+  // An attachment that never reached a post says that instead of linking nowhere.
+  await expect(held).toContainText('It was not attached to a post.')
+
+  await held.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(held).toContainText('Delete this picture? The file is destroyed')
+  const confirm = held.getByRole('button', { name: 'Delete the picture' })
+  await expect(confirm).toBeDisabled()
+  await held.getByLabel('Reason for the attachment 902').fill('It is the file on the list.')
+  await confirm.click()
+
+  const cleared = await sent(calls, (call) => call.method === 'POST')
+  expect(JSON.parse(cleared.body)).toEqual({ release: false, reason: 'It is the file on the list.' })
+  // The row is gone, not marked: there is nothing left to point at.
+  await expect(page.getByText('No media is quarantined.')).toBeVisible()
+  await expect(
+    page.getByText(/Deleted\. The attachment is destroyed and cannot be recovered/),
+  ).toBeVisible()
+})
+
+test('a grant without admin:write can read quarantined media but not clear it', async ({
+  page,
+}) => {
+  await stubApi(page)
+  await adminApi(page, { scopes: ['read', 'write', 'admin:read'] })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/media')
+  await hydrated(page)
+
+  // The list is a read, so the row paints; both outcomes are writes, so neither can press.
+  const held = row(page, 'ncii-known-hashes')
+  await expect(held).toContainText('Matched the set ncii-known-hashes.')
+  await expect(held.getByRole('button', { name: 'Release', exact: true })).toBeDisabled()
+  await expect(held.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+  await expect(page.getByText(/does not include admin:write/)).toBeVisible()
+})
+
+test('an instance whose features omit media_quarantine paints no media panel', async ({
+  page,
+}) => {
+  const features = FEATURES.filter((name) => name !== 'media_quarantine')
+  await stubApi(page, { features })
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/media')
+  await hydrated(page)
+
+  await expect(page.getByRole('tab', { name: 'Media' })).toHaveCount(0)
+  await expect(page.getByText(/does not quarantine media/)).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Appeals' })).toBeVisible()
 })

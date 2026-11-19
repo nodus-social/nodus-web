@@ -97,6 +97,7 @@ export const FEATURES = [
   'protocol',
   'remote_blocks',
   'polls',
+  'media_quarantine',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
@@ -371,6 +372,28 @@ export function appeal(overrides = {}) {
   }
 }
 
+/**
+ * One attachment a content set caught, as the quarantine list carries it.
+ *
+ * `set` is the name of the set that matched — the name a moderator acts on — and
+ * `status_id` is the post it hung on.
+ */
+export function quarantinedMedia(overrides = {}) {
+  return {
+    id: '901',
+    status_id: '9001',
+    account_id: '2',
+    content_type: 'image/png',
+    url: 'https://peer.example/media/901.png',
+    set: 'ncii-known-hashes',
+    content_hash: '7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069',
+    perceptual_hash: 'c0ffee',
+    state: 'quarantined',
+    created_at: '2026-11-18T10:00:00Z',
+    ...overrides,
+  }
+}
+
 /** The performance document for one window, with every counter the screen shows. */
 export function performanceStats(overrides = {}) {
   return {
@@ -431,6 +454,7 @@ export async function adminApi(
     stats = performanceStats(),
     appeals = [appeal()],
     appealRefusals = {},
+    quarantined = [quarantinedMedia()],
   } = {},
 ) {
   const calls = []
@@ -651,6 +675,42 @@ export async function adminApi(
     const limit = Number(query.get('limit') ?? held.length)
     return json(route, held.slice(offset, offset + limit))
   })
+  // The quarantine list. Releasing keeps the row and marks it released; deleting removes
+  // it, because the attachment no longer exists. Both append the audit row the instance
+  // writes, so the existing audit screen is where a test reads the decision back.
+  await page.route(/\/api\/v1\/admin\/media\/[^/]+\/quarantine$/, (route) => {
+    record(route)
+    const id = decodeURIComponent(route.request().url().split('/').at(-2))
+    const row = quarantined.find((item) => item.id === id)
+    if (!row || row.state !== 'quarantined') {
+      return json(
+        route,
+        { error: 'that attachment was not quarantined, so there is nothing to clear' },
+        422,
+      )
+    }
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    const release = body.release === true
+    if (release) row.state = 'released'
+    else quarantined.splice(quarantined.indexOf(row), 1)
+    audit.unshift({
+      id: `audit-media-${id}`,
+      actor_id: ACCOUNT_ID,
+      action: release ? 'release_media_quarantine' : 'delete_media_quarantine',
+      target_type: 'media',
+      target_id: id || row.id,
+      detail: { status_id: row.status_id, set: row.set, reason: body.reason },
+      created_at: '2026-11-19T12:00:00Z',
+    })
+    return json(route, {
+      id,
+      released: release,
+      deleted: !release,
+      status_id: row.status_id,
+      reports_resolved: 1,
+    })
+  })
+  await page.route(/\/api\/v1\/admin\/media\/quarantined$/, (route) => json(route, quarantined))
   await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))
   await page.route(/\/api\/v1\/admin\/overview$/, (route) =>
     json(route, {
