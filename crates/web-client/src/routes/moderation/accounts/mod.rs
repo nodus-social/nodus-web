@@ -1,10 +1,12 @@
 //! Account standing: search, the detail of one account, and every decision it carries.
 
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use nodus_client_core::model::{AccountDetail, AdminAccount, AdminAccountQuery, ModerationAction};
-use nodus_pages::pages::moderation::accounts::AccountsPage;
+use nodus_pages::pages::moderation::accounts::{AccountsPage, NextStep, StrikeHint};
 use nodus_pages::pages::moderation::{AccountBatch, BulkOutcome};
 
 use crate::state::alive::Alive;
@@ -17,6 +19,31 @@ use crate::state::bridge::admin;
 /// default.
 const PAGE: u16 = 20;
 
+/// Splits a page of rows into the accounts the list draws and the strikes it says beside them.
+///
+/// An instance that predates the escalation policy sends neither field, and a row without
+/// one simply has no hint: the list is the same list either way.
+fn split(rows: Vec<admin::AccountRow>) -> (Vec<AdminAccount>, HashMap<String, StrikeHint>) {
+    let mut list = Vec::with_capacity(rows.len());
+    let mut strikes = HashMap::new();
+    for row in rows {
+        if let Some(count) = row.strike_count {
+            strikes.insert(
+                row.account.id.clone(),
+                StrikeHint {
+                    count,
+                    next: row.next_escalation.map(|next| NextStep {
+                        strikes: next.strikes,
+                        action: next.action,
+                    }),
+                },
+            );
+        }
+        list.push(row.account);
+    }
+    (list, strikes)
+}
+
 /// One page of accounts, the search that narrows it, and the account a moderator picked.
 #[component]
 pub fn AccountList() -> impl IntoView {
@@ -26,6 +53,7 @@ pub fn AccountList() -> impl IntoView {
         limit: Some(PAGE),
         ..AdminAccountQuery::default()
     });
+    let (strikes, set_strikes) = signal(HashMap::<String, StrikeHint>::new());
     let (detail, set_detail) = signal(None::<AccountDetail>);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
@@ -40,8 +68,10 @@ pub fn AccountList() -> impl IntoView {
             let outcome = admin::search_accounts(&search).await;
             alive.if_alive(|| {
                 match outcome {
-                    Ok(list) => {
+                    Ok(rows) => {
+                        let (list, hints) = split(rows);
                         set_accounts.set(list);
+                        set_strikes.set(hints);
                         set_error.set(None);
                     }
                     Err(message) => set_error.set(Some(message)),
@@ -59,8 +89,10 @@ pub fn AccountList() -> impl IntoView {
             let outcome = admin::search_accounts(&search).await;
             alive.if_alive(|| {
                 match outcome {
-                    Ok(list) => {
+                    Ok(rows) => {
+                        let (list, hints) = split(rows);
                         set_accounts.set(list);
+                        set_strikes.set(hints);
                         set_error.set(None);
                     }
                     Err(message) => set_error.set(Some(message)),
@@ -75,8 +107,10 @@ pub fn AccountList() -> impl IntoView {
             let mut search = query.get_untracked();
             search.offset = Some(u32::try_from(accounts.get_untracked().len()).unwrap_or(0));
             match admin::search_accounts(&search).await {
-                Ok(list) => alive.if_alive(|| {
+                Ok(rows) => alive.if_alive(|| {
+                    let (list, hints) = split(rows);
                     set_accounts.update(|held| held.extend(list));
+                    set_strikes.update(|held| held.extend(hints));
                 }),
                 Err(message) => alive.if_alive(|| set_error.set(Some(message))),
             }
@@ -199,6 +233,7 @@ pub fn AccountList() -> impl IntoView {
         <AccountsPage
             accounts=accounts
             query=query
+            strikes=strikes
             detail=detail
             busy=busy
             error=error

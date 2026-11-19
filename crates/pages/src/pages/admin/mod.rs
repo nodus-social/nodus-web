@@ -20,6 +20,7 @@ pub mod announcements;
 pub mod audit;
 pub mod domains;
 pub mod email;
+pub mod escalation;
 pub mod overview;
 pub mod protocol;
 pub mod replies;
@@ -39,6 +40,8 @@ pub enum Section {
     Email,
     /// The instance's canned replies.
     Replies,
+    /// What a number of live strikes adds, rung by rung.
+    Escalation,
     /// What the instance is telling everyone.
     Announcements,
     /// What staff have done.
@@ -51,12 +54,13 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Overview,
         Self::Scanners,
         Self::Domains,
         Self::Email,
         Self::Replies,
+        Self::Escalation,
         Self::Announcements,
         Self::Audit,
         Self::Topology,
@@ -72,6 +76,7 @@ impl Section {
             Self::Domains => "domains",
             Self::Email => "email",
             Self::Replies => "replies",
+            Self::Escalation => "escalation",
             Self::Announcements => "announcements",
             Self::Audit => "audit",
             Self::Topology => "system",
@@ -97,6 +102,7 @@ impl Section {
             Self::Domains => "Allowed domains",
             Self::Email => "Mail domains",
             Self::Replies => "Canned replies",
+            Self::Escalation => "Escalation",
             Self::Announcements => "Announcements",
             Self::Audit => "Audit log",
             Self::Topology => "System",
@@ -113,6 +119,7 @@ impl Section {
             Self::Domains => "Domains allowed through a general block",
             Self::Email => "Mail domains that may not sign up",
             Self::Replies => "The sentences a moderator can send",
+            Self::Escalation => "What a number of strikes adds, and in which order",
             Self::Announcements => "What the instance is telling everyone",
             Self::Audit => "Administrative actions recorded by this server",
             Self::Topology => "What each process is doing, and what it just said",
@@ -129,6 +136,7 @@ impl Section {
             Self::Domains => Icon::Link,
             Self::Email => Icon::Mail,
             Self::Replies => Icon::Pen,
+            Self::Escalation => Icon::Shield,
             Self::Announcements => Icon::Bell,
             Self::Audit => Icon::List,
             Self::Topology => Icon::List,

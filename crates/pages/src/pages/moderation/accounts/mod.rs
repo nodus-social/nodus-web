@@ -9,6 +9,8 @@ use nodus_client_core::model::{
     AccountDetail, AccountOrigin, AccountStatus, AdminAccount, AdminAccountQuery, ModerationAction,
 };
 
+use std::collections::HashMap;
+
 use crate::components::panel::Panel;
 
 use super::{AccountBatch, AccountBulkAction, BulkOutcome};
@@ -23,6 +25,42 @@ const STATUSES: [(&str, Option<AccountStatus>); 6] = [
     ("Disabled", Some(AccountStatus::Disabled)),
 ];
 
+/// The rung an account would meet next, as the account payload carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NextStep {
+    /// The live strike count that triggers it.
+    pub strikes: i64,
+    /// `warn`, `flag`, `silence` or `suspend`.
+    pub action: String,
+}
+
+/// What an account's live strikes mean right now, when the payload said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrikeHint {
+    /// Live strikes inside the policy window.
+    pub count: i64,
+    /// The rung the next strike would meet, when the ladder still has one.
+    pub next: Option<NextStep>,
+}
+
+/// The strikes on one account, in one line: "3 strikes, next: suspend at 4".
+///
+/// A moderator deciding a case should not have to count a policy against an audit log to
+/// know what the next report would cost the account, so the instance's own two numbers are
+/// said here instead of being left to be derived.
+#[must_use]
+pub fn strike_line(hint: &StrikeHint) -> String {
+    let count = if hint.count == 1 {
+        "1 strike".to_owned()
+    } else {
+        format!("{} strikes", hint.count)
+    };
+    match &hint.next {
+        Some(next) => format!("{count}, next: {} at {}", next.action, next.strikes),
+        None => format!("{count}, next: nothing — the ladder ends here"),
+    }
+}
+
 /// Account list, its search row, and the detail of the account a moderator picked.
 #[component]
 pub fn AccountsPage(
@@ -32,6 +70,9 @@ pub fn AccountsPage(
     /// The search in force.
     #[prop(into)]
     query: Signal<AdminAccountQuery>,
+    /// Live strikes per account id, for the rows whose payload carried them.
+    #[prop(into)]
+    strikes: Signal<HashMap<String, StrikeHint>>,
     /// The account a moderator picked, once its detail has been read.
     #[prop(into)]
     detail: Signal<Option<AccountDetail>>,
@@ -372,6 +413,17 @@ pub fn AccountsPage(
                                             format!(" · {email}")
                                         }}
                                     </p>
+                                    <Show when=move || strikes.get().contains_key(&id.get_value())>
+                                        <p class="truncate text-xs text-warning" data-testid="account-strikes">
+                                            {move || {
+                                                strikes
+                                                    .get()
+                                                    .get(&id.get_value())
+                                                    .map(strike_line)
+                                                    .unwrap_or_default()
+                                            }}
+                                        </p>
+                                    </Show>
                                 </div>
                                 <div class="shrink-0 text-right text-xs opacity-70">
                                     <p>{format!("{reports} open report(s)")}</p>

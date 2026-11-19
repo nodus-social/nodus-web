@@ -1125,17 +1125,6 @@ pub async fn assign_report(id: &str, account_id: Option<&str>) -> Result<Report,
         .map_err(|error| error.to_string())
 }
 
-/// The account directory, narrowed by the query.
-pub async fn search_accounts(query: &AdminAccountQuery) -> Result<Vec<AdminAccount>, String> {
-    let transport = admin_transport()
-        .or_else(instance_transport)
-        .ok_or_else(|| "Not signed in.".to_owned())?;
-    transport
-        .search_accounts(query)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// One account with its notes, flags and report count.
 pub async fn account_detail(id: &str) -> Result<AccountDetail, String> {
     let transport = admin_transport()
@@ -2347,6 +2336,171 @@ pub async fn dry_run_moderation_rule(id: &str, sample: &str) -> Result<RuleDryRu
         .map_err(|error| error.to_string())?;
     transport
         .fetch(transport.post_body(url, "application/json", body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// One rung of the escalation policy, as the instance writes it down.
+///
+/// `duration_days` is absent for a rung that does not lapse, which is how the instance's own
+/// store spells it: `skip_serializing_if` keeps an untouched rung out of the request body
+/// instead of sending a null the form never asked for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EscalationStep {
+    /// The live strike count this rung answers.
+    pub strikes: i64,
+    /// `warn`, `flag`, `silence` or `suspend`.
+    pub action: String,
+    /// How long a temporary action lasts, in days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_days: Option<i64>,
+}
+
+/// The escalation policy as `GET|PUT /api/v1/admin/escalation` answers it.
+///
+/// `name` and `updated_at` are the instance's, not the form's: the request sends only
+/// `enabled`, `window_days` and `steps`, and the answer says which policy row now stands.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EscalationPolicy {
+    /// The name the audit trail cites.
+    #[serde(default)]
+    pub name: String,
+    /// Whether the ladder is applied.
+    pub enabled: bool,
+    /// How long a strike counts, in days.
+    pub window_days: i64,
+    /// The ladder, in the order the instance reads it.
+    #[serde(default)]
+    pub steps: Vec<EscalationStep>,
+    /// When it was last written.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// Who wrote it.
+    #[serde(default)]
+    pub updated_by: Option<String>,
+}
+
+/// The escalation policy this instance applies.
+pub async fn escalation_policy() -> Result<EscalationPolicy, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/escalation")
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Writes the ladder, and answers with the policy as stored.
+///
+/// A rung the store cannot reason about comes back as a 422 whose sentence names the rung
+/// by position; that sentence is carried through unchanged, because it is the only thing
+/// that tells an administrator which row to fix.
+pub async fn save_escalation_policy(
+    enabled: bool,
+    window_days: i64,
+    steps: &[EscalationStep],
+) -> Result<EscalationPolicy, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/escalation")
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "enabled": enabled,
+        "window_days": window_days,
+        "steps": steps,
+    }))
+    .map_err(|error| error.to_string())?;
+    let mut request = transport.put(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The rung an account would meet next, as the account payload carries it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct NextEscalation {
+    /// The live strike count that triggers it.
+    pub strikes: i64,
+    /// `warn`, `flag`, `silence` or `suspend`.
+    pub action: String,
+    /// How long it lasts, when it lapses.
+    #[serde(default)]
+    pub duration_days: Option<i64>,
+}
+
+/// One row of a moderator's account search, as the instance sends it.
+///
+/// The SDK's `AdminAccount` predates the two escalation fields, and a flattened deserialize
+/// drops what it does not know. Reading the row here instead — the same request, the same
+/// payload — keeps the strikes without a second round trip or a second model of the account.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct AccountRow {
+    /// Every field the directory has always carried.
+    #[serde(flatten)]
+    pub account: AdminAccount,
+    /// Live strikes inside the policy window. Absent on an instance that predates them.
+    #[serde(default)]
+    pub strike_count: Option<i64>,
+    /// The rung the next strike would meet, or `None` when the ladder has run out.
+    #[serde(default)]
+    pub next_escalation: Option<NextEscalation>,
+}
+
+/// The account directory, narrowed by the query, with the escalation each row carries.
+pub async fn search_accounts(query: &AdminAccountQuery) -> Result<Vec<AccountRow>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/accounts")
+        .map_err(|error| error.to_string())?;
+    // The same parameters the SDK's search sends, in its order, so switching between the two
+    // cannot change which rows an instance answers with.
+    let mut pairs: Vec<(&'static str, String)> = Vec::new();
+    if let Some(origin) = query.origin {
+        pairs.push(("origin", origin.as_str().to_owned()));
+    }
+    if let Some(status) = query.status {
+        pairs.push(("status", status.as_str().to_owned()));
+    }
+    for (key, value) in [
+        ("username", query.username.as_ref()),
+        ("display_name", query.display_name.as_ref()),
+        ("email", query.email.as_ref()),
+        ("by_domain", query.by_domain.as_ref()),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            pairs.push((key, value.clone()));
+        }
+    }
+    if query.staff {
+        pairs.push(("staff", "true".to_owned()));
+    }
+    if let Some(limit) = query.limit {
+        pairs.push(("limit", limit.to_string()));
+    }
+    if let Some(offset) = query.offset {
+        pairs.push(("offset", offset.to_string()));
+    }
+    {
+        let mut serializer = url.query_pairs_mut();
+        for (key, value) in &pairs {
+            serializer.append_pair(key, value);
+        }
+    }
+    transport
+        .fetch::<Vec<AccountRow>>(transport.get(url))
         .await
         .map_err(|error| error.to_string())
 }

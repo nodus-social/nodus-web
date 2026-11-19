@@ -31,6 +31,7 @@ const MODERATION = [
   'Accounts',
   'Registrations',
   'Federation',
+  'Rules',
 ]
 
 /** The sections the administration screen offers, in reading order. */
@@ -40,6 +41,7 @@ const ADMINISTRATION = [
   'Allowed domains',
   'Mail domains',
   'Canned replies',
+  'Escalation',
   'Announcements',
   'Audit log',
   'System',

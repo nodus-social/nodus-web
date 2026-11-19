@@ -8,11 +8,13 @@ import { expect, test } from '@playwright/test'
 
 import {
   ACCOUNT_ID,
+  FEATURES,
   adminAccount,
   adminApi,
   blockSubscription,
   captureChartSpecs,
   chartSpecs,
+  escalationPolicy,
   granted,
   hydrated,
   moderationRule,
@@ -860,4 +862,117 @@ test('a pattern that cannot compile is refused with the instance message', async
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('the pattern is not a valid regex')
   await expect(page.getByTestId('rules-empty')).toBeVisible()
+})
+
+test('the escalation ladder reads rung by rung, and says its order out loud', async ({ page }) => {
+  await consoleAs(page, { escalation: escalationPolicy() })
+  await open(page, '/admin/escalation')
+
+  await expect(page.getByRole('heading', { name: 'Escalation' })).toBeVisible()
+  // The whole ladder in one sentence, before the rungs are read one at a time: strike 2
+  // silences, strike 3 suspends, and the window the counts live in is part of it.
+  await expect(page.getByTestId('escalation-sequence')).toHaveText(
+    'Inside a 30-day window: flag at 1 strike, then silence at 2 strikes, then suspend at 3 strikes.',
+  )
+  await expect(page.getByTestId('escalation-step')).toHaveCount(3)
+  await expect(page.getByTestId('escalation-ordinal')).toHaveText([
+    '1 strike',
+    '2 strikes',
+    '3 strikes',
+  ])
+  await expect(page.getByTestId('escalation-step-line')).toHaveText([
+    'Strike 1 flags the account for a moderator',
+    'Strike 2 silences the account for 7 days',
+    'Strike 3 suspends the account with no end date',
+  ])
+  // The rule above every rung, in words: an escalation adds, it never lifts.
+  await expect(page.getByTestId('escalation-never-weakens')).toContainText(
+    'An escalation never weakens a restriction already in force',
+  )
+})
+
+test('saving the ladder sends the rungs in the order they are shown', async ({ page }) => {
+  const calls = await consoleAs(page, { escalation: escalationPolicy() })
+  await open(page, '/admin/escalation')
+
+  await page.getByTestId('escalation-add').click()
+  const rungs = page.getByTestId('escalation-step')
+  await expect(rungs).toHaveCount(4)
+  const added = rungs.nth(3)
+  await added.getByTestId('escalation-action').selectOption('suspend')
+  await added.getByTestId('escalation-duration').fill('30')
+  await page.getByTestId('escalation-window').fill('14')
+  await page.getByTestId('escalation-save').click()
+
+  const written = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/escalation'),
+  )
+  // The order on screen is the order sent: a ladder the instance reorders is a ladder the
+  // administrator did not author.
+  expect(JSON.parse(written.body)).toEqual({
+    enabled: true,
+    window_days: 14,
+    steps: [
+      { strikes: 1, action: 'flag' },
+      { strikes: 2, action: 'silence', duration_days: 7 },
+      { strikes: 3, action: 'suspend' },
+      { strikes: 4, action: 'suspend', duration_days: 30 },
+    ],
+  })
+  await expect(page.getByRole('status')).toContainText('Saved')
+})
+
+test('a refused ladder is shown the instance sentence verbatim, beside the rung it names', async ({
+  page,
+}) => {
+  const refusal = 'step 3: strike counts must ascend, 2 does not follow 4'
+  await consoleAs(page, { escalationRefusal: refusal })
+  await open(page, '/admin/escalation')
+
+  const rungs = page.getByTestId('escalation-step')
+  await rungs.nth(0).getByTestId('escalation-strikes').fill('4')
+  await rungs.nth(2).getByTestId('escalation-strikes').fill('2')
+  await page.getByTestId('escalation-save').click()
+
+  // Verbatim: the sentence names the step, and is the only guidance the administrator gets.
+  await expect(page.getByRole('alert')).toContainText(refusal)
+  // The rung it names is ringed, and the refused draft is still there to be corrected.
+  await expect(rungs.nth(2)).toHaveClass(/ring-error/)
+  await expect(rungs.nth(0).getByTestId('escalation-strikes')).toHaveValue('4')
+})
+
+test('an instance whose features omit moderation serves no escalation panel', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'moderation')
+  await stubApi(page, { features })
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/admin/escalation')
+  await hydrated(page)
+
+  await expect(page.getByRole('tab', { name: 'Escalation' })).toHaveCount(0)
+  await expect(page.getByText(/does not serve the escalation panel/)).toBeVisible()
+})
+
+test('an account row says its strikes and what the next one costs', async ({ page }) => {
+  await consoleAs(page, {
+    accounts: [
+      adminAccount({ strike_count: 3, next_escalation: { strikes: 4, action: 'suspend' } }),
+    ],
+  })
+  await open(page, '/moderation/accounts')
+
+  // The count and the next rung in one line, because a moderator deciding a case should not
+  // have to join an audit log against a policy to know what the next report would cost.
+  await expect(page.getByTestId('account-strikes')).toHaveText('3 strikes, next: suspend at 4')
+})
+
+test('an account whose payload carries no strike count shows no strike line', async ({ page }) => {
+  await consoleAs(page, { accounts: [adminAccount()] })
+  await open(page, '/moderation/accounts')
+
+  // Absent, not "0 strikes": an older instance that does not count strikes must not be
+  // described as counting none.
+  await expect(page.getByTestId('account-strikes')).toHaveCount(0)
 })

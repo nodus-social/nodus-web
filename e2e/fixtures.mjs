@@ -251,6 +251,28 @@ export async function stubPublicApi(page, { status: single = status(), context =
 }
 
 
+/**
+ * The escalation policy, as the panel reads it.
+ *
+ * Three rungs, because a ladder of one says nothing about order: strike 1 flags, strike 2
+ * silences for a week, strike 3 suspends until a person lifts it.
+ */
+export function escalationPolicy(overrides = {}) {
+  return {
+    name: 'default',
+    enabled: true,
+    window_days: 30,
+    steps: [
+      { strikes: 1, action: 'flag' },
+      { strikes: 2, action: 'silence', duration_days: 7 },
+      { strikes: 3, action: 'suspend' },
+    ],
+    updated_at: '2026-11-01T09:00:00.000Z',
+    updated_by: ACCOUNT_ID,
+    ...overrides,
+  }
+}
+
 /** An account as the moderator console receives it. */
 export function adminAccount(overrides = {}) {
   return {
@@ -480,6 +502,8 @@ export async function adminApi(
     appealRefusals = {},
     quarantined = [quarantinedMedia()],
     rules = [moderationRule()],
+    escalation = escalationPolicy(),
+    escalationRefusal = null,
   } = {},
 ) {
   const calls = []
@@ -540,6 +564,28 @@ export async function adminApi(
     json(route, { accepted: true, detail: 'a pass is queued' }),
   )
   await page.route(/\/api\/v1\/admin\/topology$/, (route) => json(route, { version: '0.1.0', nodes }))
+  // The escalation policy: one row, read whole and written whole. A refusal is returned as
+  // the instance words it, because that sentence names the rung and is the only guidance.
+  await page.route(/\/api\/v1\/admin\/escalation$/, (route) => {
+    if (route.request().method() !== 'PUT') return json(route, escalation)
+    record(route)
+    if (escalationRefusal) {
+      return route.fulfill({ status: 422, headers: CORS, json: { error: escalationRefusal } })
+    }
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    return route.fulfill({
+      status: 200,
+      headers: CORS,
+      json: {
+        ...escalation,
+        enabled: body.enabled,
+        window_days: body.window_days,
+        steps: body.steps,
+        updated_at: '2026-11-08T10:00:00.000Z',
+        updated_by: ACCOUNT_ID,
+      },
+    })
+  })
   await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
   await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))
   await page.route(/\/api\/v1\/admin\/accounts\/[^/]+\/action$/, (route) => json(route, accounts[0] ?? adminAccount()))

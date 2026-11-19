@@ -40,6 +40,7 @@ mod announcements;
 mod audit;
 mod domains;
 mod email;
+mod escalation;
 mod overview;
 mod protocol;
 mod replies;
@@ -120,6 +121,9 @@ pub fn Admin(section: String) -> impl IntoView {
     // The instance decides which sections exist: a `features` name it does not publish is a
     // panel it does not serve, so the tab is not drawn and the section says why if the
     // address names it anyway. Everything else is this instance's own console.
+    // Escalation has no feature name of its own: `/api/v1/meta` advertises `moderation`,
+    // and the strikes the ladder acts on are moderation's own. The gate is that name.
+    let moderation = feature("moderation");
     let scanners = feature("scanners");
     let topology = feature("topology");
     let protocol = feature("protocol");
@@ -128,6 +132,7 @@ pub fn Admin(section: String) -> impl IntoView {
             .iter()
             .filter(|section| match section {
                 Section::Scanners => scanners.get(),
+                Section::Escalation => moderation.get(),
                 Section::Topology => topology.get(),
                 Section::Protocol => protocol.get(),
                 _ => true,
@@ -167,6 +172,8 @@ pub fn Admin(section: String) -> impl IntoView {
                     Section::Domains => view! { <Domains/> }.into_any(),
                     Section::Email => view! { <EmailDomains/> }.into_any(),
                     Section::Replies => view! { <Replies/> }.into_any(),
+                    Section::Escalation if !moderation.get() => missing_escalation(),
+                    Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
                     Section::Announcements => view! { <Announcements/> }.into_any(),
                     Section::Audit => view! { <Audit/> }.into_any(),
                     Section::Topology if !topology.get() => missing("topology"),
@@ -186,6 +193,17 @@ fn missing(name: &'static str) -> AnyView {
             {format!(
                 "This instance does not serve the {name} panel: its /api/v1/meta answer does not name it among its features."
             )}
+        </Note>
+    }
+    .into_any()
+}
+
+/// The escalation panel, on an instance whose `/api/v1/meta` answer does not name
+/// `moderation` — the feature the ladder hangs on.
+fn missing_escalation() -> AnyView {
+    view! {
+        <Note class="text-sm opacity-70">
+            "This instance does not serve the escalation panel: its /api/v1/meta answer does not name `moderation`, which is the capability the policy is written through."
         </Note>
     }
     .into_any()
