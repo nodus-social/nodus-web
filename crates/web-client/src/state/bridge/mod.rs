@@ -136,6 +136,23 @@ fn remember_support(host: &str, answer: bool) {
     crate::platform::storage::set(SUPPORT_KEY, &lines.join("\n"));
 }
 
+/// Drops one host's remembered answer, so a later sign-in asks the instance again.
+fn forget_support(host: &str) {
+    let Some(stored) = crate::platform::storage::get(SUPPORT_KEY) else {
+        return;
+    };
+    let prefix = format!("{host}\t");
+    let kept = stored
+        .lines()
+        .filter(|line| !line.starts_with(&prefix))
+        .collect::<Vec<_>>();
+    if kept.is_empty() {
+        crate::platform::storage::remove(SUPPORT_KEY);
+    } else {
+        crate::platform::storage::set(SUPPORT_KEY, &kept.join("\n"));
+    }
+}
+
 fn settle(host: &str, answer: bool, features: Vec<String>) -> bool {
     EXTENSIONS.with_borrow_mut(|known| *known = Some((host.to_owned(), answer)));
     FEATURES.with_borrow_mut(|held| *held = Some((host.to_owned(), features)));
@@ -181,6 +198,14 @@ pub async fn probe_extensions() -> bool {
         if known_host == host {
             return known;
         }
+    }
+    // A host that has already said no is not asked again: the answer is a fact about the
+    // instance, not about this page, and a 404 repeated on every navigation is a console
+    // error the reader did not cause. A remembered "yes" is still asked, because the
+    // feature list behind it is what the panels are built from and only the response
+    // carries it.
+    if remembered_support(&host) == Some(false) {
+        return settle(&host, false, Vec::new());
     }
     if ASKING.with(std::cell::Cell::get) {
         return remembered_support(&host).unwrap_or(false);
@@ -242,6 +267,12 @@ pub(super) async fn patience<F: std::future::Future>(future: F, limit: std::time
 
 /// Forgets what was asked, for when the session changes under it.
 pub fn forget_extensions() {
+    // The remembered answer belongs to the account that is leaving, not to the browser: a
+    // sign-out that kept it would make the next sign-in on this host inherit this one's
+    // extensions (or lack of them).
+    if let Some(host) = session_host() {
+        forget_support(&host);
+    }
     EXTENSIONS.with_borrow_mut(|known| *known = None);
     FEATURES.with_borrow_mut(|held| *held = None);
     extensions_revision().update(|revision| *revision = revision.wrapping_add(1));

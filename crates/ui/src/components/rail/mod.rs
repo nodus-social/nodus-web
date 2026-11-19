@@ -918,7 +918,19 @@ pub fn Rail(
     // Everything that changes lives in a signal, and the tree below is built once: a subtree
     // rebuilt on each style change would dispose the owners behind the rows it replaces
     // while a queued update is still holding them.
-    let nav = Memo::new(move |_| style.map(|s| s.get().nav).unwrap_or_default());
+    let nav = Memo::new(move |_| {
+        let layout = style.map(|s| s.get().nav).unwrap_or_default();
+        // A layout with no items at all is an answer this build cannot use: the account's
+        // instance has no Nodus metadata endpoint (a plain Mastodon server 404s it, and
+        // `/api/v1/nodus/layout` does not exist anywhere), or the document was written by a
+        // client whose schema this one cannot read. Drawing its categories would leave the
+        // rail as headings with nothing under them — a column that looks empty is a column
+        // the reader cannot leave the page by, so the defaults stand in.
+        if layout.items.is_empty() {
+            return crate::session_style::NavLayout::default();
+        }
+        layout
+    });
     let rails = Memo::new(move |_| {
         let layout = nav.get();
         let rails = layout
