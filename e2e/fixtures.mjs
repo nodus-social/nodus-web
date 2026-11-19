@@ -99,6 +99,7 @@ export const FEATURES = [
   'polls',
   'media_quarantine',
   'moderation_rules',
+  'federation_delivery',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
@@ -271,6 +272,34 @@ export function escalationPolicy(overrides = {}) {
     updated_by: ACCOUNT_ID,
     ...overrides,
   }
+}
+
+/**
+ * One queued federation delivery, as the admin endpoint answers it.
+ *
+ * Defaults to a failed row with a next attempt: the shape most of the queue is in.
+ */
+export function delivery(overrides = {}) {
+  return {
+    id: 'd-1',
+    inbox_url: 'https://peer.example/inbox',
+    host: 'peer.example',
+    activity_id: 'https://stub.instance/activities/1',
+    activity_kind: 'Create',
+    state: 'failed',
+    attempts: 3,
+    last_status_code: 503,
+    last_error: 'the peer answered 503',
+    next_attempt_at: '2026-11-19T07:00:00Z',
+    created_at: '2026-11-19T06:00:00Z',
+    delivered_at: null,
+    ...overrides,
+  }
+}
+
+/** The whole queue's counts per state, when a test wants numbers other than the rows'. */
+export function deliveryCounts(overrides = {}) {
+  return { pending: 0, failed: 0, gave_up: 0, delivered: 0, ...overrides }
 }
 
 /** An account as the moderator console receives it. */
@@ -504,6 +533,8 @@ export async function adminApi(
     rules = [moderationRule()],
     escalation = escalationPolicy(),
     escalationRefusal = null,
+    deliveries = [],
+    deliveryCounts: counts = null,
   } = {},
 ) {
   const calls = []
@@ -585,6 +616,25 @@ export async function adminApi(
         updated_by: ACCOUNT_ID,
       },
     })
+  })
+  // The delivery queue: the list answers with its rows and the whole queue's counts, and
+  // the two retries answer with what they actually requeued.
+  await page.route(/\/api\/v1\/admin\/federation\/deliveries(\?|$)/, (route) => {
+    const counted = deliveryCounts()
+    for (const row of deliveries) counted[row.state] = (counted[row.state] ?? 0) + 1
+    return json(route, { deliveries, counts: counts ?? counted })
+  })
+  await page.route(/\/api\/v1\/admin\/federation\/deliveries\/[^/]+\/retry$/, (route) =>
+    json(route, { id: route.request().url().split('/').at(-2), state: 'pending' }),
+  )
+  await page.route(/\/api\/v1\/admin\/federation\/deliveries\/retry-failed$/, (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    const requeued = deliveries.filter(
+      (row) =>
+        (row.state === 'failed' || row.state === 'gave_up') &&
+        (!body.host || row.host === body.host),
+    ).length
+    return json(route, { requeued })
   })
   await page.route(/\/api\/v1\/admin\/accounts\?/, (route) => json(route, accounts))
   await page.route(/\/api\/v2\/admin\/accounts/, (route) => json(route, accounts))

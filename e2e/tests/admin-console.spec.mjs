@@ -14,6 +14,8 @@ import {
   blockSubscription,
   captureChartSpecs,
   chartSpecs,
+  delivery,
+  deliveryCounts,
   escalationPolicy,
   granted,
   hydrated,
@@ -975,4 +977,121 @@ test('an account whose payload carries no strike count shows no strike line', as
   // Absent, not "0 strikes": an older instance that does not count strikes must not be
   // described as counting none.
   await expect(page.getByTestId('account-strikes')).toHaveCount(0)
+})
+
+test('the delivery queue counts its states, and a refusal reads unlike an outage', async ({
+  page,
+}) => {
+  const refused = delivery({
+    id: 'd-1',
+    host: 'refuser.example',
+    state: 'gave_up',
+    attempts: 1,
+    last_status_code: 401,
+    last_error: 'the peer answered 401',
+  })
+  const down = delivery({
+    id: 'd-2',
+    host: 'down.example',
+    state: 'gave_up',
+    attempts: 6,
+    last_status_code: 503,
+    last_error: 'the peer answered 503',
+  })
+  await consoleAs(page, {
+    deliveries: [refused, down],
+    // The counts are the whole queue's, not this page's: three delivered rows are not on
+    // screen and still make the All filter say eight.
+    deliveryCounts: deliveryCounts({ pending: 2, failed: 1, gave_up: 2, delivered: 3 }),
+  })
+  await open(page, '/admin/federation')
+
+  await expect(page.getByRole('heading', { name: 'Federation delivery' })).toBeVisible()
+  await expect(page.getByTestId('delivery-filter-all')).toHaveText('All (8)')
+  await expect(page.getByTestId('delivery-filter-pending')).toHaveText('Pending (2)')
+  await expect(page.getByTestId('delivery-filter-failed')).toHaveText('Failed (1)')
+  await expect(page.getByTestId('delivery-filter-gave_up')).toHaveText('Gave up (2)')
+  await expect(page.getByTestId('delivery-filter-delivered')).toHaveText('Delivered (3)')
+  await expect(page.getByTestId('delivery-row')).toHaveCount(2)
+
+  // The two ways a delivery stops are told apart in words, because one can be retried and
+  // the other has to wait for the peer's key to agree with ours.
+  const reasons = page.getByTestId('delivery-reason')
+  await expect(reasons.nth(0)).toContainText('answered 401')
+  await expect(reasons.nth(0)).toContainText('will not accept our signature')
+  await expect(reasons.nth(1)).toContainText('was down')
+  await expect(reasons.nth(1)).toContainText('answered 503')
+})
+
+test('the state and host filters are the request, and leave the first page', async ({ page }) => {
+  const calls = await consoleAs(page, { deliveries: [delivery({ state: 'failed' })] })
+  await open(page, '/admin/federation')
+
+  await page.getByTestId('delivery-filter-failed').click()
+  await sent(
+    calls,
+    (call) => call.method === 'GET' && call.url.includes('/deliveries?') && call.url.includes('state=failed'),
+  )
+
+  await page.getByTestId('delivery-host').fill('peer.example')
+  await page.getByTestId('delivery-host').press('Enter')
+  await sent(
+    calls,
+    (call) => call.method === 'GET' && call.url.includes('state=failed') && call.url.includes('host=peer.example'),
+  )
+})
+
+test('retrying one delivery asks a second time, and sends that row', async ({ page }) => {
+  const calls = await consoleAs(page, { deliveries: [delivery({ id: 'd-1', state: 'failed' })] })
+  await open(page, '/admin/federation')
+
+  await page.getByTestId('delivery-retry').click()
+  await expect(page.getByTestId('delivery-retry-confirm')).toBeVisible()
+  // The first press only asks: no request leaves until it is answered.
+  expect(calls.filter((call) => call.url.endsWith('/retry'))).toHaveLength(0)
+
+  await page.getByTestId('delivery-retry-confirm').click()
+  const written = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.endsWith('/deliveries/d-1/retry'),
+  )
+  expect(written.url).toContain('/api/v1/admin/federation/deliveries/d-1/retry')
+  await expect(page.getByTestId('delivery-notice')).toContainText('Retry queued')
+})
+
+test('retrying everything failed says how many the server requeued', async ({ page }) => {
+  await consoleAs(page, {
+    deliveries: [
+      delivery({ id: 'd-1', state: 'gave_up' }),
+      delivery({ id: 'd-2', state: 'failed' }),
+      delivery({ id: 'd-3', state: 'delivered', delivered_at: '2026-11-19T06:30:00Z' }),
+    ],
+  })
+  await open(page, '/admin/federation')
+
+  await page.getByTestId('delivery-retry-failed').click()
+  // The number is the server's: "done" would not say whether anything was waiting.
+  await expect(page.getByTestId('delivery-notice')).toHaveText(
+    'Requeued 2 failed deliveries. They will be attempted again now.',
+  )
+})
+
+test('an empty queue says nothing is waiting', async ({ page }) => {
+  await consoleAs(page, { deliveries: [] })
+  await open(page, '/admin/federation')
+
+  await expect(page.getByTestId('delivery-empty')).toHaveText('Nothing is waiting to be delivered.')
+})
+
+test('an instance without federation_delivery offers no delivery panel', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'federation_delivery')
+  await stubApi(page, { features })
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/admin/federation')
+  await hydrated(page)
+
+  await expect(page.getByRole('tab', { name: 'Deliveries' })).toHaveCount(0)
+  await expect(page.getByText(/does not serve the delivery panel/)).toBeVisible()
 })

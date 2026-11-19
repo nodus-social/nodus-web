@@ -41,6 +41,7 @@ mod audit;
 mod domains;
 mod email;
 mod escalation;
+mod federation;
 mod overview;
 mod protocol;
 mod replies;
@@ -124,6 +125,9 @@ pub fn Admin(section: String) -> impl IntoView {
     // Escalation has no feature name of its own: `/api/v1/meta` advertises `moderation`,
     // and the strikes the ladder acts on are moderation's own. The gate is that name.
     let moderation = feature("moderation");
+    // Delivery has its own name: an instance that speaks federation without serving the
+    // queue would otherwise offer a panel whose request 404s.
+    let delivery = feature("federation_delivery");
     let scanners = feature("scanners");
     let topology = feature("topology");
     let protocol = feature("protocol");
@@ -133,6 +137,7 @@ pub fn Admin(section: String) -> impl IntoView {
             .filter(|section| match section {
                 Section::Scanners => scanners.get(),
                 Section::Escalation => moderation.get(),
+                Section::Federation => delivery.get(),
                 Section::Topology => topology.get(),
                 Section::Protocol => protocol.get(),
                 _ => true,
@@ -174,6 +179,8 @@ pub fn Admin(section: String) -> impl IntoView {
                     Section::Replies => view! { <Replies/> }.into_any(),
                     Section::Escalation if !moderation.get() => missing_escalation(),
                     Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
+                    Section::Federation if !delivery.get() => missing("delivery"),
+                    Section::Federation => view! { <federation::Deliveries/> }.into_any(),
                     Section::Announcements => view! { <Announcements/> }.into_any(),
                     Section::Audit => view! { <Audit/> }.into_any(),
                     Section::Topology if !topology.get() => missing("topology"),

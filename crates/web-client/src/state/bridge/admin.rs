@@ -2504,3 +2504,141 @@ pub async fn search_accounts(query: &AdminAccountQuery) -> Result<Vec<AccountRow
         .await
         .map_err(|error| error.to_string())
 }
+
+/// One queued federation delivery, as `GET /api/v1/admin/federation/deliveries` sends it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Delivery {
+    /// The row's id, which the retry names.
+    pub id: String,
+    /// The inbox the activity is posted to.
+    pub inbox_url: String,
+    /// The peer, as the queue keys it.
+    pub host: String,
+    /// The activity's own id.
+    #[serde(default)]
+    pub activity_id: String,
+    /// What kind of activity it is, when the queue recorded one.
+    #[serde(default)]
+    pub activity_kind: Option<String>,
+    /// `pending`, `delivered`, `failed` or `gave_up`.
+    pub state: String,
+    /// How many times it has been tried.
+    pub attempts: i32,
+    /// What the peer answered last.
+    #[serde(default)]
+    pub last_status_code: Option<i32>,
+    /// What went wrong last, as the transport worded it.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// When the queue will try it again.
+    pub next_attempt_at: String,
+    /// When it was queued.
+    pub created_at: String,
+    /// When it got through, for a delivered row.
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+}
+
+/// The whole queue's count per state, not one page's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct DeliveryCounts {
+    /// Waiting to be sent.
+    pub pending: i64,
+    /// Tried, failed, and waiting for its next attempt.
+    pub failed: i64,
+    /// Out of attempts.
+    pub gave_up: i64,
+    /// Reached the peer.
+    pub delivered: i64,
+}
+
+/// One page of the delivery queue, with the counts the filter buttons show.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct DeliveryPage {
+    /// The rows, newest first.
+    pub deliveries: Vec<Delivery>,
+    /// The whole queue's counts.
+    #[serde(default)]
+    pub counts: DeliveryCounts,
+}
+
+/// One page of the delivery queue, narrowed by state and peer.
+pub async fn deliveries(
+    state: Option<&str>,
+    host: Option<&str>,
+    offset: i64,
+    limit: u16,
+) -> Result<DeliveryPage, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/federation/deliveries")
+        .map_err(|error| error.to_string())?;
+    {
+        let mut serializer = url.query_pairs_mut();
+        if let Some(state) = state.filter(|value| !value.is_empty()) {
+            serializer.append_pair("state", state);
+        }
+        if let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) {
+            serializer.append_pair("host", host);
+        }
+        serializer.append_pair("limit", &limit.to_string());
+        if offset > 0 {
+            serializer.append_pair("offset", &offset.to_string());
+        }
+    }
+    transport
+        .fetch::<DeliveryPage>(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Sends one delivery again now.
+pub async fn retry_delivery(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url(&format!("/api/v1/admin/federation/deliveries/{id}/retry"))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch::<serde_json::Value>(transport.post(url))
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// The number the server says it actually re-queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct Requeued {
+    /// Failed and given-up rows now waiting again.
+    pub requeued: i64,
+}
+
+/// Sends every failed and given-up delivery again, optionally for one peer.
+///
+/// The answer's `requeued` is returned rather than a bare `Ok`: "done" does not say whether
+/// anything was actually waiting, and an operator who fixed a key needs that number.
+pub async fn retry_failed(host: Option<&str>) -> Result<i64, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/federation/deliveries/retry-failed")
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "host": host.map(str::trim).filter(|value| !value.is_empty()),
+    }))
+    .map_err(|error| error.to_string())?;
+    let mut request = transport.post(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch::<Requeued>(request)
+        .await
+        .map(|answer| answer.requeued)
+        .map_err(|error| error.to_string())
+}

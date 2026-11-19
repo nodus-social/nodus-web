@@ -21,6 +21,7 @@ pub mod audit;
 pub mod domains;
 pub mod email;
 pub mod escalation;
+pub mod federation;
 pub mod overview;
 pub mod protocol;
 pub mod replies;
@@ -42,6 +43,8 @@ pub enum Section {
     Replies,
     /// What a number of live strikes adds, rung by rung.
     Escalation,
+    /// What this instance still has to deliver to its peers.
+    Federation,
     /// What the instance is telling everyone.
     Announcements,
     /// What staff have done.
@@ -54,13 +57,14 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Overview,
         Self::Scanners,
         Self::Domains,
         Self::Email,
         Self::Replies,
         Self::Escalation,
+        Self::Federation,
         Self::Announcements,
         Self::Audit,
         Self::Topology,
@@ -77,6 +81,7 @@ impl Section {
             Self::Email => "email",
             Self::Replies => "replies",
             Self::Escalation => "escalation",
+            Self::Federation => "federation",
             Self::Announcements => "announcements",
             Self::Audit => "audit",
             Self::Topology => "system",
@@ -103,6 +108,7 @@ impl Section {
             Self::Email => "Mail domains",
             Self::Replies => "Canned replies",
             Self::Escalation => "Escalation",
+            Self::Federation => "Deliveries",
             Self::Announcements => "Announcements",
             Self::Audit => "Audit log",
             Self::Topology => "System",
@@ -120,6 +126,7 @@ impl Section {
             Self::Email => "Mail domains that may not sign up",
             Self::Replies => "The sentences a moderator can send",
             Self::Escalation => "What a number of strikes adds, and in which order",
+            Self::Federation => "What this instance still has to deliver to its peers, and why a delivery stopped",
             Self::Announcements => "What the instance is telling everyone",
             Self::Audit => "Administrative actions recorded by this server",
             Self::Topology => "What each process is doing, and what it just said",
@@ -137,6 +144,7 @@ impl Section {
             Self::Email => Icon::Mail,
             Self::Replies => Icon::Pen,
             Self::Escalation => Icon::Shield,
+            Self::Federation => Icon::Link,
             Self::Announcements => Icon::Bell,
             Self::Audit => Icon::List,
             Self::Topology => Icon::List,
