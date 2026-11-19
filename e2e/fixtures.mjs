@@ -98,11 +98,35 @@ export const FEATURES = [
   'remote_blocks',
   'polls',
   'media_quarantine',
+  'moderation_rules',
 ]
 
 /** The scopes a role carries, as the two role answers send them. */
 export function scopesOf(role) {
   return role === 'none' ? [] : ['admin:read', 'admin:write']
+}
+
+/**
+ * One moderation rule, as the rules panel reads it.
+ *
+ * `hits` is the instance's tally, not the screen's: it counts what the rule has matched
+ * since it was written, which is the number an administrator checks before trusting it.
+ */
+export function moderationRule(overrides = {}) {
+  return {
+    id: '7001',
+    name: 'Spam words',
+    pattern: 'buy cheap',
+    pattern_kind: 'keyword',
+    scope: 'inbound',
+    action: 'flag',
+    enabled: true,
+    hits: 4,
+    created_by: ACCOUNT_ID,
+    created_at: '2026-11-01T09:00:00.000Z',
+    updated_at: '2026-11-01T09:00:00.000Z',
+    ...overrides,
+  }
 }
 
 /** An empty recommendation feed, in the envelope the discovery API uses. */
@@ -455,6 +479,7 @@ export async function adminApi(
     appeals = [appeal()],
     appealRefusals = {},
     quarantined = [quarantinedMedia()],
+    rules = [moderationRule()],
   } = {},
 ) {
   const calls = []
@@ -709,6 +734,93 @@ export async function adminApi(
       status_id: row.status_id,
       reports_resolved: 1,
     })
+  })
+  // The rules engine. The patterns are matched for real — a keyword is a case-insensitive
+  // substring and a regex is compiled by the browser — so a dry run in a test answers the
+  // way the instance would, including the bytes and the text of the match.
+  const ruleRefusal = (body) => {
+    const kind = body.pattern_kind ?? 'keyword'
+    const pattern = body.pattern ?? ''
+    if (!pattern.trim()) return 'a rule needs a pattern'
+    if (!['keyword', 'regex', 'domain'].includes(kind)) {
+      return `pattern_kind must be one of keyword, regex, domain, not ${kind}`
+    }
+    if (kind === 'regex') {
+      try {
+        new RegExp(pattern, 'i')
+      } catch (error) {
+        return `the pattern is not a valid regex: parse error at byte 0: ${error.message}`
+      }
+    }
+    return null
+  }
+  const ruleMatch = (rule, sample) => {
+    if (rule.pattern_kind === 'regex') {
+      let compiled
+      try {
+        compiled = new RegExp(rule.pattern, 'i')
+      } catch (error) {
+        return { refusal: `the pattern is not a valid regex: parse error at byte 0: ${error.message}` }
+      }
+      const found = compiled.exec(sample)
+      if (!found) return { span: null }
+      return { span: { start: found.index, end: found.index + found[0].length, text: found[0] } }
+    }
+    const at = sample.toLowerCase().indexOf(rule.pattern.toLowerCase())
+    if (at < 0) return { span: null }
+    return { span: { start: at, end: at + rule.pattern.length, text: sample.slice(at, at + rule.pattern.length) } }
+  }
+  await page.route(/\/api\/v1\/admin\/moderation-rules$/, (route) => {
+    const method = route.request().method()
+    if (method === 'GET') return json(route, rules)
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    const refusal = ruleRefusal(body)
+    if (refusal) return json(route, { error: refusal }, 422)
+    const created = moderationRule({ id: `71${rules.length}0`, hits: 0, ...body })
+    rules.push(created)
+    return json(route, created, 201)
+  })
+  await page.route(/\/api\/v1\/admin\/moderation-rules\/[^/]+\/dry-run$/, (route) => {
+    const id = decodeURIComponent(route.request().url().split('/').at(-2))
+    const rule = rules.find((item) => item.id === id)
+    const sample = JSON.parse(route.request().postData() ?? '{}').sample ?? ''
+    const tested = ruleMatch(rule, sample)
+    if (tested.refusal) return json(route, { error: tested.refusal }, 422)
+    const span = tested.span
+    const reason = span
+      ? `rule "${rule.name}" (${rule.pattern_kind}) matched bytes ${span.start}..${span.end}: "${span.text}"`
+      : `rule "${rule.name}" (${rule.pattern_kind}) did not match the sample`
+    return json(route, {
+      rule: {
+        id: rule.id,
+        name: rule.name,
+        pattern: rule.pattern,
+        pattern_kind: rule.pattern_kind,
+        scope: rule.scope,
+        action: rule.action,
+        enabled: rule.enabled,
+      },
+      matched: Boolean(span),
+      span,
+      reason,
+      scanned_bytes: new TextEncoder().encode(sample).length,
+      truncated: false,
+    })
+  })
+  await page.route(/\/api\/v1\/admin\/moderation-rules\/[^/]+$/, (route) => {
+    const request = route.request()
+    const id = decodeURIComponent(request.url().split('/').at(-1))
+    const held = rules.find((item) => item.id === id)
+    if (request.method() === 'DELETE') {
+      if (held) rules.splice(rules.indexOf(held), 1)
+      record(route)
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    const body = JSON.parse(request.postData() ?? '{}')
+    const refusal = ruleRefusal(body)
+    if (refusal) return json(route, { error: refusal }, 422)
+    if (held) Object.assign(held, body, { id })
+    return json(route, held ?? moderationRule({ id, ...body }))
   })
   await page.route(/\/api\/v1\/admin\/media\/quarantined$/, (route) => json(route, quarantined))
   await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))

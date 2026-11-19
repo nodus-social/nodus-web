@@ -15,6 +15,7 @@ import {
   chartSpecs,
   granted,
   hydrated,
+  moderationRule,
   performanceStats,
   remoteBlock,
   report,
@@ -717,4 +718,146 @@ test('a grant without admin:write is shown no bulk bar and no ticks', async ({ p
   await expect(page.getByText(/does not include admin:write/)).toBeVisible()
   await expect(page.getByRole('group', { name: 'Bulk account action' })).toHaveCount(0)
   await expect(page.getByRole('checkbox', { name: /^Select / })).toHaveCount(0)
+})
+
+test('the rules screen lists a pattern with its scope, action and hit count', async ({ page }) => {
+  await consoleAs(page, { rules: [moderationRule()] })
+  await open(page, '/moderation/rules')
+
+  await expect(page.getByRole('heading', { name: 'Moderation rules' })).toBeVisible()
+  await expect(page.getByTestId('rule-row')).toHaveCount(1)
+  await expect(page.getByTestId('rule-pattern')).toHaveText('buy cheap')
+  const summary = page.getByTestId('rule-summary')
+  await expect(summary).toContainText('keyword')
+  await expect(summary).toContainText('inbound')
+  await expect(summary).toContainText('flag')
+  await expect(summary).toContainText('4 hits')
+})
+
+test('an instance with no rules says so instead of showing an empty list', async ({ page }) => {
+  await consoleAs(page, { rules: [] })
+  await open(page, '/moderation/rules')
+
+  await expect(page.getByTestId('rules-empty')).toHaveText('No rule is active.')
+  await expect(page.getByTestId('rule-row')).toHaveCount(0)
+})
+
+test('a rule is created with the pattern, kind, scope and action the administrator chose', async ({
+  page,
+}) => {
+  const calls = await consoleAs(page, { rules: [] })
+  await open(page, '/moderation/rules')
+  await expect(page.getByTestId('rules-empty')).toBeVisible()
+
+  await page.getByLabel('Rule name').fill('Crypto pitches')
+  await page.getByLabel('Rule pattern').fill('(?:free|cheap) crypto')
+  await page.getByLabel('Pattern kind').selectOption('regex')
+  await page.getByLabel('Scope').selectOption('both')
+  await page.getByLabel('Action').selectOption('silence')
+  await page.getByRole('button', { name: 'Create rule' }).click()
+
+  const create = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/moderation-rules'),
+  )
+  expect(JSON.parse(create.body)).toEqual({
+    name: 'Crypto pitches',
+    pattern: '(?:free|cheap) crypto',
+    pattern_kind: 'regex',
+    scope: 'both',
+    action: 'silence',
+    enabled: true,
+  })
+  // The list is read again after a write: the hit count and the id are the instance's.
+  await expect.poll(() => calls.filter((call) => call.method === 'GET').length).toBeGreaterThan(1)
+  await expect(page.getByTestId('rule-row')).toHaveCount(1)
+})
+
+test('a rule is edited in place and deleted only after the confirmation', async ({ page }) => {
+  const calls = await consoleAs(page, { rules: [moderationRule()] })
+  await open(page, '/moderation/rules')
+
+  const row = page.getByTestId('rule-row')
+  await row.getByRole('button', { name: 'Edit' }).click()
+  await expect(row.getByLabel('Rule pattern')).toHaveValue('buy cheap')
+  await row.getByLabel('Rule pattern').fill('buy\\s+cheap')
+  await row.getByLabel('Pattern kind').selectOption('regex')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  const update = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/moderation-rules/7001'),
+  )
+  expect(JSON.parse(update.body)).toMatchObject({
+    pattern: 'buy\\s+cheap',
+    pattern_kind: 'regex',
+  })
+
+  await page.getByRole('button', { name: 'Delete' }).click()
+  await expect(page.getByTestId('delete-confirm')).toBeVisible()
+  // Merely opening the confirmation must not delete anything.
+  expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(0)
+  await page.getByRole('button', { name: 'Yes, delete' }).click()
+
+  const removed = await sent(
+    calls,
+    (call) => call.method === 'DELETE' && call.url.endsWith('/api/v1/admin/moderation-rules/7001'),
+  )
+  expect(removed.body).toBeNull()
+  await expect(page.getByTestId('rules-empty')).toBeVisible()
+})
+
+test('a dry run says what matched, and where, and says plainly when nothing did', async ({
+  page,
+}) => {
+  const calls = await consoleAs(page, { rules: [moderationRule()] })
+  await open(page, '/moderation/rules')
+
+  await page.getByRole('button', { name: 'Test' }).click()
+  const sample = page.getByLabel('Sample body')
+  await sample.fill('they said buy cheap followers here')
+  await page.getByRole('button', { name: 'Dry run' }).click()
+
+  const answer = page.getByTestId('dry-run-answer')
+  await expect(answer).toBeVisible()
+  await expect(page.getByTestId('dry-run-verdict')).toHaveText('Matched')
+  // The instance's own sentence names the rule, the kind and the bytes; the screen repeats
+  // it rather than paraphrasing what the pattern did.
+  await expect(answer).toContainText('rule "Spam words" (keyword) matched bytes 10..19')
+  await expect(answer).toContainText('bytes 10..19: buy cheap')
+  await expect(answer).toContainText('Scanned 34 bytes.')
+
+  // A regex that matches nothing must read as a miss, with the reason, not as silence.
+  const row = page.getByTestId('rule-row')
+  await row.getByRole('button', { name: 'Edit' }).click()
+  await row.getByLabel('Pattern kind').selectOption('regex')
+  await row.getByLabel('Rule pattern').fill('\\bdeadbeef\\b')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByText('Rule saved.')).toBeVisible()
+
+  // The dry-run panel stayed open across the save, so the sample is simply replaced.
+  await expect(sample).toBeVisible()
+  await sample.fill('nothing here matches that')
+  await page.getByRole('button', { name: 'Dry run' }).click()
+  await expect(page.getByTestId('dry-run-verdict')).toHaveText('No match')
+  await expect(answer).toContainText('did not match the sample')
+
+  const tried = calls.filter((call) => call.url.endsWith('/dry-run'))
+  expect(tried).toHaveLength(2)
+  expect(JSON.parse(tried.at(-1).body)).toEqual({ sample: 'nothing here matches that' })
+})
+
+test('a pattern that cannot compile is refused with the instance message', async ({ page }) => {
+  await consoleAs(page, { rules: [] })
+  await open(page, '/moderation/rules')
+
+  await page.getByLabel('Rule name').fill('Broken')
+  await page.getByLabel('Rule pattern').fill('(unclosed')
+  await page.getByLabel('Pattern kind').selectOption('regex')
+  await page.getByRole('button', { name: 'Create rule' }).click()
+
+  const alert = page.getByRole('alert')
+  await expect(alert).toBeVisible()
+  await expect(alert).toContainText('the pattern is not a valid regex')
+  await expect(page.getByTestId('rules-empty')).toBeVisible()
 })

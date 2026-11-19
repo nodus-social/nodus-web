@@ -387,6 +387,10 @@ pub fn RulesPage(
                                                     if let Some(on_update) = on_update {
                                                         on_update.run(RuleEdit { id: id.clone(), draft });
                                                     }
+                                                    // Close the form: a refusal arrives on the
+                                                    // panel above, and keeping a saved rule
+                                                    // open would look like it was not saved.
+                                                    set_editing.set(None);
                                                 })
                                             }
                                             on_cancel=Callback::new(move |_| set_editing.set(None))
