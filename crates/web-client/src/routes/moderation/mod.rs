@@ -21,12 +21,14 @@ use crate::state::alive::Alive;
 use crate::state::bridge::{admin, feature};
 
 use self::accounts::AccountList;
+use self::appeals::Appeals;
 use self::federation::Federation;
 use self::flags::Scans;
 use self::registrations::Registrations;
 use self::reports::ReportQueue;
 
 mod accounts;
+mod appeals;
 mod federation;
 mod flags;
 mod registrations;
@@ -131,6 +133,7 @@ pub fn Moderation(section: String) -> impl IntoView {
         >
             {move || match section.get_value() {
                 Section::Reports => view! { <ReportQueue/> }.into_any(),
+                Section::Appeals => view! { <Appeals/> }.into_any(),
                 Section::Scans if !scanners.get() => view! {
                     <Note class="text-sm opacity-70">
                         "This instance does not serve the scans panel: its /api/v1/meta answer does not name scanners among its features."

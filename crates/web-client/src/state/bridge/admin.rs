@@ -1983,3 +1983,104 @@ pub async fn bulk_reports(
     )
     .await
 }
+
+/// One appeal in the moderator's queue, as `GET /api/v1/admin/appeals` answers it.
+///
+/// The row names the restriction the appeal was written against and, separately, the one in
+/// force now: an accepted appeal lifts it, and a moderator re-reading a closed row should be
+/// able to see both without guessing which is which.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct AdminAppeal {
+    pub id: String,
+    /// The account that appealed.
+    #[serde(default)]
+    pub account_id: String,
+    /// `@user`, or `@user@host` for a remote account.
+    pub handle: String,
+    /// The restriction in force *now*; `None` once the decision accepted the appeal.
+    #[serde(default)]
+    pub restriction: Option<String>,
+    /// The restriction the appeal was written against: `suspend`, `silence` or `reject`.
+    #[serde(default)]
+    pub action: String,
+    /// Why the person wrote, in their own words.
+    #[serde(default)]
+    pub reason: String,
+    /// `pending`, `accepted` or `rejected`.
+    #[serde(default)]
+    pub status: String,
+    /// The note that came with the decision; the person was sent it.
+    #[serde(default)]
+    pub decision_note: Option<String>,
+    /// The account that decided it.
+    #[serde(default)]
+    pub decided_by: Option<String>,
+    /// When it was opened.
+    #[serde(default)]
+    pub created_at: String,
+    /// Whole seconds it has waited.
+    #[serde(default)]
+    pub age_seconds: i64,
+    /// When it was decided, absent while it is still waiting.
+    #[serde(default)]
+    pub decided_at: Option<String>,
+}
+
+/// One page of appeals, newest first, narrowed to `status`.
+///
+/// `status` is one of `pending`, `accepted`, `rejected` or `all`; the instance answers 422 to
+/// anything else, which is why the screen picks from the same four words.
+pub async fn appeals(status: &str, offset: u32) -> Result<Vec<AdminAppeal>, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let mut url = transport
+        .url("/api/v1/admin/appeals")
+        .map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("status", status)
+        .append_pair("limit", &PAGE.to_string())
+        .append_pair("offset", &offset.to_string());
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// What a decision attempt did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decided {
+    /// The appeal was open, and this answer just closed it.
+    Row(AdminAppeal),
+    /// Somebody got there first. A `409` is not a failed request — it says the queue the
+    /// moderator was reading is stale, and the screen's job is to say who decided it
+    /// rather than to print the refusal.
+    AlreadyDecided,
+}
+
+/// Decides one pending appeal; `accept` lifts the restriction it names.
+///
+/// The note is optional, and trimming it here rather than sending `"   "` keeps the
+/// instance's own "empty means none" rule the only one in play.
+pub async fn decide_appeal(id: &str, accept: bool, note: &str) -> Result<Decided, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "appeals", id, "decide"])
+        .map_err(|error| error.to_string())?;
+    let note = note.trim();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "accept": accept,
+        "note": (!note.is_empty()).then_some(note),
+    }))
+    .map_err(|error| error.to_string())?;
+    match transport
+        .fetch::<AdminAppeal>(transport.post_body(url, "application/json", body))
+        .await
+    {
+        Ok(row) => Ok(Decided::Row(row)),
+        Err(nodus_client_core::Error::Status { status: 409, .. }) => Ok(Decided::AlreadyDecided),
+        Err(error) => Err(error.to_string()),
+    }
+}

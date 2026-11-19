@@ -352,6 +352,25 @@ export function blockSubscription(overrides = {}) {
   }
 }
 
+/** One appeal against a decision about the appealing account, as the queue carries it. */
+export function appeal(overrides = {}) {
+  return {
+    id: '3101',
+    account_id: ACCOUNT_ID,
+    handle: 'ada',
+    restriction: null,
+    action: 'suspend',
+    reason: 'I was quoting the post, not selling anything.',
+    status: 'pending',
+    decision_note: null,
+    decided_by: null,
+    created_at: '2026-11-18T09:00:00.000Z',
+    age_seconds: 7_200,
+    decided_at: null,
+    ...overrides,
+  }
+}
+
 /** The performance document for one window, with every counter the screen shows. */
 export function performanceStats(overrides = {}) {
   return {
@@ -410,6 +429,8 @@ export async function adminApi(
     blockSubscriptions = [],
     blockSync = { status: 'ok', parsed: 3, new: 2, updated: 1, unchanged: 0, invalid: 0 },
     stats = performanceStats(),
+    appeals = [appeal()],
+    appealRefusals = {},
   } = {},
 ) {
   const calls = []
@@ -595,6 +616,41 @@ export async function adminApi(
   })
   // The window is answered from the fixture rather than echoed back: the console must read
   // the numbers it was sent, not the ones it asked for.
+  // The appeal queue. The list is filtered by the status the console asked for, and a
+  // decision rewrites the row in the fixture, so the redraw reads what the instance would
+  // have stored. `appealRefusals` lets a test say another moderator got there first: the
+  // row is decided behind this moderator's back and the answer is the instance's 409.
+  const decideAppeal = (row, accept, note, who) => ({
+    ...row,
+    status: accept ? 'accepted' : 'rejected',
+    decision_note: note || null,
+    decided_by: who,
+    decided_at: '2026-11-19T12:00:00.000Z',
+    restriction: accept ? null : row.restriction,
+  })
+  await page.route(/\/api\/v1\/admin\/appeals\/[^/]+\/decide$/, (route) => {
+    const id = decodeURIComponent(route.request().url().split('/').at(-2))
+    const row = appeals.find((item) => item.id === id)
+    if (!row) return json(route, { error: 'that appeal does not exist' }, 404)
+    if (appealRefusals[id]) {
+      Object.assign(row, decideAppeal(row, true, 'Handled from the other tab.', 'bob'))
+      return json(route, { error: 'this appeal has already been decided' }, 409)
+    }
+    if (row.status !== 'pending') {
+      return json(route, { error: 'this appeal has already been decided' }, 409)
+    }
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    Object.assign(row, decideAppeal(row, body.accept === true, body.note ?? '', 'ada'))
+    return json(route, { ...row })
+  })
+  await page.route(/\/api\/v1\/admin\/appeals(\?|$)/, (route) => {
+    const query = new URL(route.request().url()).searchParams
+    const status = query.get('status') ?? ''
+    const held = status && status !== 'all' ? appeals.filter((row) => row.status === status) : appeals
+    const offset = Number(query.get('offset') ?? 0)
+    const limit = Number(query.get('limit') ?? held.length)
+    return json(route, held.slice(offset, offset + limit))
+  })
   await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))
   await page.route(/\/api\/v1\/admin\/overview$/, (route) =>
     json(route, {

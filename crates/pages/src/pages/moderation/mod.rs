@@ -15,6 +15,7 @@ use crate::icons::Icon;
 use crate::{PageHeader, Screen};
 
 pub mod accounts;
+pub mod appeals;
 pub mod federation;
 pub mod flags;
 pub mod registrations;
@@ -31,6 +32,8 @@ pub mod people;
 pub enum Section {
     /// The report queue.
     Reports,
+    /// People who disagreed with a decision about their own account.
+    Appeals,
     /// Content the scanners flagged.
     Scans,
     /// Account standing.
@@ -43,8 +46,9 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Reports,
+        Self::Appeals,
         Self::Scans,
         Self::Accounts,
         Self::Registrations,
@@ -56,6 +60,7 @@ impl Section {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Reports => "reports",
+            Self::Appeals => "appeals",
             Self::Scans => "scans",
             Self::Accounts => "accounts",
             Self::Registrations => "registrations",
@@ -77,6 +82,7 @@ impl Section {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Reports => "Reports",
+            Self::Appeals => "Appeals",
             Self::Scans => "Scans",
             Self::Accounts => "Accounts",
             Self::Registrations => "Registrations",
@@ -89,6 +95,7 @@ impl Section {
     pub const fn hint(self) -> &'static str {
         match self {
             Self::Reports => "Posts someone reported, and what was decided",
+            Self::Appeals => "People who disagreed with a decision about their account",
             Self::Scans => "What the scanners found, and what a person decided",
             Self::Accounts => "Look an account up, and act on it",
             Self::Registrations => "Who is waiting, and how somebody may join",
@@ -101,6 +108,7 @@ impl Section {
     pub const fn icon(self) -> Icon {
         match self {
             Self::Reports => Icon::Alert,
+            Self::Appeals => Icon::Mail,
             Self::Scans => Icon::Image,
             Self::Accounts => Icon::Users,
             Self::Registrations => Icon::Check,
