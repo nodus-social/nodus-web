@@ -31,19 +31,26 @@ pub fn StatusBody(shown: ReadSignal<Status>, set_shown: WriteSignal<Status>) -> 
     // to the shared body as its starting state.
     let revealed = sensitive::reveals_automatically();
     // Voting is a Nodus capability: an instance whose `/api/v1/meta` features do not name
-    // `polls` shows the bars and the counts and no press.
+    // `polls` shows the bars and the counts and no press. An author is not offered a vote
+    // on their own poll either: the instance would count it, but asking your own question
+    // and answering it is not a tally, it is a monologue.
     let polls = feature("polls");
+    let viewer = actions::viewer_id();
 
     view! {
         // The body reads the whole status, so an answered verb — which replaces the card's
         // copy — repaints the counts behind the veil and the poll's tally.
-        {move || view! {
-            <SharedBody
-                status=shown.get()
-                on_open_media=on_open
-                on_vote=polls.get().then_some(on_vote)
-                revealed_init=revealed
-            />
+        {move || {
+            let status = shown.get();
+            let own = viewer.as_deref() == Some(status.account.id.as_str());
+            view! {
+                <SharedBody
+                    status=status
+                    on_open_media=on_open
+                    on_vote=(polls.get() && !own).then_some(on_vote)
+                    revealed_init=revealed
+                />
+            }
         }}
         // The poll's own error state covers an empty pick; a refused vote arrives from the
         // transport, which the shared crate cannot reach, so it is drawn here.

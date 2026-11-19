@@ -76,6 +76,7 @@ pub fn ComposerPreview(#[prop(into)] active: Signal<String>) -> impl IntoView {
                 scheduling=Signal::derive(|| false)
                 when=Signal::derive(String::new)
                 limit=500
+                poll_ready=Signal::derive(|| false)
                 schedule_open=Signal::derive(|| false)
                 on_visibility=noop_visibility
                 on_add_media=noop

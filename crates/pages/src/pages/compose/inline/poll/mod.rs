@@ -6,13 +6,41 @@
 
 use leptos::prelude::*;
 
+/// The most choices a poll may carry; the server refuses a fifth.
+pub const MAX_OPTIONS: usize = 4;
+/// The fewest choices a poll may carry; the server refuses a one-answer poll.
+pub const MIN_OPTIONS: usize = 2;
+/// The longest choice the server stores, in characters.
+pub const MAX_OPTION_CHARS: usize = 50;
+/// A day, the answer most polls mean when the writer does not choose.
+pub const DEFAULT_DURATION: u32 = 86_400;
+
 /// How long a poll may stay open, in seconds, with the label the select shows.
-pub const DURATIONS: [(u32, &str); 4] = [
+///
+/// Every entry sits inside the server's window — five minutes to seven days — because a
+/// picker that offers a duration the submit will refuse is not a picker.
+pub const DURATIONS: [(u32, &str); 7] = [
+    (300, "5 minutes"),
+    (1_800, "30 minutes"),
+    (3_600, "1 hour"),
+    (21_600, "6 hours"),
     (86_400, "1 day"),
-    (3 * 86_400, "3 days"),
-    (7 * 86_400, "1 week"),
-    (30 * 86_400, "30 days"),
+    (259_200, "3 days"),
+    (604_800, "1 week"),
 ];
+
+/// Whether these choices are a poll the server would accept.
+///
+/// Two to four non-empty choices, each at most fifty characters: the same rule the
+/// instance applies in `validated_poll`, so the composer can refuse before the request.
+#[must_use]
+pub fn ready(options: &[String]) -> bool {
+    (MIN_OPTIONS..=MAX_OPTIONS).contains(&options.len())
+        && options.iter().all(|option| {
+            let option = option.trim();
+            !option.is_empty() && option.chars().count() <= MAX_OPTION_CHARS
+        })
+}
 
 /// The poll controls, shown only while the poll is part of the post.
 #[component]
@@ -46,7 +74,25 @@ pub fn PollEditor(
                     </button>
                 </div>
 
+                <p class="text-xs opacity-60">
+                    "Two to four choices, 50 characters each."
+                </p>
                 <Options options=options/>
+                <Show when=move || {
+                    MIN_OPTIONS
+                        > options
+                            .get()
+                            .iter()
+                            .filter(|option| !option.trim().is_empty())
+                            .count()
+                }>
+                    <span class="text-warning text-xs">
+                        "A poll needs at least two filled choices."
+                    </span>
+                </Show>
+                <Show when=move || MAX_OPTIONS == options.get().len()>
+                    <span class="text-xs opacity-60">"A poll holds at most four choices."</span>
+                </Show>
                 <PollSettings
                     options=options
                     expires_in=expires_in
@@ -73,30 +119,56 @@ fn Options(options: RwSignal<Vec<String>>) -> impl IntoView {
 
     view! {
         <For each=move || indices.get() key=|index| *index let:index>
-            <div class="flex items-center gap-1">
-                <input
-                    class="input input-bordered input-sm w-full"
-                    id=move || format!("poll-option-{index}")
-                    placeholder=move || format!("Option {}", index + 1)
-                    aria-label=move || format!("Poll option {}", index + 1)
-                    prop:value=move || options.get().get(index).cloned().unwrap_or_default()
-                    on:input=move |event| update(index, event_target_value(&event))
-                />
-                <button
-                    type="button"
-                    class="btn btn-ghost btn-xs"
-                    title="Remove this option"
-                    disabled=move || options.get().len() <= 2
-                    on:click=move |_| {
-                        options.update(|list| {
-                            if list.len() > 2 {
-                                list.remove(index);
+            <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-1">
+                    <input
+                        class="input input-bordered input-sm w-full"
+                        id=move || format!("poll-option-{index}")
+                        placeholder=move || format!("Option {}", index + 1)
+                        aria-label=move || format!("Poll option {}", index + 1)
+                        prop:value=move || options.get().get(index).cloned().unwrap_or_default()
+                        on:input=move |event| update(index, event_target_value(&event))
+                    />
+                    <button
+                        type="button"
+                        class="btn btn-ghost btn-xs"
+                        title=move || {
+                            if MIN_OPTIONS == options.get().len() {
+                                "A poll needs at least two choices"
+                            } else {
+                                "Remove this choice"
                             }
-                        });
-                    }
-                >
-                    "×"
-                </button>
+                        }
+                        disabled=move || MIN_OPTIONS == options.get().len()
+                        on:click=move |_| {
+                            options.update(|list| {
+                                if list.len() > MIN_OPTIONS {
+                                    list.remove(index);
+                                }
+                            });
+                        }
+                    >
+                        "×"
+                    </button>
+                </div>
+                <Show when=move || {
+                    options
+                        .get()
+                        .get(index)
+                        .is_some_and(|option| option.trim().is_empty())
+                }>
+                    <span class="text-warning text-xs">"A choice cannot be empty."</span>
+                </Show>
+                <Show when=move || {
+                    options
+                        .get()
+                        .get(index)
+                        .is_some_and(|option| option.chars().count() > MAX_OPTION_CHARS)
+                }>
+                    <span class="text-error text-xs">
+                        {format!("At most {MAX_OPTION_CHARS} characters per choice.")}
+                    </span>
+                </Show>
             </div>
         </For>
     }
@@ -117,13 +189,13 @@ fn PollSettings(
                 type="button"
                 class="btn btn-outline btn-xs gap-1 border-dashed"
                 title=move || {
-                    if options.get().len() >= 4 {
-                        "A poll holds at most four options"
+                    if MAX_OPTIONS == options.get().len() {
+                        "A poll holds at most four choices"
                     } else {
-                        "Add another option"
+                        "Add another choice"
                     }
                 }
-                disabled=move || options.get().len() >= 4
+                disabled=move || MAX_OPTIONS == options.get().len()
                 on:click=move |_| {
                     let added = options.with_untracked(Vec::len);
                     options.update(|list| list.push(String::new()));

@@ -41,6 +41,12 @@ pub fn ComposerBar(
     /// Opens the media picker.
     #[prop(optional)]
     on_add_media: Option<Callback<()>>,
+    /// Whether the poll the composer is editing is one the server would accept.
+    ///
+    /// A poll is content: a post may carry only a poll, so the send button has to know
+    /// that an empty box is not an empty post.
+    #[prop(into)]
+    poll_ready: Signal<bool>,
     /// Turns the post into a poll.
     #[prop(optional)]
     on_add_poll: Option<Callback<()>>,
@@ -67,8 +73,12 @@ pub fn ComposerBar(
     let over = move || count() > limit.get();
     // "Grey like send": a post button that cannot post must look like a button that
     // cannot post, not like a primary action waiting to be pressed.
-    let postable =
-        move || !busy.get() && !text.get().trim().is_empty() && on_submit.is_some() && !over();
+    let postable = move || {
+        !busy.get()
+            && (!text.get().trim().is_empty() || poll_ready.get())
+            && on_submit.is_some()
+            && !over()
+    };
     let describe_when = move |value: &str| {
         if value.trim().is_empty() {
             "now".to_owned()
@@ -100,8 +110,8 @@ pub fn ComposerBar(
             <button
                 type="button"
                 class="btn btn-outline btn-sm gap-1 border-dashed max-sm:btn-square"
-                title="Ask a question instead"
-                aria-label="Ask a question instead"
+                title="Add a poll"
+                aria-label="Add a poll"
                 disabled=move || busy.get() || on_add_poll.is_none()
                 on:click=move |_| {
                     if let Some(on_add_poll) = on_add_poll {

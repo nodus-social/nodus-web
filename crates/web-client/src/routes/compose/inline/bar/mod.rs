@@ -50,6 +50,8 @@ pub(super) fn ComposerBar(
     /// Toggles the emoji picker. It hangs off the emoticon button in the right-hand group,
     /// because it belongs to the body rather than to the "make this a poll/media" row.
     set_emoji_open: WriteSignal<bool>,
+    /// Whether the poll being edited would pass the instance's checks.
+    poll_ready: Signal<bool>,
     /// Turns the post into a poll.
     on_add_poll: Callback<()>,
     /// The chosen language, empty for the instance's guess.
@@ -90,6 +92,7 @@ pub(super) fn ComposerBar(
             set_visibility.set(chosen)
         })),
         on_add_media: Some(on_add_media),
+        poll_ready,
         on_add_poll: Some(on_add_poll),
         on_toggle_schedule: Some(Callback::new(move |()| {
             open.update(|shown| *shown = !*shown)

@@ -25,14 +25,15 @@ pub(super) fn as_draft(
     if !open {
         return None;
     }
+    // A blank choice is not dropped: the server refuses the whole poll when any option is
+    // empty, and quietly sending one fewer answer would change the question.
+    if !nodus_pages::pages::compose::inline::poll::ready(options) {
+        return None;
+    }
     let filled: Vec<String> = options
         .iter()
         .map(|option| option.trim().to_owned())
-        .filter(|option| !option.is_empty())
         .collect();
-    if filled.len() < 2 {
-        return None;
-    }
     Some(
         PollDraft::new(filled, expires_in)
             .multiple(multiple)
@@ -40,7 +41,7 @@ pub(super) fn as_draft(
     )
 }
 
-pub(super) use nodus_pages::pages::compose::inline::poll::PollEditor;
+pub(super) use nodus_pages::pages::compose::inline::poll::{PollEditor, ready};
 
 /// Puts the caret in the option that was just added.
 ///

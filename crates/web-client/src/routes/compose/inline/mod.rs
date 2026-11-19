@@ -189,6 +189,9 @@ pub fn InlineComposer(
                 // editor is open, which is what made it read as broken.
                 emoji_open=picking
                 set_emoji_open=set_picking
+                poll_ready=Signal::derive(move || {
+                    draft.poll_open.get() && poll::ready(&draft.options.get())
+                })
                 on_add_poll=Callback::new(move |()| {
                     draft
                         .poll_open
@@ -413,7 +416,7 @@ impl Draft {
             // A poll is optional and off by default: most posts are not questions.
             poll_open: RwSignal::new(false),
             options: RwSignal::new(vec![String::new(), String::new()]),
-            expires_in: RwSignal::new(nodus_pages::pages::compose::inline::poll::DURATIONS[0].0),
+            expires_in: RwSignal::new(nodus_pages::pages::compose::inline::poll::DEFAULT_DURATION),
             multiple: RwSignal::new(false),
             hide_totals: RwSignal::new(false),
             language: RwSignal::new(String::new()),
@@ -486,7 +489,22 @@ impl Signals {
             return;
         }
         let body = self.text.get_untracked();
-        if body.trim().is_empty() {
+        // The poll, when one is open, is part of whether this is a post at all: the
+        // instance accepts a status whose text is empty as long as it carries a poll.
+        let poll = poll::as_draft(
+            self.poll_open.get_untracked(),
+            &self.options.get_untracked(),
+            self.expires_in.get_untracked(),
+            self.multiple.get_untracked(),
+            self.hide_totals.get_untracked(),
+        );
+        if self.poll_open.get_untracked() && poll.is_none() {
+            self.error.set(Some(
+                "The poll needs two to four filled choices, each at most 50 characters.".to_owned(),
+            ));
+            return;
+        }
+        if body.trim().is_empty() && poll.is_none() {
             return;
         }
         if body.chars().count() > self.limit.get_untracked() {
@@ -504,13 +522,7 @@ impl Signals {
             .iter()
             .map(|item| item.id.clone())
             .collect();
-        status.poll = poll::as_draft(
-            self.poll_open.get_untracked(),
-            &self.options.get_untracked(),
-            self.expires_in.get_untracked(),
-            self.multiple.get_untracked(),
-            self.hide_totals.get_untracked(),
-        );
+        status.poll = poll;
         status.language = {
             let held = self.language.get_untracked();
             // Empty means the picker is on "instance default", which is the absence of the
