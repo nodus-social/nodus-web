@@ -1,7 +1,13 @@
 //! Moderation calls, and the one question that decides whether to show them.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use super::{admin_scope, admin_transport, instance_transport};
 use leptos::prelude::{Get, RwSignal, Signal, Update};
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{ReadableStreamDefaultReader, TextDecodeOptions, TextDecoder};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
@@ -983,6 +989,251 @@ pub async fn node_logs(name: &str, min_level: &str, limit: u16) -> Result<Vec<No
         .node_logs(name, min_level, limit)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// How many lines a followed drawer holds before the oldest are dropped.
+pub const HELD_LINES: usize = 500;
+
+/// How long a stream that ended on its own waits before it asks for the tail again.
+const RECONNECT_GAP_MS: u32 = 1_000;
+
+/// One live log tail, and the way to hang up on it.
+///
+/// `fetch` plus a body reader rather than `EventSource`: the endpoint authenticates with a
+/// bearer header, which `EventSource` cannot send, and the drawer needs to hold the read
+/// itself so that closing it releases the instance's stream instead of leaving it open.
+#[derive(Clone)]
+pub struct LogTail {
+    stopped: Rc<Cell<bool>>,
+    reader: Rc<RefCell<Option<ReadableStreamDefaultReader>>>,
+}
+
+/// How one connection to the log stream ended.
+enum TailEnd {
+    /// The drawer was closed or moved on: nothing left to read.
+    Stopped,
+    /// The instance closed the stream on its own; asking again is the caller's call.
+    Closed,
+}
+
+impl LogTail {
+    /// A tail that has not asked for anything yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            stopped: Rc::new(Cell::new(false)),
+            reader: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Hangs up: the reader is cancelled so the pending read wakes at once and the
+    /// instance's own stream is dropped rather than kept by a screen that is gone.
+    pub fn stop(&self) {
+        self.stopped.set(true);
+        if let Some(reader) = self.reader.borrow_mut().take() {
+            let _ = reader.cancel();
+        }
+    }
+
+    /// Reads `name`'s log as it happens, handing every entry to `on_line`.
+    ///
+    /// Returns when [`LogTail::stop`] is called, or with the instance's refusal when the
+    /// stream cannot be held — the caller falls back to reading the drawer on a timer.
+    /// A stream the instance ends by itself is not a refusal: a node restarting closes it,
+    /// so it is opened again after [`RECONNECT_GAP_MS`].
+    pub async fn follow<F>(&self, name: &str, min_level: &str, limit: u16, mut on_line: F) -> Result<(), String>
+    where
+        F: FnMut(NodeLog),
+    {
+        loop {
+            if self.stopped.get() {
+                return Ok(());
+            }
+            match self.once(name, min_level, limit, &mut on_line).await? {
+                TailEnd::Stopped => return Ok(()),
+                TailEnd::Closed => {
+                    gloo_timers::future::TimeoutFuture::new(RECONNECT_GAP_MS).await;
+                }
+            }
+        }
+    }
+
+    /// One connection: opens the stream and reads it until it ends.
+    async fn once<F>(
+        &self,
+        name: &str,
+        min_level: &str,
+        limit: u16,
+        on_line: &mut F,
+    ) -> Result<TailEnd, String>
+    where
+        F: FnMut(NodeLog),
+    {
+        let transport = admin_transport()
+            .or_else(instance_transport)
+            .ok_or_else(|| "Not signed in.".to_owned())?;
+        // The same path shape the console's other calls take: the name is one segment, so
+        // `url_segments` encodes it and the query carries the filter.
+        let mut url = transport
+            .url_segments(&["api", "v1", "admin", "topology", name, "logs", "stream"])
+            .map_err(|error| error.to_string())?;
+        url.set_query(Some(&format!("min_level={min_level}&limit={limit}")));
+
+        let window = web_sys::window().ok_or_else(|| "This browser has no window.".to_owned())?;
+        let init = web_sys::RequestInit::new();
+        init.set_method("GET");
+        let headers = web_sys::Headers::new().map_err(browser_error)?;
+        // The token travels in a header, which is why this is not an `EventSource`.
+        let token = transport.token().expose();
+        if !token.is_empty() {
+            headers
+                .set("Authorization", &format!("Bearer {token}"))
+                .map_err(browser_error)?;
+        }
+        init.set_headers_headers(&headers);
+
+        let request = web_sys::Request::new_with_str_and_init(url.as_str(), &init)
+            .map_err(browser_error)?;
+        let answer = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(browser_error)?;
+        let answer: web_sys::Response = answer
+            .dyn_into()
+            .map_err(|_| "The instance's answer was not a response.".to_owned())?;
+        if !answer.ok() {
+            return Err(format!(
+                "The instance answered {} for the live log.",
+                answer.status()
+            ));
+        }
+        let body = answer
+            .body()
+            .ok_or_else(|| "The live log carried no body.".to_owned())?;
+        let reader: ReadableStreamDefaultReader = body
+            .get_reader()
+            .dyn_into()
+            .map_err(|_| "The answer's body could not be read.".to_owned())?;
+        *self.reader.borrow_mut() = Some(reader);
+
+        let decoder = TextDecoder::new().map_err(browser_error)?;
+        let options = TextDecodeOptions::new();
+        // `stream` keeps a multi-byte character split across two chunks from being cut.
+        options.set_stream(true);
+        let mut buffer = String::new();
+        loop {
+            if self.stopped.get() {
+                return Ok(TailEnd::Stopped);
+            }
+            let Some(reader) = self.reader.borrow().clone() else {
+                return Ok(TailEnd::Stopped);
+            };
+            let chunk = match JsFuture::from(reader.read()).await {
+                Ok(chunk) => chunk,
+                // A cancelled read rejects; that is how `stop` wakes this loop.
+                Err(error) => {
+                    if self.stopped.get() {
+                        return Ok(TailEnd::Stopped);
+                    }
+                    return Err(browser_error(error));
+                }
+            };
+            if read_field(&chunk, "done").and_then(|value| value.as_bool()) == Some(true) {
+                return if self.stopped.get() {
+                    Ok(TailEnd::Stopped)
+                } else {
+                    Ok(TailEnd::Closed)
+                };
+            }
+            let value = read_field(&chunk, "value")
+                .ok_or_else(|| "A chunk of the live log arrived without bytes.".to_owned())?;
+            let bytes = js_sys::Uint8Array::new(&value);
+            buffer.push_str(
+                &decoder
+                    .decode_with_js_u8_array_and_options(&bytes, &options)
+                    .map_err(browser_error)?,
+            );
+            for event in events(&mut buffer) {
+                if event.name == "error" {
+                    return Err(event.data);
+                }
+                let entry: NodeLog = serde_json::from_str(&event.data)
+                    .map_err(|error| format!("A log entry could not be read: {error}"))?;
+                on_line(entry);
+            }
+        }
+    }
+}
+
+impl Default for LogTail {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One server-sent event, as the stream wrote it.
+struct Event {
+    name: String,
+    data: String,
+}
+
+/// Cuts the complete events off the front of `buffer`, leaving a partial one behind.
+fn events(buffer: &mut String) -> Vec<Event> {
+    let mut out = Vec::new();
+    loop {
+        let Some((at, width)) = frame_end(buffer) else {
+            return out;
+        };
+        let frame: String = buffer.drain(..at + width).collect();
+        let mut name = String::from("message");
+        let mut data = String::new();
+        let mut seen = false;
+        for line in frame.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            // `:` lines are the connection's keep-alive comments.
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("event:") {
+                name = rest.trim_start().to_owned();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                if seen {
+                    data.push('\n');
+                }
+                data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+                seen = true;
+            }
+        }
+        if seen || name != "message" {
+            out.push(Event { name, data });
+        }
+    }
+}
+
+/// Where the next event ends in `buffer`, and whether the blank line is one or two bytes.
+fn frame_end(buffer: &str) -> Option<(usize, usize)> {
+    let plain = buffer.find("\n\n").map(|at| (at, 2));
+    let carried = buffer.find("\r\n\r\n").map(|at| (at, 4));
+    match (plain, carried) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (left, right) => left.or(right),
+    }
+}
+
+/// One field of a reader's `{done, value}` chunk.
+fn read_field(chunk: &wasm_bindgen::JsValue, name: &str) -> Option<wasm_bindgen::JsValue> {
+    js_sys::Reflect::get(chunk, &wasm_bindgen::JsValue::from_str(name)).ok()
+}
+
+/// A browser's own words for a refused call.
+fn browser_error(error: wasm_bindgen::JsValue) -> String {
+    error
+        .as_string()
+        .or_else(|| {
+            js_sys::Reflect::get(&error, &wasm_bindgen::JsValue::from_str("message"))
+                .ok()
+                .and_then(|message| message.as_string())
+        })
+        .unwrap_or_else(|| "The browser refused the live log.".to_owned())
 }
 
 /// The registered scanner services, with their rules.

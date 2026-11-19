@@ -345,6 +345,7 @@ export async function adminApi(
     scopes = ['read', 'write', 'follow', 'admin:read', 'admin:write'],
     topology = null,
     logs = [],
+    logStream = null,
     remoteBlocks = [],
     audit = [],
     announcements = [],
@@ -388,6 +389,23 @@ export async function adminApi(
   )
   await page.route(/\/api\/v1\/admin\/reports\/[^/]+$/, (route) => json(route, reports[0] ?? report()))
   await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/logs/, (route) => json(route, logs))
+  // The live tail, as server-sent events. Registered after the plain log route because
+  // Playwright consults handlers newest-first and `/logs` is a prefix of `/logs/stream`.
+  await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/logs\/stream/, (route) => {
+    record(route)
+    if (!logStream) {
+      // A node that offers no live tail: the console must fall back to its timer.
+      return route.fulfill({ status: 404, headers: CORS, json: { error: 'no live log' } })
+    }
+    // One event per line, then a keep-alive comment: the shapes the instance writes.
+    const body =
+      logStream.map((line) => `data: ${JSON.stringify(line)}\n\n`).join('') + ': keep-alive\n\n'
+    return route.fulfill({
+      status: 200,
+      headers: { ...CORS, 'content-type': 'text/event-stream' },
+      body,
+    })
+  })
   await page.route(/\/api\/v1\/admin\/topology\/[^/]+\/trigger$/, (route) =>
     json(route, { accepted: true, detail: 'a pass is queued' }),
   )

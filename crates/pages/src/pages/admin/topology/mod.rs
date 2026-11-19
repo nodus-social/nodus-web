@@ -287,7 +287,7 @@ pub fn TopologyPage(
                             <button
                                 class="btn btn-xs"
                                 class:btn-active=move || live.get()
-                                title="Read the drawer again every couple of seconds while it is open"
+                                title="Read the node's log as it happens while the drawer is open"
                                 on:click=move |_| {
                                     if let Some(follow) = on_follow {
                                         follow.run(!live.get_untracked());

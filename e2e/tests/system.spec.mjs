@@ -77,6 +77,33 @@ test.describe('system health', () => {
     expect(reads()).toBe(settled)
   })
 
+  test('following a log shows the lines that arrive after the first read', async ({ page }) => {
+    const calls = await consoleAs(page, {
+      logs: [
+        { timestamp: '2026-05-01T10:00:01Z', level: 'info', target: 'nodus_server', message: 'started' },
+      ],
+      logStream: [
+        { timestamp: '2026-05-01T10:00:09Z', level: 'info', target: 'nodus_server', message: 'the queue drained' },
+      ],
+    })
+    await open(page, '/admin/system')
+
+    await page.getByRole('button', { name: 'Logs' }).first().click()
+    await expect(page.getByText('started')).toBeVisible()
+    await page.getByRole('button', { name: 'Follow', exact: true }).click()
+
+    // The line the first read cannot have carried: it arrived on the stream.
+    await expect(page.getByText('the queue drained')).toBeVisible()
+    expect(calls.filter((call) => call.url.includes('/logs/stream')).length).toBeGreaterThan(0)
+
+    const drawerReads = () => calls.filter((call) => /\/logs(\?|$)/.test(call.url)).length
+    const reads = drawerReads()
+    await page.waitForTimeout(3_000)
+    // Still there after the old two-second poll would have read again: the stream held it.
+    await expect(page.getByText('the queue drained')).toBeVisible()
+    expect(drawerReads()).toBe(reads)
+  })
+
   test('a worker can be asked to run its pass now', async ({ page }) => {
     const calls = await consoleAs(page, {
       topology: [
