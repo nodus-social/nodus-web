@@ -243,11 +243,11 @@ fn missing(name: &'static str) -> AnyView {
 }
 
 /// The escalation panel, on an instance whose `/api/v1/meta` answer does not name
-/// `moderation` — the feature the ladder hangs on.
+/// `escalation` — the capability the ladder hangs on.
 fn missing_escalation() -> AnyView {
     view! {
         <Note class="text-sm opacity-70">
-            "This instance does not serve the escalation panel: its /api/v1/meta answer does not name `moderation`, which is the capability the policy is written through."
+            "This instance does not serve the escalation panel: its /api/v1/meta answer does not name `escalation`, which is the capability the policy is written through."
         </Note>
     }
     .into_any()

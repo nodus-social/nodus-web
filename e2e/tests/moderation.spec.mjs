@@ -319,7 +319,7 @@ test('an account the instance does not call staff is told who can grant it', asy
   }
 })
 
-test('a moderator is offered Moderation and not the administration door', async ({ page }) => {
+test('a moderator is offered both doors, with the administrator sections gated', async ({ page }) => {
   await stubApi(page, { role: 'moderator' })
   await adminApi(page, { role: 'moderator' })
   await signedIn(page)
@@ -329,19 +329,23 @@ test('a moderator is offered Moderation and not the administration door', async 
 
   if (desktop()) {
     await expect(page.locator('nav a').filter({ hasText: 'Moderation' })).toHaveCount(1)
-    await expect(page.locator('nav a').filter({ hasText: 'Administration' })).toHaveCount(0)
+    await expect(page.locator('nav a').filter({ hasText: 'Administration' })).toHaveCount(1)
   }
 
   await page.goto('/moderation')
   await hydrated(page)
   await expect(page.locator('[role="tablist"] [role="tab"]').first()).toBeVisible()
-  expect(await sections(page)).toEqual(MODERATION)
+  // Scans is administrator-only, so a moderator's strip leaves it out.
+  expect(await sections(page)).toEqual(MODERATION.filter((name) => name !== 'Scans'))
 
-  // The administration screens are the instance's own levers and this account is not an
-  // administrator: the sections are painted with the reason they would be refused.
+  // The administration area opens for staff, and its strip keeps only the sections a
+  // moderator's role can actually read: scanners and mail-domain blocks are dropped.
   await page.goto('/admin/overview')
   await hydrated(page)
-  await expect(page.getByText(/staff\s+role is moderator rather than administrator/)).toBeVisible()
+  await expect(page.locator('[role="tablist"] [role="tab"]').first()).toBeVisible()
+  expect(await sections(page)).toEqual(
+    ADMINISTRATION.filter((name) => name !== 'Scanners' && name !== 'Mail domains'),
+  )
 })
 
 test('an administrator is offered both doors and the whole console', async ({ page }) => {

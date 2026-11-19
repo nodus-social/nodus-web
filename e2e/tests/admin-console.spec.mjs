@@ -945,8 +945,8 @@ test('a refused ladder is shown the instance sentence verbatim, beside the rung 
   await expect(rungs.nth(0).getByTestId('escalation-strikes')).toHaveValue('4')
 })
 
-test('an instance whose features omit moderation serves no escalation panel', async ({ page }) => {
-  const features = FEATURES.filter((name) => name !== 'moderation')
+test('an instance whose features omit escalation serves no escalation panel', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'escalation')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
