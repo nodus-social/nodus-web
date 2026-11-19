@@ -44,6 +44,7 @@ const ADMINISTRATION = [
   'Mail domains',
   'Canned replies',
   'Escalation',
+  'Deliveries',
   'Announcements',
   'Audit log',
   'System',
