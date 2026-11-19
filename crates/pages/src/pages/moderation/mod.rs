@@ -21,6 +21,7 @@ pub mod flags;
 pub mod media;
 pub mod registrations;
 pub mod reports;
+pub mod rules;
 
 /// The people lists (`/accounts/{id}/followers` and the viewer's mutes and blocks) share this
 /// directory with the staff sections they are not part of; the file keeps the path the tree
@@ -45,11 +46,13 @@ pub enum Section {
     Registrations,
     /// Domains this instance refuses.
     Federation,
+    /// Patterns the instance applies without a person.
+    Rules,
 }
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Reports,
         Self::Appeals,
         Self::Scans,
@@ -57,6 +60,7 @@ impl Section {
         Self::Accounts,
         Self::Registrations,
         Self::Federation,
+        Self::Rules,
     ];
 
     /// The last path segment, which is also the strip's key.
@@ -70,6 +74,7 @@ impl Section {
             Self::Accounts => "accounts",
             Self::Registrations => "registrations",
             Self::Federation => "federation",
+            Self::Rules => "rules",
         }
     }
 
@@ -93,6 +98,7 @@ impl Section {
             Self::Accounts => "Accounts",
             Self::Registrations => "Registrations",
             Self::Federation => "Federation",
+            Self::Rules => "Rules",
         }
     }
 
@@ -107,6 +113,7 @@ impl Section {
             Self::Accounts => "Look an account up, and act on it",
             Self::Registrations => "Who is waiting, and how somebody may join",
             Self::Federation => "Domains this instance refuses",
+            Self::Rules => "Patterns the instance applies to posts without a person",
         }
     }
 
@@ -121,6 +128,7 @@ impl Section {
             Self::Accounts => Icon::Users,
             Self::Registrations => Icon::Check,
             Self::Federation => Icon::Shield,
+            Self::Rules => Icon::Shield,
         }
     }
 

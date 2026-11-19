@@ -26,6 +26,7 @@ use self::federation::Federation;
 use self::flags::Scans;
 use self::media::QuarantinedMediaList;
 use self::registrations::Registrations;
+use self::rules::Rules;
 use self::reports::ReportQueue;
 
 mod accounts;
@@ -34,6 +35,7 @@ mod federation;
 mod flags;
 mod media;
 mod registrations;
+mod rules;
 mod reports;
 
 /// The moderation area for one section.
@@ -114,12 +116,16 @@ pub fn Moderation(section: String) -> impl IntoView {
     // Quarantined media is a capability of its own: an instance whose sets never touch an
     // attachment publishes no `media_quarantine`, and there is no queue to open.
     let quarantine = feature("media_quarantine");
+    // The rules engine is its own capability: an instance that does not advertise
+    // `moderation_rules` holds no patterns to show, and the address says why.
+    let rules = feature("moderation_rules");
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
             .filter(|section| match section {
                 Section::Scans => scanners.get(),
                 Section::Media => quarantine.get(),
+                Section::Rules => rules.get(),
                 _ => true,
             })
             .map(|section| section.slug().to_owned())
@@ -157,6 +163,13 @@ pub fn Moderation(section: String) -> impl IntoView {
                 Section::Accounts => view! { <AccountList/> }.into_any(),
                 Section::Registrations => view! { <Registrations/> }.into_any(),
                 Section::Federation => view! { <Federation/> }.into_any(),
+                Section::Rules if !rules.get() => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance does not serve the rules panel: its /api/v1/meta answer does not name moderation_rules among its features."
+                    </Note>
+                }
+                .into_any(),
+                Section::Rules => view! { <Rules/> }.into_any(),
             }}
         </ModerationPage>
     }

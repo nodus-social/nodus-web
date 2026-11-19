@@ -2178,3 +2178,175 @@ pub async fn decide_media(id: &str, release: bool, reason: &str) -> Result<Clear
         Err(error) => Err(error.to_string()),
     }
 }
+
+/// One moderation rule, as `GET /api/v1/admin/moderation-rules` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ModerationRule {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub pattern: String,
+    #[serde(default)]
+    pub pattern_kind: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hits: i64,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// The bytes a dry run matched, and the text they were.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RuleSpan {
+    #[serde(default)]
+    pub start: usize,
+    #[serde(default)]
+    pub end: usize,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// The rule a dry run tested, as the instance echoes it back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct DryRunRule {
+    #[serde(default)]
+    pub id: String,
+}
+
+/// What `POST …/{id}/dry-run` answered.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RuleDryRun {
+    #[serde(default)]
+    pub rule: Option<DryRunRule>,
+    #[serde(default)]
+    pub matched: bool,
+    #[serde(default)]
+    pub span: Option<RuleSpan>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub scanned_bytes: usize,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// The body one rule is written with. Every field is a replacement, which is what both
+/// `POST` and `PUT` mean here.
+fn rule_body(
+    name: &str,
+    pattern: &str,
+    pattern_kind: &str,
+    scope: &str,
+    action: &str,
+    enabled: bool,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&serde_json::json!({
+        "name": name,
+        "pattern": pattern,
+        "pattern_kind": pattern_kind,
+        "scope": scope,
+        "action": action,
+        "enabled": enabled,
+    }))
+    .map_err(|error| error.to_string())
+}
+
+fn rules_url() -> Result<(nodus_mastodon::BrowserInstance, url::Url), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/moderation-rules")
+        .map_err(|error| error.to_string())?;
+    Ok((transport, url))
+}
+
+/// Every rule the instance holds. Requires `admin:read`.
+pub async fn moderation_rules() -> Result<Vec<ModerationRule>, String> {
+    let (transport, url) = rules_url()?;
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Writes one rule. Requires `admin:write`; a pattern that cannot compile is refused with
+/// the instance's own sentence, which the screen shows rather than swallows.
+pub async fn create_moderation_rule(
+    name: &str,
+    pattern: &str,
+    pattern_kind: &str,
+    scope: &str,
+    action: &str,
+    enabled: bool,
+) -> Result<ModerationRule, String> {
+    let (transport, url) = rules_url()?;
+    let body = rule_body(name, pattern, pattern_kind, scope, action, enabled)?;
+    transport
+        .fetch(transport.post_body(url, "application/json", body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Rewrites one rule in place. Requires `admin:write`.
+pub async fn update_moderation_rule(
+    id: &str,
+    name: &str,
+    pattern: &str,
+    pattern_kind: &str,
+    scope: &str,
+    action: &str,
+    enabled: bool,
+) -> Result<ModerationRule, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "moderation-rules", id])
+        .map_err(|error| error.to_string())?;
+    let body = rule_body(name, pattern, pattern_kind, scope, action, enabled)?;
+    transport
+        .fetch(transport.put_body(url, body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Deletes one rule. Requires `admin:write`.
+pub async fn delete_moderation_rule(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "moderation-rules", id])
+        .map_err(|error| error.to_string())?;
+    transport
+        .send_empty(transport.delete(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Tries one rule against a sample body. Requires `admin:read`; nothing is written.
+pub async fn dry_run_moderation_rule(id: &str, sample: &str) -> Result<RuleDryRun, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "moderation-rules", id, "dry-run"])
+        .map_err(|error| error.to_string())?;
+    let body = serde_json::to_vec(&serde_json::json!({ "sample": sample }))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch(transport.post_body(url, "application/json", body))
+        .await
+        .map_err(|error| error.to_string())
+}
