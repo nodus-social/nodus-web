@@ -230,18 +230,34 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
     let reason = moderation.reason.clone();
     let rule = moderation.rule.clone();
     let expires = moderation.expires_at.as_deref().map(date_only);
-    let appeal = moderation.appeal.clone();
     let decided_by = moderation.decided_by.clone();
-    let can_appeal = moderation.can_appeal;
     let busy = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
-    let decided = appeal.clone().filter(Appeal::decided);
-    let pending = appeal.is_some() && decided.is_none();
+    // `For` keys the row, so this component is built once from the snapshot the group
+    // carried. The appeal, though, is written by this browser after the POST succeeds: a
+    // copy would leave "Appeal" on screen until a reload. Read the notice's moderation
+    // payload from the store instead, so the waiting line arrives with the write.
+    let row_id = notice_id.clone();
+    let live = Signal::derive(move || {
+        notifications::items()
+            .get()
+            .iter()
+            .find(|row| row.id == row_id)
+            .and_then(|row| row.moderation.clone())
+    });
+    let appeal = Signal::derive(move || live.get().and_then(|moderation| moderation.appeal));
+    let can_appeal = Signal::derive(move || live.get().is_some_and(|moderation| moderation.can_appeal));
+    let decided = Signal::derive(move || appeal.get().filter(Appeal::decided));
+    let pending = Signal::derive(move || {
+        appeal
+            .get()
+            .is_some_and(|appeal| !Appeal::decided(&appeal))
+    });
 
-    let send = {
+    let send = Callback::new({
         let id = notice_id.clone();
-        move |_| {
+        move |()| {
             if busy.get_untracked() {
                 return;
             }
@@ -259,7 +275,7 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
                 done,
             );
         }
-    };
+    });
 
     view! {
         <div class="rounded-box bg-base-200/60 p-3 text-sm" data-moderation-action=action.clone()>
@@ -268,7 +284,7 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
             {rule.map(|rule| view! { <p class="opacity-80" data-moderation-rule>{format!("Rule: {rule}")}</p> })}
             {expires.map(|date| view! { <p class="opacity-80" data-moderation-expires>{format!("Expires on {date}.")}</p> })}
 
-            {decided.map(|appeal| {
+            {move || decided.get().map(|appeal| {
                 let decision = if appeal.status == "accepted" {
                     lifted_sentence(&appeal.action).to_owned()
                 } else {
@@ -288,7 +304,7 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
                 }
             })}
 
-            {pending.then(|| {
+            {move || pending.get().then(|| {
                 view! {
                     <p class="mt-2 opacity-80" data-appeal-waiting>
                         "Your appeal is waiting for a decision"
@@ -296,18 +312,21 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
                 }
             })}
 
-            {can_appeal.then(|| {
-                view! {
-                    <button
-                        class="btn btn-sm btn-primary mt-2 w-fit"
-                        data-appeal
-                        disabled=move || busy.get()
-                        on:click=send
-                    >
-                        "Appeal"
-                    </button>
-                }
-            })}
+            {move || {
+                let send = send.clone();
+                can_appeal.get().then(|| {
+                    view! {
+                        <button
+                            class="btn btn-sm btn-primary mt-2 w-fit"
+                            data-appeal
+                            disabled=move || busy.get()
+                            on:click=move |_| send.run(())
+                        >
+                            "Appeal"
+                        </button>
+                    }
+                })
+            }}
 
             <Show when=move || error.get().is_some()>
                 <p class="text-error mt-2 text-xs">{move || error.get().unwrap_or_default()}</p>
