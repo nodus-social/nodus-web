@@ -41,6 +41,9 @@ pub fn ComposerBar(
     /// Opens the media picker.
     #[prop(optional)]
     on_add_media: Option<Callback<()>>,
+    /// Opens the drive picker, which attaches a file without uploading it again.
+    #[prop(optional)]
+    on_add_drive: Option<Callback<()>>,
     /// Whether the poll the composer is editing is one the server would accept.
     ///
     /// A poll is content: a post may carry only a poll, so the send button has to know
@@ -103,8 +106,24 @@ pub fn ComposerBar(
                     }
                 }
             >
+                    <Icon icon=Image/>
+                    <span class="max-sm:hidden">"Media"</span>
+                </button>
+
+            <button
+                type="button"
+                class="btn btn-outline btn-sm gap-1 border-dashed max-sm:btn-square"
+                title="Choose from your drive"
+                aria-label="Choose from your drive"
+                disabled=move || busy.get() || on_add_drive.is_none()
+                on:click=move |_| {
+                    if let Some(on_add_drive) = on_add_drive {
+                        on_add_drive.run(());
+                    }
+                }
+            >
                 <Icon icon=Image/>
-                <span class="max-sm:hidden">"Media"</span>
+                <span class="max-sm:hidden">"Drive"</span>
             </button>
 
             <button

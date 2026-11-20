@@ -27,6 +27,22 @@ use crate::state::bridge::drive::{self, DriveFile};
 /// The id of the hidden file input, so the control row can open the picker.
 const ATTACH_INPUT: &str = "nodus-attach-input";
 
+/// The hidden button the control row's drive control clicks, so the picker's state stays
+/// in this crate's component while the button stays in the view's row.
+const DRIVE_OPEN: &str = "nodus-drive-open";
+
+/// Opens the drive picker from the control row.
+pub fn request_drive() {
+    if let Some(element) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(DRIVE_OPEN))
+    {
+        if let Some(button) = element.dyn_into::<web_sys::HtmlElement>().ok() {
+            button.click();
+        }
+    }
+}
+
 /// Reads a picked file into bytes and its declared MIME type.
 async fn read(file: web_sys::File) -> Result<(Vec<u8>, String), String> {
     let buffer = JsFuture::from(file.array_buffer())
@@ -248,6 +264,12 @@ pub fn Attachments(
                 disabled=move || uploading.get()
                 on:change=move |event| pick(event, set_uploading, set_percent, media, set_error)
             />
+            <button
+                id=DRIVE_OPEN
+                class="hidden"
+                type="button"
+                on:click=move |_| open_drive.run(())
+            ></button>
 
             <Show when=move || open.get()>
                 <div

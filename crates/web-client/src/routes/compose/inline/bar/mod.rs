@@ -45,6 +45,8 @@ pub(super) fn ComposerBar(
     on_thread: Option<Callback<()>>,
     /// Opens the media picker.
     on_add_media: Callback<()>,
+    /// Opens the drive picker, which attaches a file without uploading it again.
+    on_add_drive: Callback<()>,
     /// Whether the emoji picker is showing.
     emoji_open: ReadSignal<bool>,
     /// Toggles the emoji picker. It hangs off the emoticon button in the right-hand group,
@@ -92,6 +94,7 @@ pub(super) fn ComposerBar(
             set_visibility.set(chosen)
         })),
         on_add_media: Some(on_add_media),
+        on_add_drive: Some(on_add_drive),
         poll_ready,
         on_add_poll: Some(on_add_poll),
         on_toggle_schedule: Some(Callback::new(move |()| {

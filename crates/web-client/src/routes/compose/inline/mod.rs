@@ -185,6 +185,7 @@ pub fn InlineComposer(
                     router::navigate(Route::Compose);
                 }))
                 on_add_media=Callback::new(move |()| attachments::request_pick())
+                on_add_drive=Callback::new(move |()| attachments::request_drive())
                 // A toggle, not a latch: with a latch the control is a no-op the moment the
                 // editor is open, which is what made it read as broken.
                 emoji_open=picking
