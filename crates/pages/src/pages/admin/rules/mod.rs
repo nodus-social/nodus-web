@@ -119,7 +119,15 @@ pub fn RulesPage(
                 </Show>
 
                 <ol class="flex flex-col gap-2">
-                    <For each=move || rules.get() key=|rule| rule.id.clone() let:rule>
+                    // The key carries what the row shows, not just the id: `For` reuses the view
+                    // it drew for a key, and each row's sentence and heading are read once when
+                    // that view is built, so a row kept under a bare id would keep drawing the
+                    // words and the position the rule had before it was edited or moved.
+                    <For
+                        each=move || rules.get()
+                        key=|rule| (rule.id.clone(), rule.ordinal, rule.text.clone())
+                        let:rule
+                    >
                         {
                             let id = StoredValue::new(rule.id.clone());
                             let here = rule.id.clone();

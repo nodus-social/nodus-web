@@ -898,7 +898,14 @@ test('the instance rules are added, edited, moved and deleted, in the order they
   // a report that cited rule 1 still cites the sentence it was written against.
   const first = page.getByRole('listitem').filter({ hasText: 'Be excellent' })
   await first.getByRole('button', { name: 'Edit Rule 1' }).click()
-  await first.getByLabel('Rule 1 text').fill('Be excellent to one another.')
+  // Once the row is open the sentence is the textarea's value, not page text, so the field is
+  // found through the row that holds the save button rather than by re-filtering on the words
+  // the row no longer renders.
+  const opened = page
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('button', { name: 'Save changes' }) })
+  await expect(opened).toHaveCount(1)
+  await opened.getByLabel('Rule 1 text').fill('Be excellent to one another.')
   await page.getByRole('button', { name: 'Save changes' }).click()
   const edited = await sent(
     calls,
@@ -923,7 +930,8 @@ test('the instance rules are added, edited, moved and deleted, in the order they
   await last.getByRole('button', { name: 'Delete Rule 3' }).click()
   await expect(page.getByText('Delete this rule? Reports that cited it keep the reference.')).toBeVisible()
   expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(0)
-  await page.getByRole('button', { name: 'Delete rule' }).click()
+  // The confirmation button, by its whole name: the row buttons are "Delete Rule 1" and so on.
+  await page.getByRole('button', { name: 'Delete rule', exact: true }).click()
   const removed = await sent(
     calls,
     (call) => call.method === 'DELETE' && call.url.includes('/api/v1/admin/rules/80'),
