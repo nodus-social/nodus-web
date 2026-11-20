@@ -340,6 +340,50 @@ pub fn mark_all_read() {
     save_seen();
 }
 
+/// Empties the list, on the instance's word.
+///
+/// The rows leave the page only once the instance says it took them: a clear that emptied
+/// the page and then failed would be a list the reader can no longer see was there, and the
+/// one thing they asked for did not happen. A refused clear therefore leaves every row
+/// where it was and answers with the reason.
+pub fn clear_all(done: Callback<Result<(), String>>) {
+    let Some(token) = session_token() else {
+        done.run(Err("Sign in again to clear notifications.".to_owned()));
+        return;
+    };
+    if loading_signal().get_untracked() {
+        return;
+    }
+    loading_signal().set(true);
+    spawn_local(async move {
+        let answer = match gloo_net::http::Request::post("/api/v1/notifications/clear")
+            .header("authorization", &format!("Bearer {token}"))
+            .build()
+        {
+            Err(error) => Err(format!("The list could not be cleared: {error}")),
+            Ok(request) => match request.send().await {
+                Ok(response) if response.ok() => Ok(()),
+                Ok(response) => Err(format!(
+                    "The instance refused to clear the list ({}).",
+                    response.status()
+                )),
+                Err(error) => Err(format!("The list could not be cleared: {error}")),
+            },
+        };
+        if answer.is_ok() {
+            // Nothing is left to be unread either: the count is derived from the rows, and
+            // the ids remembered as read belong to rows that no longer exist.
+            items_signal().set(Vec::new());
+            cursor_signal().set(None);
+            seen_signal().set(HashSet::new());
+            save_seen();
+            loaded_signal().set(true);
+        }
+        loading_signal().set(false);
+        done.run(answer);
+    });
+}
+
 /// Remembers one row as read, and tells the instance when it can.
 pub fn mark_seen(id: &str) {
     seen_signal().update(|seen| {

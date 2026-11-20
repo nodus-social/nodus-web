@@ -11,6 +11,7 @@ use nodus_pages::{PageHeader, Screen};
 use nodus_ui::{display_name, relative_age};
 
 use crate::platform::clock;
+use crate::state::alive::Alive;
 use crate::state::bridge::notifications::{self, Appeal, Moderation, Notice};
 
 /// One row on the page: the newest notice in its group and how many it stands for.
@@ -41,6 +42,7 @@ pub fn NotificationsView() -> impl IntoView {
     });
 
     let empty = move || loaded.get() && items.get().is_empty() && available.get() != Some(false);
+    let rows = Signal::derive(move || !items.get().is_empty());
 
     view! {
         <Screen>
@@ -49,15 +51,20 @@ pub fn NotificationsView() -> impl IntoView {
                     title="Notifications"
                     description="Mentions, boosts, favourites, follows and anything a moderator has said to this account."
                 />
-                <Show when=move || { unread.get() > 0 }>
-                    <button
-                        class="btn btn-ghost btn-sm w-fit"
-                        data-mark-all-read
-                        on:click=move |_| notifications::mark_all_read()
-                    >
-                        "Mark all read"
-                    </button>
-                </Show>
+                <div class="flex flex-col items-end gap-2">
+                    <Show when=move || rows.get()>
+                        <ClearAll/>
+                    </Show>
+                    <Show when=move || { unread.get() > 0 }>
+                        <button
+                            class="btn btn-ghost btn-sm w-fit"
+                            data-mark-all-read
+                            on:click=move |_| notifications::mark_all_read()
+                        >
+                            "Mark all read"
+                        </button>
+                    </Show>
+                </div>
             </div>
 
             <Show when=move || available.get() == Some(false)>
@@ -95,6 +102,86 @@ pub fn NotificationsView() -> impl IntoView {
                 </button>
             </Show>
         </Screen>
+    }
+}
+
+/// Empties the list, once the reader has said so twice.
+///
+/// Clearing is the one verb on this page with nothing behind it: a favourite can be undone,
+/// a dismissed row read again, but a cleared list is gone and the instance keeps no copy to
+/// re-fetch. The button therefore asks in place — a stray click on a full list would
+/// otherwise be the last thing the reader sees of it — and a refusal leaves the rows on
+/// screen with the instance's reason under the button.
+#[component]
+fn ClearAll() -> impl IntoView {
+    let (asking, set_asking) = signal(false);
+    let (busy, set_busy) = signal(false);
+    let (error, set_error) = signal(None::<String>);
+    let alive = Alive::new();
+
+    let clear = move || {
+        if busy.get_untracked() {
+            return;
+        }
+        set_busy.set(true);
+        set_error.set(None);
+        let done = Callback::new(move |result: Result<(), String>| {
+            alive.if_alive(|| {
+                set_busy.set(false);
+                set_asking.set(false);
+                if let Err(message) = result {
+                    set_error.set(Some(message));
+                }
+            });
+        });
+        notifications::clear_all(done);
+    };
+
+    view! {
+        <div class="flex flex-col items-end gap-1">
+            <Show
+                when=move || asking.get()
+                fallback=move || {
+                    view! {
+                        <button
+                            class="btn btn-ghost btn-sm w-fit"
+                            data-clear-all
+                            disabled=move || busy.get()
+                            on:click=move |_| set_asking.set(true)
+                        >
+                            "Clear all"
+                        </button>
+                    }
+                }
+            >
+                <div class="flex items-center gap-2">
+                    <span class="text-xs opacity-70" data-clear-question>
+                        "Clear every notification?"
+                    </span>
+                    <button
+                        class="btn btn-error btn-sm"
+                        data-clear-confirm
+                        disabled=move || busy.get()
+                        on:click=move |_| clear()
+                    >
+                        "Yes, clear"
+                    </button>
+                    <button
+                        class="btn btn-ghost btn-sm"
+                        data-clear-cancel
+                        disabled=move || busy.get()
+                        on:click=move |_| set_asking.set(false)
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </Show>
+            <Show when=move || error.get().is_some()>
+                <p class="text-error text-xs" data-clear-error>
+                    {move || error.get().unwrap_or_default()}
+                </p>
+            </Show>
+        </div>
     }
 }
 
