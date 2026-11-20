@@ -9,7 +9,12 @@ use crate::state::alive::Alive;
 use crate::state::bridge::admin;
 
 #[component]
-pub fn Announcements() -> impl IntoView {
+pub fn Announcements(
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
+) -> impl IntoView {
+    let administrator = nodus_pages::props::administrator(administrator);
     let (items, set_items) = signal(Vec::<Announcement>::new());
     let (draft, set_draft) = signal(String::new());
     let (editing, set_editing) = signal(None::<Announcement>);
@@ -134,6 +139,7 @@ pub fn Announcements() -> impl IntoView {
             on_save_edit=Some(save_edit)
             on_cancel_edit=Some(cancel_edit)
             write=Some(crate::state::bridge::admin::may_write())
+            administrator=Some(administrator)
         />
     }
 }

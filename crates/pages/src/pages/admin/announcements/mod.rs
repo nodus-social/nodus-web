@@ -58,10 +58,22 @@ pub fn AnnouncementsPage(
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
+    let administrator = crate::props::administrator(administrator);
+    // A moderator can read the announcements and can change none of them: every write route
+    // answers `role == admin`.
+    let may = Signal::derive(move || write.get() && administrator.get());
     view! {
         <div class="flex flex-col gap-3">
+            <Show when=move || !administrator.get()>
+                <crate::components::chrome::Note class="text-sm text-warning">
+                    {crate::props::ADMIN_ONLY}
+                </crate::components::chrome::Note>
+            </Show>
             <Panel title="Announcements" description="Messages this instance shows to its members.">
                 <Show when=move || error.get().is_some()>
                     <p class="alert alert-error alert-soft py-1 text-sm">
@@ -92,8 +104,8 @@ pub fn AnnouncementsPage(
                                                 <div class="flex shrink-0 gap-1">
                                                     <button
                                                         class="btn btn-ghost btn-xs"
-                                                        disabled=move || busy.get() || on_edit.is_none() || !write.get()
-                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        disabled=move || busy.get() || on_edit.is_none() || !may.get()
+                                                        title=move || crate::props::refusal(write, administrator)
                                                         on:click=move |_| {
                                                             if let Some(on_edit) = on_edit {
                                                                 on_edit.run(stored.get_value());
@@ -104,8 +116,8 @@ pub fn AnnouncementsPage(
                                                     </button>
                                                     <button
                                                         class="btn btn-ghost btn-xs"
-                                                        disabled=move || busy.get() || on_delete.is_none() || !write.get()
-                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        disabled=move || busy.get() || on_delete.is_none() || !may.get()
+                                                        title=move || crate::props::refusal(write, administrator)
                                                         on:click=move |_| {
                                                             if let Some(on_delete) = on_delete {
                                                                 on_delete.run(target.get_value());
@@ -133,7 +145,8 @@ pub fn AnnouncementsPage(
                                             <div class="flex gap-2">
                                                 <button
                                                     class="btn btn-primary btn-xs"
-                                                    disabled=move || busy.get() || on_save_edit.is_none() || !write.get()
+                                                    disabled=move || busy.get() || on_save_edit.is_none() || !may.get()
+                                                    title=move || crate::props::refusal(write, administrator)
                                                     on:click=move |_| {
                                                         if let Some(on_save_edit) = on_save_edit {
                                                             on_save_edit.run(());
@@ -180,7 +193,7 @@ pub fn AnnouncementsPage(
                         class="textarea textarea-bordered min-h-24"
                         placeholder="What should members know?"
                         prop:value=move || draft.get()
-                        disabled=on_draft.is_none()
+                        disabled=move || on_draft.is_none() || !may.get()
                         on:input=move |event| {
                             if let Some(on_draft) = on_draft {
                                 on_draft.run(event_target_value(&event));
@@ -192,7 +205,7 @@ pub fn AnnouncementsPage(
                             type="checkbox"
                             class="toggle toggle-sm"
                             prop:checked=move || published.get()
-                            disabled=on_published.is_none()
+                            disabled=move || on_published.is_none() || !may.get()
                             on:change=move |event| {
                                 if let Some(on_published) = on_published {
                                     on_published.run(event_target_checked(&event));
@@ -203,7 +216,8 @@ pub fn AnnouncementsPage(
                     </label>
                     <button
                         class="btn btn-primary btn-sm self-start"
-                        disabled=move || busy.get() || on_publish.is_none()
+                        disabled=move || busy.get() || on_publish.is_none() || !may.get()
+                        title=move || crate::props::refusal(write, administrator)
                     >
                         "Publish"
                     </button>

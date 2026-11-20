@@ -215,6 +215,18 @@ test('a scanner is added with the endpoint and secret the administrator typed', 
   })
 })
 
+test('a moderator is told the scanners panel is an administrator\u2019s', async ({ page }) => {
+  // The grant carries `admin:write`; the role does not carry the routes. A control that
+  // answered 403 was worse than a closed one: the reader pressed it and learned nothing.
+  const calls = await consoleAs(page, { role: 'moderator' })
+  await open(page, '/admin/scanners')
+
+  await expect(page.getByText(/^Administrators only\./)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add scanner' })).toBeDisabled()
+  // The panel's reads answer the admin role too, so a moderator's visit asks for nothing.
+  expect(calls.some((call) => call.url.includes('/api/v1/admin/scanners'))).toBe(false)
+})
+
 test('a scanner that is already registered lists its rules and can be paused', async ({ page }) => {
   const calls = await consoleAs(page, { scanners: [scanner()] })
   await open(page, '/admin/scanners')

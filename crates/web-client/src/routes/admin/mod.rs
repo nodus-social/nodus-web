@@ -190,18 +190,22 @@ pub fn Admin(section: String) -> impl IntoView {
                 match section.get_value() {
                     Section::Overview => view! { <Overview/> }.into_any(),
                     Section::Scanners if !scanners.get() => missing("scanners"),
-                    Section::Scanners if !administrator.get() => administrator_only("scanners"),
-                    Section::Scanners => view! { <Scanners/> }.into_any(),
+                    Section::Scanners => {
+                        view! { <Scanners administrator=Some(administrator)/> }.into_any()
+                    }
                     Section::Domains => view! { <Domains/> }.into_any(),
-                    Section::Email if !administrator.get() => administrator_only("mail domain blocks"),
-                    Section::Email => view! { <EmailDomains/> }.into_any(),
+                    Section::Email => {
+                        view! { <EmailDomains administrator=Some(administrator)/> }.into_any()
+                    }
                     Section::Replies if !warnings.get() => missing("warning presets"),
                     Section::Replies => view! { <Replies/> }.into_any(),
                     Section::Escalation if !escalation.get() => missing_escalation(),
                     Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
                     Section::Federation if !delivery.get() => missing("delivery"),
                     Section::Federation => view! { <federation::Deliveries/> }.into_any(),
-                    Section::Announcements => view! { <Announcements/> }.into_any(),
+                    Section::Announcements => {
+                        view! { <Announcements administrator=Some(administrator)/> }.into_any()
+                    }
                     Section::Rules if !instance_rules.get() => missing("instance rules"),
                     Section::Rules => view! { <Rules/> }.into_any(),
                     Section::Audit => view! { <Audit/> }.into_any(),
@@ -224,18 +228,6 @@ async fn read_document_file(file: web_sys::File) -> Result<String, String> {
         .map_err(|error| format!("Could not read that file: {error:?}"))?;
     let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
     String::from_utf8(bytes).map_err(|_| "That file is not UTF-8 text.".to_owned())
-}
-
-/// The panel behind an administrator-only section, on a moderator's screen.
-fn administrator_only(name: &'static str) -> AnyView {
-    view! {
-        <Note class="text-sm opacity-70">
-            {format!(
-                "The {name} panel is served only to an administrator: the instance answers its routes with the admin role, not the moderator's. This account's access applies across moderation, and an administrator can raise the role here."
-            )}
-        </Note>
-    }
-    .into_any()
 }
 
 /// A section the instance's `/api/v1/meta` answer does not advertise.

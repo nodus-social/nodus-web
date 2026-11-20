@@ -10,7 +10,7 @@
 //! the data and writes `None` for every verb. A page that gains a field gains it in one
 //! place, and a page that forgets to is a compile error rather than a missing button.
 
-use leptos::prelude::{AnyView, Callback, Signal};
+use leptos::prelude::{AnyView, Callback, Get, Signal};
 use nodus_client_core::model::{
     Account, Conversation, List, Notification, ScheduledStatus, SearchResults, Status,
 };
@@ -54,6 +54,28 @@ pub const NO_WRITE: &str =
 /// administrator flag and media retention answer `role == admin` whatever the token holds.
 pub const NO_ADMIN_ROLE: &str =
     "This needs an administrator role rather than a moderator's: the instance refuses this request whatever the grant's scopes.";
+
+/// The sentence an administrator-only panel carries above its controls.
+///
+/// Said out loud rather than left to a disabled button: the grant's scopes are not the role,
+/// and a moderator holding `admin:write` is still refused by these routes.
+pub const ADMIN_ONLY: &str =
+    "Administrators only. The instance answers this panel's routes with the admin role, not a moderator's, so nothing here can be changed from this account.";
+
+/// The sentence a control carries when the account may not press it, or `""` when it may.
+///
+/// The role is asked first: a moderator whose grant carries `admin:write` is refused by an
+/// administrator-only route, and naming the scope would point at the wrong reason.
+#[must_use]
+pub fn refusal(write: Signal<bool>, administrator: Signal<bool>) -> &'static str {
+    if !administrator.get() {
+        NO_ADMIN_ROLE
+    } else if !write.get() {
+        NO_WRITE
+    } else {
+        ""
+    }
+}
 
 /// Whether the account's staff role is administrator.
 ///

@@ -47,7 +47,12 @@ fn draft_of(draft: &ScannerDraft) -> Result<NewScanner, String> {
 
 /// Scanners, their rules, and the content sets the controller hands out.
 #[component]
-pub fn Scanners() -> impl IntoView {
+pub fn Scanners(
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
+) -> impl IntoView {
+    let administrator = nodus_pages::props::administrator(administrator);
     let alive = Alive::new();
     let (scanners, set_scanners) = signal(Vec::<Scanner>::new());
     let (assets, set_assets) = signal(Vec::<ScannerAsset>::new());
@@ -75,7 +80,15 @@ pub fn Scanners() -> impl IntoView {
         });
     });
 
-    Effect::new(move |_| reload.run(()));
+    // The panel's reads are administrator routes too: a moderator who reaches this address
+    // is shown the panel and its reason, and asked for nothing the instance would refuse.
+    Effect::new(move |_| {
+        if administrator.get() {
+            reload.run(());
+        } else {
+            set_busy.set(false);
+        }
+    });
 
     let create = Callback::new(move |()| {
         let scanner = match draft_of(&draft.get_untracked()) {
@@ -273,6 +286,7 @@ pub fn Scanners() -> impl IntoView {
             on_asset_download=asset_download
             upload=upload
             write=Some(crate::state::bridge::admin::may_write())
+            administrator=Some(administrator)
         />
     }
 }

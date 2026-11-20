@@ -11,7 +11,12 @@ use crate::state::bridge::admin;
 
 /// The mail domains this instance refuses, and the one being added.
 #[component]
-pub fn EmailDomains() -> impl IntoView {
+pub fn EmailDomains(
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
+) -> impl IntoView {
+    let administrator = nodus_pages::props::administrator(administrator);
     let alive = Alive::new();
     let (items, set_items) = signal(Vec::<EmailDomainBlock>::new());
     let (domain, set_domain) = signal(String::new());
@@ -36,7 +41,14 @@ pub fn EmailDomains() -> impl IntoView {
         });
     });
 
-    Effect::new(move |_| reload.run(()));
+    // Mail-domain blocks are served to an administrator, read and write alike.
+    Effect::new(move |_| {
+        if administrator.get() {
+            reload.run(());
+        } else {
+            set_busy.set(false);
+        }
+    });
 
     let block = Callback::new(move |()| {
         let name = domain.get_untracked().trim().to_lowercase();
@@ -81,6 +93,7 @@ pub fn EmailDomains() -> impl IntoView {
             on_block=block
             on_withdraw=withdraw
             write=Some(crate::state::bridge::admin::may_write())
+            administrator=Some(administrator)
         />
     }
 }

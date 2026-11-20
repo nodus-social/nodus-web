@@ -130,12 +130,23 @@ pub fn ScannersPage(
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
+    /// Whether the account's staff role is administrator. Absent means "assume yes".
+    #[prop(optional_no_strip)]
+    administrator: Option<Signal<bool>>,
 ) -> impl IntoView {
     let write = crate::props::writable(write);
+    let administrator = crate::props::administrator(administrator);
+    // The instance's scanner routes answer `role == admin`; the grant's scope is not enough.
+    let may = Signal::derive(move || write.get() && administrator.get());
     view! {
         <div class="flex flex-col gap-3">
             <Show when=move || error.get().is_some()>
                 <p class="text-sm text-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+            <Show when=move || !administrator.get()>
+                <crate::components::chrome::Note class="text-sm text-warning">
+                    {crate::props::ADMIN_ONLY}
+                </crate::components::chrome::Note>
             </Show>
             <Show when=move || !write.get()>
                 <crate::components::chrome::Note class="text-sm text-warning">
@@ -187,8 +198,8 @@ pub fn ScannersPage(
                                     <span class="text-xs opacity-60">{manifest.clone()}</span>
                                     <button
                                         class="btn btn-ghost btn-xs ml-auto"
-                                        disabled=move || on_toggle.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        disabled=move || on_toggle.is_none() || !may.get()
+                                        title=move || crate::props::refusal(write, administrator)
                                         on:click=move |_| {
                                             if let Some(on_toggle) = on_toggle {
                                                 on_toggle.run((id.get_value(), !enabled));
@@ -199,7 +210,8 @@ pub fn ScannersPage(
                                     </button>
                                     <button
                                         class="btn btn-ghost btn-xs"
-                                        disabled=on_refresh.is_none()
+                                        disabled=move || on_refresh.is_none() || !may.get()
+                                        title=move || crate::props::refusal(write, administrator)
                                         on:click=move |_| {
                                             if let Some(on_refresh) = on_refresh {
                                                 on_refresh.run(id.get_value());
@@ -210,8 +222,8 @@ pub fn ScannersPage(
                                     </button>
                                     <button
                                         class="btn btn-ghost btn-xs text-error"
-                                        disabled=move || on_delete.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        disabled=move || on_delete.is_none() || !may.get()
+                                        title=move || crate::props::refusal(write, administrator)
                                         on:click=move |_| {
                                             if let Some(on_delete) = on_delete {
                                                 on_delete.run(id.get_value());
@@ -239,8 +251,8 @@ pub fn ScannersPage(
                                                         <span class="truncate">{text}</span>
                                                         <button
                                                             class="btn btn-ghost btn-xs ml-auto"
-                                                            disabled=move || on_rule_delete.is_none() || !write.get()
-                                                            title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                            disabled=move || on_rule_delete.is_none() || !may.get()
+                                                            title=move || crate::props::refusal(write, administrator)
                                                             on:click=move |_| {
                                                                 if let Some(on_rule_delete) = on_rule_delete {
                                                                     on_rule_delete.run(rule_id.get_value());
@@ -279,6 +291,7 @@ pub fn ScannersPage(
                     <input
                         class="input input-bordered input-sm"
                         placeholder="Name"
+                        disabled=move || !may.get()
                         prop:value=move || draft.get().name
                         on:input=move |event| {
                             let value = event_target_value(&event);
@@ -292,6 +305,7 @@ pub fn ScannersPage(
                     <select
                         class="select select-bordered select-sm"
                         prop:value=move || format!("{:?}", draft.get().kind)
+                        disabled=move || !may.get()
                         on:change=move |event| {
                             let kind = match event_target_value(&event).as_str() {
                                 "Video" => ScannerKind::Video,
@@ -312,6 +326,7 @@ pub fn ScannersPage(
                     <input
                         class="input input-bordered input-sm sm:col-span-2"
                         placeholder="https://scanner.example:8080"
+                        disabled=move || !may.get()
                         prop:value=move || draft.get().endpoint
                         on:input=move |event| {
                             let value = event_target_value(&event);
@@ -325,6 +340,7 @@ pub fn ScannersPage(
                     <input
                         class="input input-bordered input-sm"
                         placeholder="Shared secret"
+                        disabled=move || !may.get()
                         prop:value=move || draft.get().secret
                         on:input=move |event| {
                             let value = event_target_value(&event);
@@ -338,6 +354,7 @@ pub fn ScannersPage(
                     <input
                         class="input input-bordered input-sm"
                         placeholder="Timeout in milliseconds (5000)"
+                        disabled=move || !may.get()
                         prop:value=move || draft.get().timeout_ms
                         on:input=move |event| {
                             let value = event_target_value(&event);
@@ -351,6 +368,7 @@ pub fn ScannersPage(
                     <select
                         class="select select-bordered select-sm"
                         prop:value=move || draft.get().asset_id
+                        disabled=move || !may.get()
                         on:change=move |event| {
                             let value = event_target_value(&event);
                             if let Some(on_draft) = on_draft {
@@ -371,7 +389,8 @@ pub fn ScannersPage(
                     </select>
                     <button
                         class="btn btn-sm btn-primary"
-                        disabled=move || busy.get() || on_create.is_none()
+                        disabled=move || busy.get() || on_create.is_none() || !may.get()
+                        title=move || crate::props::refusal(write, administrator)
                         on:click=move |_| {
                             if let Some(on_create) = on_create {
                                 on_create.run(());
@@ -420,8 +439,8 @@ pub fn ScannersPage(
                                     </button>
                                     <button
                                         class="btn btn-ghost btn-xs"
-                                        disabled=move || on_asset_delete.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        disabled=move || on_asset_delete.is_none() || !may.get()
+                                        title=move || crate::props::refusal(write, administrator)
                                         on:click=move |_| {
                                             if let Some(on_asset_delete) = on_asset_delete {
                                                 on_asset_delete.run(id.get_value());
