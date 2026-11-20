@@ -4,10 +4,10 @@ import { expect, test } from '@playwright/test'
 
 import { ACCOUNT_ID, HOST, signedIn, stubApi, hydrated } from '../fixtures.mjs'
 
-/** The rail's labels, in the order a reader meets them. */
+/** The rail's category labels, in the order a reader meets them. */
 async function railLabels(page) {
   return page
-    .locator('nav ul li')
+    .locator('nav [data-nav-rail] ul li')
     .allInnerTexts()
     .then((labels) => labels.map((label) => label.trim().split('\n')[0]).filter(Boolean))
 }
@@ -25,9 +25,18 @@ test('the rail groups reading, finding and library, with the feeds under Feed', 
   await expect(page.locator('nav a').first()).toBeVisible()
 
   const labels = await railLabels(page)
-  // Home is the front door; the feeds are tabs inside it, not doors of their own.
+  // The bell stands above the categories rather than inside one: it is the one entry whose
+  // badge changes while the page is open. Assert it in the order it renders, before the
+  // first group heading.
+  await expect(page.locator('nav [data-notice-bell]')).toContainText('Notifications')
+  await expect(
+    page.locator('nav [data-notice-bell], nav [data-nav-rail] > p').first(),
+  ).toContainText('Notifications')
+
+  // Home is the front door; the feeds are tabs inside it, not doors of their own. The
+  // notifications door is the bell above, so it is not in a category.
   const order = [
-    'Home', 'Messages', 'Notifications',
+    'Home', 'Messages',
     'Search', 'People',
     'Saved', 'Scheduled', 'Lists', 'Settings',
   ]
