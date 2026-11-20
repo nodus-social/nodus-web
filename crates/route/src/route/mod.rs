@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use nodus_client_core::model::{
-    Account, Context, Conversation, Filter, List, Poll, Relationship, Status,
+    Account, Context, Conversation, Filter, List, Poll, Relationship, Status, Tag,
 };
 use nodus_shared::{AccountItem, PostItem};
 use nodus_state::page::{PageEntry, PageKind};
@@ -33,6 +33,7 @@ use screens::saved::SavedScreen;
 use screens::scheduled::ScheduledScreen;
 use screens::search::SearchScreen;
 use screens::settings::SettingsScreen;
+use screens::tag::TagScreen;
 use screens::thread::ThreadScreen;
 
 /// Which timeline a route asks for.
@@ -43,6 +44,7 @@ pub enum TimelineKind {
     Federated,
     Account(String),
     List(String),
+    Tag(String),
 }
 
 /// One page of a timeline, as the platform can answer it right now.
@@ -477,8 +479,33 @@ pub trait Runtime: Send + Sync + 'static {
 
     /// A destination click. The server has nowhere to navigate and leaves the default.
     fn drop_account(&self, _kind: &PageKind, _account: &str) {}
-
     fn navigate(&self, _path: String) {}
+
+    /// One hashtag's header, read with the session.
+    ///
+    /// `Ok(None)` is an instance whose tag API does not know the name: a 404 there means
+    /// the tag does not exist, which the screen shows as a note instead of an error.
+    fn load_tag(&self, _name: String, done: Callback<Result<Option<Tag>, String>>) {
+        done.run(Err("This tag can only be read in the app.".to_owned()));
+    }
+
+    /// Follows or unfollows a tag, answering with the instance's own state.
+    ///
+    /// The returned tag is what the screen shows: `following` is the server's answer, not
+    /// the reader's click. `Ok(None)` is the same absent-tag answer as [`Self::load_tag`].
+    fn follow_tag(
+        &self,
+        _name: String,
+        _on: bool,
+        done: Callback<Result<Option<Tag>, String>>,
+    ) {
+        done.run(Err("Following a tag needs the app.".to_owned()));
+    }
+
+    /// Whether this paint can follow tags at all, which is what draws the verb.
+    fn can_follow_tags(&self) -> bool {
+        false
+    }
 
     /// A platform trigger that asks for the next page when it scrolls into view.
     fn infinite_more(&self, _active: Signal<bool>, _on_load: Callback<()>) -> Option<ChildrenFn> {
@@ -549,6 +576,10 @@ pub fn RouteView(
         }
         Route::Notifications => view! {
             <NotificationsScreen runtime card/>
+        }
+        .into_any(),
+        Route::Tag(name) => view! {
+            <TagScreen runtime name card/>
         }
         .into_any(),
         Route::Messages => view! {
@@ -717,12 +748,13 @@ pub fn RouteView(
 }
 
 #[component]
-fn TimelineScreen(
+pub(crate) fn TimelineScreen(
     runtime: Arc<dyn Runtime>,
     kind: TimelineKind,
     card: CardRenderer,
     #[prop(optional_no_strip)] header: Option<ChildrenFn>,
     #[prop(optional_no_strip)] banner: Option<ChildrenFn>,
+    #[prop(optional_no_strip)] tabs: Option<ChildrenFn>,
 ) -> impl IntoView {
     let revision = runtime.revision();
     let initial = runtime.timeline(&kind);
@@ -810,6 +842,7 @@ fn TimelineScreen(
             empty_note=empty_note
             header=header
             banner=banner
+            tabs=tabs
             error=Signal::derive(move || error.get())
             loading=loading
             has_items=Signal::derive(move || !items.get().is_empty())
@@ -819,32 +852,37 @@ fn TimelineScreen(
     }
 }
 
-fn copy(kind: &TimelineKind) -> (&'static str, &'static str, &'static str) {
+fn copy(kind: &TimelineKind) -> (String, String, String) {
     match kind {
         TimelineKind::Home => (
-            "Home",
-            "Posts from the people you follow.",
-            "The people you follow have not posted yet.",
+            "Home".to_owned(),
+            "Posts from the people you follow.".to_owned(),
+            "The people you follow have not posted yet.".to_owned(),
         ),
         TimelineKind::Local => (
-            "Local",
-            "Posts from this instance.",
-            "No one on this instance has posted yet.",
+            "Local".to_owned(),
+            "Posts from this instance.".to_owned(),
+            "No one on this instance has posted yet.".to_owned(),
         ),
         TimelineKind::Federated => (
-            "Federated",
-            "Posts from instances this one knows about.",
-            "No federated posts have arrived yet.",
+            "Federated".to_owned(),
+            "Posts from instances this one knows about.".to_owned(),
+            "No federated posts have arrived yet.".to_owned(),
         ),
         TimelineKind::Account(_) => (
-            "Posts",
-            "Posts from this account.",
-            "This account has not posted yet.",
+            "Posts".to_owned(),
+            "Posts from this account.".to_owned(),
+            "This account has not posted yet.".to_owned(),
         ),
         TimelineKind::List(_) => (
-            "List",
-            "Posts from the accounts on this list.",
-            "Nobody on this list has posted yet.",
+            "List".to_owned(),
+            "Posts from the accounts on this list.".to_owned(),
+            "Nobody on this list has posted yet.".to_owned(),
+        ),
+        TimelineKind::Tag(name) => (
+            format!("#{name}"),
+            format!("Posts tagged #{name}."),
+            format!("Nobody has posted with #{name} yet."),
         ),
     }
 }

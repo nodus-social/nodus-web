@@ -191,8 +191,8 @@ fn current_pathname() -> String {
 
 /// One value from the address bar's query string.
 ///
-/// Read once by a screen that can be arrived at with a question already asked — a hashtag
-/// chip links to `/search?q=%23rust`, and an empty search box would throw the question
+/// Read once by a screen that can be arrived at with a question already asked — a mention
+/// chip links to `/search?q=%40ada`, and an empty search box would throw the question
 /// away. Percent escapes are decoded for `%`, `#`, `@` and spaces, which is what a chip and
 /// a keyboard produce; anything else is left as written rather than guessed at.
 #[must_use]

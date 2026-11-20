@@ -12,12 +12,12 @@ use core::future::Future;
 use nodus_client_core::InstanceApi;
 use nodus_client_core::actions::{
     AccountActions, Browse, FilterActions, HighlightActions, InstanceMeta, MediaActions,
-    ScheduleActions, Search, StatusActions,
+    ScheduleActions, Search, StatusActions, TagActions,
 };
 use nodus_client_core::model::{
     Account, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft, HistoryEntry,
     Language, List, LocalId, MediaAttachment, Poll, PollDraft, ProfileUpdate, Relationship,
-    SearchResults, Status,
+    SearchResults, Status, Tag,
 };
 use nodus_mastodon::BrowserInstance;
 use nodus_web::shared::account_state::AccountCache;
@@ -626,6 +626,36 @@ pub async fn feature_tag(name: &str) -> Result<(), String> {
 /// Stops featuring a tag.
 pub async fn unfeature_tag(id: &str) -> Result<(), String> {
     call(transport()?.unfeature_tag(id)).await
+}
+
+/// One tag's header, with the reader's subscription state.
+///
+/// A 404 is answered as `Ok(None)` rather than an error: on this API a name nobody has
+/// used is a tag that does not exist, which the screen says in a note and not in a toast.
+pub async fn tag(name: &str) -> Result<Option<Tag>, String> {
+    match transport()?.tag(name).await {
+        Ok(found) => Ok(Some(found)),
+        Err(nodus_client_core::Error::Status { status: 404, .. }) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Follows or unfollows a tag, answering with the instance's own state.
+///
+/// Nothing is written locally: the returned tag carries the `following` the server
+/// recorded, so the button reflects what happened rather than what was clicked.
+pub async fn follow_tag(name: &str, on: bool) -> Result<Option<Tag>, String> {
+    let instance = transport()?;
+    let answer = if on {
+        instance.follow_tag(name).await
+    } else {
+        instance.unfollow_tag(name).await
+    };
+    match answer {
+        Ok(found) => Ok(Some(found)),
+        Err(nodus_client_core::Error::Status { status: 404, .. }) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Marks a conversation as read.

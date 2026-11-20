@@ -54,6 +54,18 @@ export function status(overrides = {}) {
   }
 }
 
+/** A tag, with the fields the tag screen reads. */
+export function tag(overrides = {}) {
+  return {
+    id: '13',
+    name: 'rust',
+    url: `https://${HOST}/tags/rust`,
+    history: [],
+    following: false,
+    ...overrides,
+  }
+}
+
 /** The `localStorage` record the client writes at sign-in (`nodus-session/2`). */
 export function sessionRecord({ host = HOST, token = TOKEN, id = ACCOUNT_ID, acct = 'ada' } = {}) {
   return ['nodus-session/2', host, token, id, acct].join('\n')
@@ -257,6 +269,15 @@ export async function stubApi(
   await page.route(/\/api\/v1\/statuses\/[^/]+$/, (route) =>
     route.fulfill({ headers: CORS, json: single ?? statuses[0] }),
   )
+  // A tag is a place: the screen reads its header and its timeline, and the follow verb
+  // answers with the instance's own state rather than an echo of what was asked.
+  await page.route('**/api/v1/timelines/tag/**', (route) =>
+    route.fulfill({ headers: CORS, json: statuses }),
+  )
+  await page.route(/\/api\/v1\/tags\/[^/]+\/(un)?follow$/, (route) =>
+    route.fulfill({ headers: CORS, json: { ...tag(), following: route.request().url().endsWith('/follow') } }),
+  )
+  await page.route(/\/api\/v1\/tags\/[^/]+$/, (route) => route.fulfill({ headers: CORS, json: tag() }))
   await page.route('**/api/v1/notifications**', (route) =>
     route.fulfill({ headers: CORS, json: notifications }),
   )

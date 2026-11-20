@@ -42,6 +42,8 @@ pub enum ScreenKind {
     Search,
     /// One account and its posts.
     Account,
+    /// One hashtag and its timeline.
+    Tag,
     /// One status and its context.
     Status,
     /// The moderation areas.
@@ -85,6 +87,9 @@ impl Screen {
         }
         if path.starts_with("/accounts/") {
             return Self::named("/accounts", ScreenKind::Account);
+        }
+        if path.starts_with("/tags/") {
+            return Self::named("/tags", ScreenKind::Tag);
         }
         if path.starts_with("/saved/") {
             return Self::named("/saved", ScreenKind::Saved { bookmarks: false });
@@ -204,6 +209,11 @@ pub const SCREENS: &[Screen] = &[
         kind: ScreenKind::Account,
     },
     Screen {
+        path: "/tags",
+        title: "Tag",
+        kind: ScreenKind::Tag,
+    },
+    Screen {
         path: "/moderation",
         title: "Moderation",
         kind: ScreenKind::Moderation,
@@ -242,6 +252,10 @@ mod tests {
         assert_eq!(
             Screen::of_path("/accounts/7").map(|s| s.kind),
             Some(ScreenKind::Account)
+        );
+        assert_eq!(
+            Screen::of_path("/tags/rust").map(|s| s.kind),
+            Some(ScreenKind::Tag)
         );
         assert_eq!(
             Screen::of_path("/saved/bookmarks").map(|s| s.kind),

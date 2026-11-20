@@ -352,9 +352,11 @@ fn StatusChips(
         <div class="flex flex-wrap items-center gap-1.5">
             <For each=move || tags.clone() key=|tag| format!("tag-{}", tag.name) let:tag>
                 {
-                    let href = format!("/search?q={}", encode(&format!("#{}", tag.name)));
+                    // The tag screen, not a search: a hashtag is a place with a timeline
+                    // of its own, and a reader who clicks one expects to land there.
+                    let href = format!("/tags/{}", encode(&tag.name));
                     view! {
-                        <a class="badge badge-outline badge-sm gap-1" href=href title="Search this hashtag">
+                        <a class="badge badge-outline badge-sm gap-1" href=href title="Open this hashtag">
                             <Icon icon=Icon::Tag class="size-3"/>
                             {format!("#{}", tag.name)}
                         </a>
@@ -392,7 +394,8 @@ fn StatusChips(
     }
 }
 
-/// Percent-encodes what a query string cannot carry, so `#rust` is not read as a fragment.
+/// Percent-encodes what a path segment or query string cannot carry; `encode_query` leaves
+/// spaces as `%20`, which is valid in both places.
 fn encode(text: &str) -> String {
     crate::html::encode_query(text)
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use nodus_client_core::model::{Account, Context, Relationship, Status};
+use nodus_client_core::model::{Account, Context, Relationship, Status, Tag};
 use nodus_client_sdk::page::{PageEntry, PageKind};
 use nodus_client_sdk::{Command, Timeline};
 use nodus_pages::pages::settings::nav::SettingsSection;
@@ -55,12 +55,12 @@ impl Runtime for ClientRuntime {
     }
 
     fn timeline(&self, kind: &TimelineKind) -> TimelineReply {
-        let which = which(kind);
-        let (items, cursor) = timeline::read(which.clone(), None);
+        let (which, tag) = which(kind);
+        let (items, cursor) = timeline::read(which.clone(), tag.as_deref());
         TimelineReply {
             items,
             cursor,
-            held: timeline::held(which, None),
+            held: timeline::held(which, tag.as_deref()),
             unavailable: false,
         }
     }
@@ -71,10 +71,26 @@ impl Runtime for ClientRuntime {
         cursor: Option<String>,
         done: Callback<Result<(), String>>,
     ) {
-        let which = which(&kind);
+        let (which, tag) = which(&kind);
         spawn_local(async move {
-            done.run(timeline::ensure(which, None, cursor).await.map(|_| ()));
+            done.run(timeline::ensure(which, tag, cursor).await.map(|_| ()));
         });
+    }
+
+    fn load_tag(&self, name: String, done: Callback<Result<Option<Tag>, String>>) {
+        spawn_local(async move {
+            done.run(actions::tag(&name).await);
+        });
+    }
+
+    fn follow_tag(&self, name: String, on: bool, done: Callback<Result<Option<Tag>, String>>) {
+        spawn_local(async move {
+            done.run(actions::follow_tag(&name, on).await);
+        });
+    }
+
+    fn can_follow_tags(&self) -> bool {
+        true
     }
 
     fn page(&self, kind: &PageKind) -> Option<PageEntry> {
@@ -654,12 +670,15 @@ impl Runtime for ClientRuntime {
     }
 }
 
-fn which(kind: &TimelineKind) -> Timeline {
+fn which(kind: &TimelineKind) -> (Timeline, Option<String>) {
     match kind {
-        TimelineKind::Home => Timeline::Home,
-        TimelineKind::Local => Timeline::Local,
-        TimelineKind::Federated => Timeline::Federated,
-        TimelineKind::Account(id) => Timeline::Account(id.clone()),
-        TimelineKind::List(id) => Timeline::List(id.clone()),
+        TimelineKind::Home => (Timeline::Home, None),
+        TimelineKind::Local => (Timeline::Local, None),
+        TimelineKind::Federated => (Timeline::Federated, None),
+        TimelineKind::Account(id) => (Timeline::Account(id.clone()), None),
+        TimelineKind::List(id) => (Timeline::List(id.clone()), None),
+        // The tag travels beside the timeline, not inside it: the SDK keys the store by
+        // "tag" and reads the requested name from the request.
+        TimelineKind::Tag(name) => (Timeline::Tag, Some(name.clone())),
     }
 }

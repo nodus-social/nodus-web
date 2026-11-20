@@ -22,4 +22,5 @@ pub mod saved;
 pub mod scheduled;
 pub mod search;
 pub mod settings;
+pub mod tag;
 pub mod thread;

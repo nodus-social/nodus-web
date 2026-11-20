@@ -43,6 +43,11 @@ pub enum Route {
     },
     /// One account's profile and statuses.
     Account(String),
+    /// One hashtag: its header and its timeline, open at `/tags/{name}`.
+    ///
+    /// A hashtag is a place a reader can link, reload and come back to, so its name
+    /// is in the address rather than in a filter over another screen.
+    Tag(String),
     /// Notifications for the signed-in account.
     Messages,
     Notifications,
@@ -125,6 +130,7 @@ impl Route {
                 }
             }
             Self::Account(id) => format!("/accounts/{id}"),
+            Self::Tag(name) => format!("/tags/{}", encode_segment(name)),
             Self::Messages => "/messages".to_owned(),
             Self::Notifications => "/notifications".to_owned(),
             Self::Search => "/search".to_owned(),
@@ -265,6 +271,14 @@ impl Route {
                 return Self::Account(id.to_owned());
             }
         }
+        // A hashtag is read by name, so the segment is percent-decoded back into the
+        // name the instance knows; a stray leading `#` is the same tag.
+        if let Some(name) = trimmed.strip_prefix("/tags/") {
+            let name = decode_query(name).trim_start_matches('#').to_owned();
+            if !name.is_empty() {
+                return Self::Tag(name);
+            }
+        }
         // After `/accounts/`, so a status id that looks like a path cannot shadow a
         // profile: the longer prefix wins by being tested first.
         if let Some(id) = trimmed.strip_prefix("/compose/") {
@@ -338,6 +352,26 @@ pub fn parse_query_param(search: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Percent-encodes one path segment, leaving the characters a hashtag is usually
+/// written with alone so `/tags/rust` stays readable.
+#[must_use]
+pub fn encode_segment(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 /// Decodes percent-encoded UTF-8 sequences and `+` spaces in a query-string value.
 #[must_use]
 pub fn decode_query(value: &str) -> String {
@@ -372,6 +406,23 @@ pub fn decode_query(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Route, decode_query, parse_query_param};
+
+    #[test]
+    fn a_tag_is_a_place_and_its_name_survives_the_round_trip() {
+        assert_eq!(Route::from_path("/tags/rust"), Route::Tag("rust".to_owned()));
+        assert_eq!(
+            Route::from_path("/tags/%23rust"),
+            Route::Tag("rust".to_owned())
+        );
+        assert_eq!(
+            Route::from_path("/tags/caf%C3%A9"),
+            Route::Tag("café".to_owned())
+        );
+        assert_eq!(
+            Route::Tag("café".to_owned()).path(),
+            format!("{}/tags/caf%C3%A9", super::BASE)
+        );
+    }
 
     #[test]
     fn parse_href_preserves_query_and_fragment() {
