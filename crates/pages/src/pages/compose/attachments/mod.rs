@@ -29,6 +29,12 @@ pub fn Attachments(
     /// Marks one attachment sensitive.
     #[prop(optional)]
     on_sensitive: Option<Callback<(String, bool)>>,
+    /// Attachments that came from the account's drive, by id and drive filename.
+    ///
+    /// A tile whose id is named here shows the filename it had in the drive and a
+    /// marker, so a reader can tell it apart from a file uploaded through this form.
+    #[prop(default = Signal::derive(Vec::new))]
+    from_drive: Signal<Vec<(String, String)>>,
     /// The hidden file input, which owns the browser's file handling.
     #[prop(optional)]
     picker: Option<ChildrenFn>,
@@ -69,6 +75,7 @@ pub fn Attachments(
                         on_remove=on_remove
                         on_alt=on_alt
                         on_sensitive=on_sensitive
+                        from_drive=from_drive
                     />
                 </For>
             </ul>
@@ -88,6 +95,7 @@ fn AttachmentTile(
     on_remove: Option<Callback<String>>,
     on_alt: Option<Callback<(String, String)>>,
     on_sensitive: Option<Callback<(String, bool)>>,
+    from_drive: Signal<Vec<(String, String)>>,
 ) -> impl IntoView {
     let remove_id = attachment.id.clone();
     let save_id = attachment.id.clone();
@@ -105,6 +113,16 @@ fn AttachmentTile(
         .as_deref()
         .is_some_and(|description| !description.trim().is_empty());
     let is_image = attachment.kind == MediaKind::Image;
+    // The drive filename, when this tile came from the drive: read from the signal
+    // inside the tile so a marker that arrives after the tile still paints.
+    let drive_id = attachment.id.clone();
+    let drive_name = Signal::derive(move || {
+        from_drive
+            .get()
+            .into_iter()
+            .find(|(id, _)| id == &drive_id)
+            .map(|(_, name)| name)
+    });
     let (editing, set_editing) = signal(false);
     let (alt, set_alt) = signal(attachment.description.clone().unwrap_or_default());
     let (label_set, set_label_set) = signal(has_label);
@@ -155,10 +173,22 @@ fn AttachmentTile(
                 "×"
             </button>
 
+            <Show when=move || drive_name.get().is_some()>
+                <span
+                    class="badge badge-primary badge-xs"
+                    title="This file stayed in your drive; nothing was uploaded again"
+                >
+                    "from your drive"
+                </span>
+                <span class="max-w-20 truncate text-xs opacity-70">
+                    {move || drive_name.get().unwrap_or_default()}
+                </span>
+            </Show>
+
             <div class="flex items-center gap-1">
                 <button
                     type="button"
-                    class="btn btn-ghost btn-xs px-1"
+                    class="btn btn-ghost px-1 btn-xs"
                     title="Describe this attachment for someone who cannot see it"
                     class:text-warning=move || !label_set.get()
                     on:click=move |_| set_editing.update(|open| *open = !*open)

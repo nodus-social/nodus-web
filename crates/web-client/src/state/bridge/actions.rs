@@ -385,6 +385,65 @@ pub async fn upload_media(
     call(transport()?.upload_media(&bytes, &mime, description.as_deref())).await
 }
 
+/// Attaches a file the drive already holds, without re-uploading its bytes.
+///
+/// `POST /api/v1/media` reads a multipart body, and a single text field
+/// `stored_object_id` names the drive object: the server mints the attachment over the
+/// bytes it already has, so the body carries no `file` part at all. That absence is the
+/// point — it is what proves nothing was copied or sent again.
+pub async fn attach_from_drive(object_id: &str) -> Result<MediaAttachment, String> {
+    use wasm_bindgen::JsCast as _;
+    use wasm_bindgen::prelude::Closure;
+
+    let transport = instance_transport().ok_or("This session has no instance to attach to.")?;
+    let url = transport
+        .url_segments(&["api", "v1", "media"])
+        .map_err(|error| error.to_string())?;
+    let refused = || "This browser refused the attachment.".to_owned();
+    let form = web_sys::FormData::new().map_err(|_| refused())?;
+    form.append_with_str("stored_object_id", object_id)
+        .map_err(|_| refused())?;
+    let xhr = web_sys::XmlHttpRequest::new().map_err(|_| refused())?;
+    xhr.open_with_async("POST", url.as_str(), true)
+        .map_err(|_| refused())?;
+    let token = transport.token().expose();
+    if !token.is_empty() {
+        xhr.set_request_header("Authorization", &format!("Bearer {token}"))
+            .map_err(|_| refused())?;
+    }
+    xhr.set_response_type(web_sys::XmlHttpRequestResponseType::Text);
+
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        let loaded = {
+            let resolve = resolve.clone();
+            let xhr = xhr.clone();
+            Closure::<dyn FnMut()>::new(move || {
+                resolve.call1(&wasm_bindgen::JsValue::NULL, &xhr).ok();
+            })
+        };
+        let failed = {
+            let reject = reject.clone();
+            Closure::<dyn FnMut()>::new(move || {
+                reject.call0(&wasm_bindgen::JsValue::NULL).ok();
+            })
+        };
+        xhr.set_onload(Some(loaded.as_ref().unchecked_ref()));
+        xhr.set_onerror(Some(failed.as_ref().unchecked_ref()));
+        loaded.forget();
+        failed.forget();
+    });
+    xhr.send_with_opt_form_data(Some(&form)).map_err(|_| refused())?;
+    wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .map_err(|_| refused())?;
+
+    let text = xhr.response_text().map_err(|_| refused())?.unwrap_or_default();
+    if xhr.status().map_err(|_| refused())? >= 400 {
+        return Err(format!("The instance refused the drive file: {text}"));
+    }
+    serde_json::from_str::<MediaAttachment>(&text).map_err(|error| error.to_string())
+}
+
 /// The account id the session belongs to, for "may I edit this" questions.
 pub fn viewer_id() -> Option<String> {
     super::with_sdk(|sdk| sdk.state().session.get().map(|session| session.account_id))

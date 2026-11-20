@@ -185,6 +185,28 @@ pub async fn load(folder: Option<&str>) -> Result<(Summary, Vec<DriveFile>, Vec<
     Ok((summary, files, tree.folders))
 }
 
+/// Every file the drive holds, from every folder.
+///
+/// `GET /api/v1/drive/files` answers one folder at a time, and a picker cannot ask the
+/// writer to open the folders first: the tree is walked and each folder's files are read,
+/// in the order the sidebar lists them.
+pub async fn all_files() -> Result<Vec<DriveFile>, String> {
+    let (_, mut files, folders) = load(None).await?;
+    let mut rows = Vec::new();
+    flatten(&folders, 0, &mut rows);
+    for row in rows {
+        let transport = transport()?;
+        let mut url = drive_url(&["files"])?;
+        url.set_query(Some(&format!("folder_id={}", row.id)));
+        let more: Vec<DriveFile> = transport
+            .fetch(transport.get(url))
+            .await
+            .map_err(|error| error.to_string())?;
+        files.extend(more);
+    }
+    Ok(files)
+}
+
 /// Adds a folder under `parent` (`None` at the root).
 pub async fn create_folder(name: &str, parent: Option<&str>) -> Result<(), String> {
     let transport = transport()?;

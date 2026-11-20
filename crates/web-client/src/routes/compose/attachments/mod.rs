@@ -22,6 +22,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::state::alive::Alive;
 use crate::state::bridge::actions;
+use crate::state::bridge::drive::{self, DriveFile};
 
 /// The id of the hidden file input, so the control row can open the picker.
 const ATTACH_INPUT: &str = "nodus-attach-input";
@@ -152,6 +153,63 @@ pub fn Attachments(
 ) -> impl IntoView {
     let (uploading, set_uploading) = signal(false);
     let (percent, set_percent) = signal(None::<u8>);
+    // The drive picker: open, what the drive answered, the search, and whether a read or
+    // an attach is in flight. One flag for both, because the row shows the same spinner.
+    let (open, set_open) = signal(false);
+    let (files, set_files) = signal(Vec::<DriveFile>::new());
+    let (query, set_query) = signal(String::new());
+    let (loading, set_loading) = signal(false);
+    // Which attachments came from the drive, and the filename each had there. Kept beside
+    // `media` because the wire attachment carries only the minted id, not the drive name.
+    let from_drive = RwSignal::new(Vec::<(String, String)>::new());
+
+    let open_drive = Callback::new(move |()| {
+        set_open.set(true);
+        set_query.set(String::new());
+        set_loading.set(true);
+        let alive = Alive::new();
+        spawn_local(async move {
+            match drive::all_files().await {
+                Ok(rows) => alive.if_alive(|| set_files.set(rows)),
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+            alive.if_alive(|| set_loading.set(false));
+        });
+    });
+
+    // Attaching a drive file mints an attachment over bytes the drive already holds: no
+    // transfer, so the row has no progress to show, only the wait for the instance.
+    let choose = Callback::new(move |file: DriveFile| {
+        if file.processing_state != "ready" {
+            return;
+        }
+        set_loading.set(true);
+        let alive = Alive::new();
+        spawn_local(async move {
+            let name = file.filename.clone();
+            match actions::attach_from_drive(&file.id).await {
+                Ok(attachment) => {
+                    let id = attachment.id.clone();
+                    alive.if_alive(|| {
+                        media.update(|list| list.push(attachment));
+                        from_drive.update(|list| list.push((id, name)));
+                        set_open.set(false);
+                    });
+                }
+                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+            }
+            alive.if_alive(|| set_loading.set(false));
+        });
+    });
+
+    let matches = Memo::new(move |_| {
+        let needle = query.get().trim().to_lowercase();
+        files
+            .get()
+            .into_iter()
+            .filter(|file| needle.is_empty() || file.filename.to_lowercase().contains(&needle))
+            .collect::<Vec<_>>()
+    });
 
     // The input is a slot because it is the browser's, not the view's: `Files`, the accept
     // filter and the click that opens the dialog all belong to this crate.
@@ -169,6 +227,17 @@ pub fn Attachments(
                     <Icon icon=Icon::Image/>
                     <span class="max-sm:hidden">"Media"</span>
                 </button>
+                <button
+                    type="button"
+                    class="btn btn-outline btn-sm gap-1 border-dashed max-sm:btn-square"
+                    title="Choose from your drive"
+                    aria-label="Choose from your drive"
+                    disabled=move || uploading.get()
+                    on:click=move |_| open_drive.run(())
+                >
+                    <Icon icon=Icon::List/>
+                    <span class="max-sm:hidden">"Drive"</span>
+                </button>
             })}
             <input
                 id=ATTACH_INPUT
@@ -179,12 +248,80 @@ pub fn Attachments(
                 disabled=move || uploading.get()
                 on:change=move |event| pick(event, set_uploading, set_percent, media, set_error)
             />
+
+            <Show when=move || open.get()>
+                <div
+                    class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60 p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Choose from your drive"
+                >
+                    <div class="card w-full max-w-md gap-2 bg-base-100 p-4 shadow-xl">
+                        <h2 class="text-sm font-semibold">"Choose from your drive"</h2>
+                        <input
+                            class="input input-bordered input-sm w-full"
+                            type="search"
+                            placeholder="Search your drive"
+                            aria-label="Search your drive"
+                            prop:value=query
+                            on:input=move |event| set_query.set(event_target_value(&event))
+                        />
+                        <Show when=move || loading.get()>
+                            <span class="loading loading-spinner loading-sm" aria-label="Reading your drive"></span>
+                        </Show>
+                        <Show when=move || !loading.get() && matches.get().is_empty()>
+                            <p class="text-sm opacity-70">"Nothing in your drive matches."</p>
+                        </Show>
+                        <ul class="flex max-h-72 flex-col gap-1 overflow-auto">
+                            <For
+                                each=move || matches.get()
+                                key=|file| (file.id.clone(), file.processing_state.clone())
+                                let:file
+                            >
+                                {
+                                    let ready = file.processing_state == "ready";
+                                    let chosen = file.clone();
+                                    let name = file.filename.clone();
+                                    let label = name.clone();
+                                    view! {
+                                        <li>
+                                            <button
+                                                type="button"
+                                                class="btn btn-ghost btn-sm w-full justify-start gap-2"
+                                                disabled=!ready
+                                                on:click=move |_| choose.run(chosen.clone())
+                                            >
+                                                <span class="truncate">{name}</span>
+                                                {(!ready).then(|| view! {
+                                                    <span class="text-xs opacity-60">
+                                                        {format!("{label}: the preview is still being made")}
+                                                    </span>
+                                                })}
+                                            </button>
+                                        </li>
+                                    }
+                                }
+                            </For>
+                        </ul>
+                        <div class="flex justify-end">
+                            <button
+                                type="button"
+                                class="btn btn-ghost btn-sm"
+                                on:click=move |_| set_open.set(false)
+                            >
+                                "Cancel"
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
         }
         .into_any()
     }) as ChildrenFn;
 
     let remove = Callback::new(move |id: String| {
         media.update(|list| list.retain(|item| item.id != id));
+        from_drive.update(|list| list.retain(|(entry, _)| entry != &id));
     });
 
     // Alt text is edited after the upload because that is when the writer knows what the
@@ -229,6 +366,7 @@ pub fn Attachments(
         on_remove: Some(remove),
         on_alt: Some(describe),
         on_sensitive: Some(sensitive),
+        from_drive: from_drive.into(),
         picker: Some(input),
     })
 }

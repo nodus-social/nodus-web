@@ -202,3 +202,135 @@ test('poll choices do not count toward the status character limit', async ({ pag
   await expect(page.getByText('480/500')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Post', exact: true })).toBeEnabled()
 })
+
+/** One drive file, in the shape `GET /api/v1/drive/files` answers. */
+function driveFile({ id = 'f1', filename = 'sunset.png', state = 'ready' } = {}) {
+  return {
+    id,
+    folder_id: null,
+    filename,
+    mime_type: 'image/png',
+    byte_size: 4096,
+    sha256: '0'.repeat(64),
+    visibility: 'private',
+    processing_state: state,
+    created_at: '2026-11-07T12:00:00.000Z',
+  }
+}
+
+/** The summary, the tree and the files a drive picker reads. */
+async function stubDrive(page, files) {
+  await page.route('**/api/v1/drive**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/drive') {
+      return route.fulfill({
+        headers: CORS,
+        json: {
+          used_bytes: files.reduce((sum, file) => sum + file.byte_size, 0),
+          objects: files.length,
+          folders: 0,
+        },
+      })
+    }
+    if (path === '/api/v1/drive/folders') return route.fulfill({ headers: CORS, json: { folders: [] } })
+    if (path === '/api/v1/drive/files') return route.fulfill({ headers: CORS, json: files })
+    return route.fulfill({ status: 404, headers: CORS, json: { error: 'no route' } })
+  })
+}
+
+/** The attachment an attach-from-drive mints, and every request that asked for one. */
+async function stubAttach(page) {
+  const calls = []
+  await page.route('**/api/v1/media', async (route) => {
+    calls.push({
+      contentType: route.request().headers()['content-type'] ?? '',
+      body: route.request().postData() ?? '',
+    })
+    await route.fulfill({
+      headers: CORS,
+      json: {
+        id: '501',
+        type: 'image',
+        url: 'https://example.test/media/501.png',
+        preview_url: 'https://example.test/media/501_small.png',
+        description: null,
+        sensitive: false,
+        processing_state: 'ready',
+      },
+    })
+  })
+  return calls
+}
+
+test('a drive file is attached by id, never re-uploaded, and posted as media_ids', async ({
+  page,
+}) => {
+  await stubApi(page, { statuses: [status()] })
+  await signedIn(page)
+  await page.goto('/')
+  await stubDrive(page, [driveFile()])
+  const attachCalls = await stubAttach(page)
+
+  await page.getByRole('button', { name: 'Choose from your drive' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Choose from your drive' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: /sunset\.png/ }).click()
+
+  // The chip says where it came from, so it is not mistaken for an upload.
+  await expect(page.getByText('from your drive')).toBeVisible()
+  await expect(page.getByRole('button', { name: /sunset\.png/ })).toHaveCount(0)
+
+  // One request to mint the attachment, carrying the drive id and no file at all: no
+  // bytes left the browser, which is what "no re-upload" means.
+  expect(attachCalls).toHaveLength(1)
+  expect(attachCalls[0].contentType).toContain('multipart/form-data')
+  expect(attachCalls[0].body).toContain('stored_object_id')
+  expect(attachCalls[0].body).toContain('f1')
+  expect(attachCalls[0].body).not.toContain('filename="')
+
+  const bodies = await watchPosts(page, status({ content: '<p>From the drive.</p>' }))
+  await write(page, 'From the drive.')
+  await page.getByRole('button', { name: 'Post', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('Post published as')
+
+  // The same `media_ids` field an upload uses carries the minted id.
+  expect(bodies).toHaveLength(1)
+  expect(new URLSearchParams(bodies[0]).getAll('media_ids[]')).toEqual(['501'])
+})
+
+test('a drive file still being processed cannot be chosen', async ({ page }) => {
+  await stubApi(page, { statuses: [status()] })
+  await signedIn(page)
+  await page.goto('/')
+  await stubDrive(page, [driveFile({ id: 'f2', filename: 'slow.mp4', state: 'pending' })])
+  const attachCalls = await stubAttach(page)
+
+  await page.getByRole('button', { name: 'Choose from your drive' }).click()
+  const row = page.getByRole('button', { name: /slow\.mp4/ })
+  await expect(row).toBeDisabled()
+  await expect(row).toContainText('the preview is still being made')
+  // Disabled is also the answer to a forced click: no request leaves the page.
+  await row.click({ force: true })
+  expect(attachCalls).toHaveLength(0)
+  await expect(page.getByText('from your drive')).toHaveCount(0)
+})
+
+test('cancelling the drive picker adds nothing to the draft', async ({ page }) => {
+  await stubApi(page, { statuses: [status()] })
+  await signedIn(page)
+  await page.goto('/')
+  await stubDrive(page, [driveFile()])
+  const attachCalls = await stubAttach(page)
+
+  await page.getByRole('button', { name: 'Choose from your drive' }).click()
+  await expect(page.getByRole('dialog', { name: 'Choose from your drive' })).toBeVisible()
+  // The search field narrows the list by filename, and cancel is still the way out.
+  await page.getByLabel('Search your drive').fill('sun')
+  await expect(page.getByRole('button', { name: /sunset\.png/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  await expect(page.getByRole('dialog', { name: 'Choose from your drive' })).toHaveCount(0)
+  expect(attachCalls).toHaveLength(0)
+  await expect(page.getByText('from your drive')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Post', exact: true })).toBeDisabled()
+})
