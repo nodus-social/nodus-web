@@ -5,6 +5,13 @@
 //! that only the browser can provide. A write reloads the whole screen rather than patching
 //! the row it touched: `used_bytes` is deduplicated, so an upload or a delete changes a
 //! number no row carries, and a screen that guessed it would drift.
+//!
+//! The mount flag is the component's, made once in the body, not one per callback:
+//! `Alive::new` registers its release with the reactive owner current when it runs, and a
+//! callback invoked from inside a `<Show>` block runs under that block's owner. The
+//! confirmation buttons close their block in the same tick as the write, so a flag made
+//! there is released before the reply lands — every continuation after the await is then
+//! dropped, and the row, the meter and `busy` all keep the values they had.
 
 use std::rc::Rc;
 
@@ -28,12 +35,15 @@ pub fn DriveScreen() -> impl IntoView {
     let (error, set_error) = signal(None::<String>);
     let (upload_visibility, set_upload_visibility) = signal("private".to_owned());
 
+    // One flag for the screen. See the module note: a flag made inside a callback
+    // belongs to whatever block invoked it, and that block is often gone by the reply.
+    let alive = Alive::new();
+
     let reload = Callback::new(move |()| set_tick.update(|value| *value = value.wrapping_add(1)));
 
     Effect::new(move |_| {
         tick.get();
         let folder = current.get();
-        let alive = Alive::new();
         set_busy.set(Some("Reading the drive…".to_owned()));
         spawn_local(async move {
             match drive::load(folder.as_deref()).await {
@@ -54,7 +64,6 @@ pub fn DriveScreen() -> impl IntoView {
 
     let create_folder = Callback::new(move |name: String| {
         let parent = current.get_untracked();
-        let alive = Alive::new();
         set_busy.set(Some("Making the folder…".to_owned()));
         spawn_local(async move {
             match drive::create_folder(&name, parent.as_deref()).await {
@@ -69,7 +78,6 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let rename_folder = Callback::new(move |(id, name): (String, String)| {
-        let alive = Alive::new();
         spawn_local(async move {
             match drive::rename_folder(&id, &name).await {
                 Ok(()) => alive.if_alive(|| {
@@ -83,7 +91,6 @@ pub fn DriveScreen() -> impl IntoView {
 
     let delete_folder = Callback::new(move |id: String| {
         let open = current.get_untracked();
-        let alive = Alive::new();
         set_busy.set(Some("Deleting the folder…".to_owned()));
         spawn_local(async move {
             match drive::delete_folder(&id).await {
@@ -101,7 +108,6 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let rename_file = Callback::new(move |(id, name): (String, String)| {
-        let alive = Alive::new();
         spawn_local(async move {
             match drive::rename_file(&id, &name).await {
                 Ok(()) => alive.if_alive(|| {
@@ -114,7 +120,6 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let move_file = Callback::new(move |(id, folder): (String, Option<String>)| {
-        let alive = Alive::new();
         spawn_local(async move {
             match drive::move_file(&id, folder.as_deref()).await {
                 Ok(()) => alive.if_alive(|| {
@@ -127,7 +132,6 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let visibility = Callback::new(move |(id, value): (String, String)| {
-        let alive = Alive::new();
         spawn_local(async move {
             match drive::set_visibility(&id, &value).await {
                 Ok(()) => alive.if_alive(|| {
@@ -140,7 +144,6 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let delete_file = Callback::new(move |id: String| {
-        let alive = Alive::new();
         set_busy.set(Some("Deleting the file…".to_owned()));
         spawn_local(async move {
             match drive::delete_file(&id).await {
@@ -162,7 +165,6 @@ pub fn DriveScreen() -> impl IntoView {
         else {
             return;
         };
-        let alive = Alive::new();
         spawn_local(async move {
             if let Err(message) = drive::download(&file).await {
                 alive.if_alive(|| set_error.set(Some(message)));
@@ -190,7 +192,6 @@ pub fn DriveScreen() -> impl IntoView {
             }
             let folder = current.get_untracked();
             let visibility = upload_visibility.get_untracked();
-            let alive = Alive::new();
             spawn_local(async move {
                 let total = picked.len();
                 for (index, file) in picked.into_iter().enumerate() {

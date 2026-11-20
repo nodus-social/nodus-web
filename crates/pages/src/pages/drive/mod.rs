@@ -219,7 +219,11 @@ pub fn DrivePage(
                             </li>
                             <For
                                 each=move || folders.get()
-                                key=|folder| folder.id.clone()
+                                // A keyed list does not rebuild an item whose key is unchanged, and
+                                // a row paints its own name and indent: a key of the id alone
+                                // would leave a renamed folder showing its old name. The key is
+                                // the row.
+                                key=|folder| format!("{}|{}|{}", folder.id, folder.name, folder.depth)
                                 let:folder
                             >
                                 {
@@ -401,7 +405,25 @@ pub fn DrivePage(
                         </Show>
 
                         <ul class="divide-y divide-base-300">
-                            <For each=move || files.get() key=|file| file.id.clone() let:file>
+                            <For
+                                each=move || files.get()
+                                // Same reason as the folder list: the row paints the filename,
+                                // the size, the visibility and the processing state, and a rename
+                                // or a visibility change keeps the id, so a key of the id alone
+                                // would never repaint what it changed.
+                                key=|file| {
+                                    format!(
+                                        "{}|{}|{}|{}|{}|{}",
+                                        file.id,
+                                        file.filename,
+                                        file.mime_type,
+                                        file.size,
+                                        file.visibility,
+                                        file.processing_state,
+                                    )
+                                }
+                                let:file
+                            >
                                 {
                                     let id_download = file.id.clone();
                                     let id_rename = file.id.clone();
@@ -495,20 +517,23 @@ pub fn DrivePage(
                                                         }
                                                     >
                                                         <option value="">"Root"</option>
-                                                        {folders
-                                                            .get()
-                                                            .into_iter()
-                                                            .map(|folder| {
-                                                                let id = folder.id.clone();
-                                                                view! {
-                                                                    <option value=id.clone() selected=move || {
-                                                                        current.get().as_deref() == Some(id.as_str())
-                                                                    }>
-                                                                        {folder.name}
-                                                                    </option>
-                                                                }
-                                                            })
-                                                            .collect_view()}
+                                                        {move || {
+                                                            folders
+                                                                .get()
+                                                                .into_iter()
+                                                                .map(|folder| {
+                                                                    let id = folder.id.clone();
+                                                                    let chosen = id.clone();
+                                                                    view! {
+                                                                        <option value=id.clone() selected=move || {
+                                                                            current.get().as_deref() == Some(chosen.as_str())
+                                                                        }>
+                                                                            {folder.name}
+                                                                        </option>
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                        }}
                                                     </select>
                                                 </label>
                                                 <label class="flex items-center gap-1 text-xs">
