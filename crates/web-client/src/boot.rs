@@ -21,6 +21,7 @@ pub fn start() {
     // The rail cards' contents are read by components that mount and unmount as the rail
     // does, so the signal holding them must not belong to any of them.
     crate::state::bridge::sidebar::install();
+    crate::state::bridge::notifications::install();
     // The expander's signal, created with no owner for the same reason.
     crate::media::install();
     // The operating system decides light or dark, and may change its mind while the tab

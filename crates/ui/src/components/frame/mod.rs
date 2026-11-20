@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use super::rail::{ExtraDoors, Rail, RightRail, SessionBanner};
+use super::rail::{ExtraDoors, NoticeDoor, Rail, RightRail, SessionBanner};
 use crate::session_style::{BannerRegionKind, SessionStyle, StyleEditor};
 
 #[component]
@@ -54,6 +54,10 @@ pub fn Frame(
     /// One line of feedback from the editor (an upload that failed, for instance).
     #[prop(optional_no_strip)]
     notice: Option<Signal<Option<String>>>,
+    /// Whether this instance serves notifications, and how many are unread. Absent keeps
+    /// the rail's own entry, which is what the server paints.
+    #[prop(optional_no_strip)]
+    notices: Option<Signal<NoticeDoor>>,
 ) -> impl IntoView {
     let inner = StoredValue::new(inner);
     let active_style = Signal::derive(move || style.map(|s| s.get()).unwrap_or_default());
@@ -120,6 +124,7 @@ pub fn Frame(
                         editor=editor
                         profile=profile
                         sidebar=Some(Signal::derive(move || sidebar.get()))
+                        notices=notices
                     />
                 </Show>
                 <main class="min-w-0 flex-1 pb-[calc(5.5rem+env(safe-area-inset-bottom))] xl:pb-0">

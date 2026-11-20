@@ -101,6 +101,22 @@ pub struct Group {
     pub destinations: &'static [Destination],
 }
 
+/// Whether this account's instance serves notifications, and how many are unread.
+///
+/// The entry is not deleted from the layout when the answer is unknown: a server paint and
+/// a browser that has not asked yet both have to draw a door a reader can leave by. Only a
+/// 404 turns the entry off, and only a count turns it into a bell with a badge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NoticeDoor {
+    /// Not asked yet, or no session: draw the ordinary entry.
+    #[default]
+    Unknown,
+    /// The instance answered 404: draw nothing.
+    Absent,
+    /// The instance serves notifications; the number is what the reader has not read.
+    Unread(usize),
+}
+
 /// The rail the client shows, in its order.
 #[must_use]
 pub fn rail() -> Vec<Group> {
@@ -906,9 +922,14 @@ pub fn Rail(
     /// Present only while the reader edits the site itself.
     #[prop(optional_no_strip)]
     editor: Option<StyleEditor>,
+    /// Whether the instance serves notifications, and how many are unread. Absent keeps
+    /// the layout's own entry, which is what a server paint can honestly say.
+    #[prop(optional_no_strip)]
+    notices: Option<Signal<NoticeDoor>>,
 ) -> impl IntoView {
     let dragging: RwSignal<Option<String>> = RwSignal::new(None);
     let dragging_card: RwSignal<Option<ModuleKind>> = RwSignal::new(None);
+    let door = notices.unwrap_or_else(|| Signal::derive(|| NoticeDoor::Unknown));
     let cards = Memo::new(move |_| {
         style
             .map(|s| s.get().modules_in(ModuleRail::Left))
@@ -979,6 +1000,33 @@ pub fn Rail(
         >
             <ProfileCard profile=profile/>
             <nav aria-label="Primary navigation">
+                // The bell stands beside the categories rather than inside one: it is the
+                // one entry whose badge changes while the page is open, and a reader who
+                // filed Notifications under a category of their own still gets the count.
+                <Show when=move || matches!(door.get(), NoticeDoor::Unread(_))>
+                    <ul class="menu w-full flex-col gap-1 p-0" data-notice-bell="">
+                        <li>
+                            <a
+                                class="flex w-full items-center gap-2 font-medium"
+                                class:menu-active=move || active.get().starts_with("/notifications")
+                                href="/notifications"
+                                title="Mentions, boosts, favourites, follows and moderation notices"
+                                data-notice-door
+                            >
+                                <Icon icon=Icon::Bell/>
+                                <span class="truncate">"Notifications"</span>
+                                {move || match door.get() {
+                                    NoticeDoor::Unread(count) if count > 0 => view! {
+                                        <span class="badge badge-primary badge-sm ml-auto" data-notice-count>
+                                            {count}
+                                        </span>
+                                    }.into_any(),
+                                    _ => ().into_any(),
+                                }}
+                            </a>
+                        </li>
+                    </ul>
+                </Show>
                 // The rail is built out of category cards in every render, not only while
                 // editing: a reader arranges the site they actually see, and the server
                 // paints the same cards with the verbs switched off.
@@ -994,9 +1042,13 @@ pub fn Rail(
                                 let rail_for_items = rail_id.clone();
                                 let label = Signal::derive(move || rail.label.clone());
                                 let items = Signal::derive(move || {
+                                    let known = door.get() != NoticeDoor::Unknown;
                                     nav.get()
                                         .items_of_rail(rail_for_items.as_str())
                                         .into_iter()
+                                        .filter(|item| {
+                                            !(known && item.path == "/notifications")
+                                        })
                                         .cloned()
                                         .collect::<Vec<NavItemConfig>>()
                                 });

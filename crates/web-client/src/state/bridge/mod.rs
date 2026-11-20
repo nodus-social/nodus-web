@@ -298,6 +298,7 @@ mod posts;
 mod runtime;
 pub mod seed;
 pub mod session;
+pub mod notifications;
 pub mod sidebar;
 pub mod style;
 pub mod timeline;

@@ -210,6 +210,10 @@ fn chrome_with_style(
             // The rail's cards are reads the browser makes; the painted rail is the
             // navigation it already knows, and the card list arrives with hydration.
             sidebar: nodus_ui::components::sidebar::SidebarData::default().into(),
+            // The unread count is a browser read; a painted rail offers the door as it
+            // always has, and the client replaces it once it knows whether the instance
+            // serves notifications at all.
+            notices: None,
             extra: (signed_in && staff).then(move || {
                 std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
             }),

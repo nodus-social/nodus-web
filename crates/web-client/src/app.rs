@@ -7,6 +7,7 @@
 use crate::router::{self, Route};
 use crate::routes::callback::Callback;
 use crate::routes::home::HomeTimeline;
+use crate::routes::notifications::NotificationsView;
 use crate::routes::sign_in::SignIn;
 use crate::shell;
 use crate::state::bridge::{init, revision, with_sdk};
@@ -128,6 +129,29 @@ pub(crate) fn App() -> impl IntoView {
         }
     });
 
+    // Notifications are the rail's badge and a page of their own, so they are read once per
+    // document, like the rail's cards: a badge that re-asked on every click would cost a
+    // request per navigation to keep a number that changes when someone else acts.
+    Effect::new(move |_| {
+        if signed_in.get() {
+            crate::state::bridge::notifications::ensure_loaded();
+        }
+    });
+
+    // The door's state, not its count, is what the rail branches on: an instance that
+    // answers 404 to the endpoint has no notifications to offer, and a reader should not
+    // be shown a door that opens onto an error.
+    let notice_door = Signal::derive(move || {
+        let notices = crate::state::bridge::notifications::available().get();
+        match notices {
+            None => nodus_ui::NoticeDoor::Unknown,
+            Some(false) => nodus_ui::NoticeDoor::Absent,
+            Some(true) => {
+                nodus_ui::NoticeDoor::Unread(crate::state::bridge::notifications::unread().get())
+            }
+        }
+    });
+
     // The editor is a page, so the address decides whether it is open: arriving starts a
     // draft of the style the site is showing, and every other address throws the draft
     // away. A mode that a back button can leave while the mode itself stays on would be a
@@ -184,6 +208,7 @@ pub(crate) fn App() -> impl IntoView {
                 crate::state::bridge::style::pick_picture_for(kind);
             }))
             notice=Some(Signal::derive(move || crate::state::bridge::style::notice().get()))
+            notices=Some(notice_door)
             inner=std::sync::Arc::new(move || {
                         // The callback comes first, before the signed-in gate: the
                         // instance redirects here while the app is still signed out, and
@@ -281,6 +306,12 @@ pub(crate) fn App() -> impl IntoView {
                                      capability. On Mastodon it lives in the instance's own web \
                                      interface.",
                                 )
+                            }
+                            // The reader's own notifications, drawn by the client because
+                            // half of a row is this instance's moderation payload and not
+                            // anything the SDK's `Notification` knows about.
+                            Route::Notifications if signed_in => {
+                                view! { <NotificationsView/> }.into_any()
                             }
                             // A shared link works without a session: the address names the
                             // host, so the post is read from there anonymously. A legacy
