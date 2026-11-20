@@ -123,11 +123,21 @@ thread_local! {
 }
 
 /// Creates the signals with no owner, before the first mount (see `boot::start`).
+///
+/// Each `thread_local` is a lazy initialiser: the signal really comes into existence on the
+/// first `with`, not when a derived `Signal` around it is built. Touching the signals here
+/// is what puts them outside every component's owner. A signal created on first read
+/// belongs to whatever scope happened to read it first and dies with it, and the next read
+/// then panics with "a reactive value that has already been disposed".
 pub fn install() {
-    let _ = items();
-    let _ = available();
-    let _ = seen();
-    let _ = revision();
+    let _ = items_signal();
+    let _ = available_signal();
+    let _ = seen_signal();
+    let _ = loaded_signal();
+    let _ = loading_signal();
+    let _ = error_signal();
+    let _ = cursor_signal();
+    let _ = revision_signal();
 }
 
 // A `thread_local` is not the `RwSignal`; every read and write goes through `with`.
