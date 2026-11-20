@@ -34,6 +34,14 @@ function pollStatus(overrides = {}) {
   })
 }
 
+/** Clicks a control only once it is on screen, enabled, and not mid-submit. */
+async function waitForClick(control) {
+  await control.waitFor({ state: 'visible' })
+  await expect(control).toBeEnabled()
+  await expect(control).not.toHaveAttribute('aria-busy', 'true')
+  await control.click()
+}
+
 async function openPoll(page) {
   await page.getByRole('button', { name: 'Add a poll' }).click()
   await expect(page.getByLabel('Poll option 1')).toBeVisible()
@@ -73,7 +81,7 @@ test('a post without a poll sends no poll fields and opens no poll editor', asyn
   })
 
   await write(page, 'Just text')
-  await page.getByRole('button', { name: 'Post', exact: true }).click()
+  await waitForClick(page.getByRole('button', { name: 'Post', exact: true }))
 
   await expect(page.getByRole('status')).toContainText('Post published as')
   expect(bodies).toHaveLength(1)
@@ -155,7 +163,7 @@ test('posting a poll sends choices, an accepted duration, and the several-answer
 
   // The reply to the publish is the status the refreshed timeline will read.
   statuses.push(posted)
-  await page.getByRole('button', { name: 'Post', exact: true }).click()
+  await waitForClick(page.getByRole('button', { name: 'Post', exact: true }))
 
   await expect(page.getByRole('status')).toContainText('Post published as')
   expect(bodies).toHaveLength(1)
@@ -291,7 +299,7 @@ test('a drive file is attached by id, never re-uploaded, and posted as media_ids
 
   const bodies = await watchPosts(page, status({ content: '<p>From the drive.</p>' }))
   await write(page, 'From the drive.')
-  await page.getByRole('button', { name: 'Post', exact: true }).click()
+  await waitForClick(page.getByRole('button', { name: 'Post', exact: true }))
   await expect(page.getByRole('status')).toContainText('Post published as')
 
   // The same `media_ids` field an upload uses carries the minted id.
