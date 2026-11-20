@@ -70,12 +70,16 @@ pub(crate) fn App() -> impl IntoView {
     let feed_accounts = crate::state::bridge::feature("feed_accounts");
     let admin_on = crate::state::bridge::feature("admin");
     let moderation_on = crate::state::bridge::feature("moderation");
-    // `/api/v1/meta` does not publish a `drive` feature, so the door follows the grant the
-    // session already carries instead of a capability name no instance answers. The stored
-    // session is `read write follow` (see `session::scopes`), so `read` is the wider grant
-    // a drive-readable token carries; a token without `read:drive` still gets the server's
-    // 403, which the screen shows rather than hides.
-    let drive_on = Memo::new(move |_| crate::state::bridge::drive::may_read());
+    // `/api/v1/meta` does publish a `drive` feature (`drive`, and beside it `drive_share` and
+    // `drive_attach`), so the door follows that name and falls back to the grant the session
+    // already carries — an older instance, or one whose answer has not arrived yet, still has
+    // the user's scopes to go on. The stored session is `read write follow` (see
+    // `session::scopes`), so `read` is the wider grant a drive-readable token carries; a token
+    // without `read:drive` still gets the server's 403, which the screen shows rather than hides.
+    let drive_feature = crate::state::bridge::feature("drive");
+    let drive_on = Memo::new(move |_| {
+        drive_feature.get() || crate::state::bridge::drive::may_read()
+    });
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
