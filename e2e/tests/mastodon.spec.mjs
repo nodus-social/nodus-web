@@ -233,6 +233,30 @@ test('an answer that arrives late still opens the screen it allows', async ({ pa
   await expect(page.getByRole('heading', { name: 'Recommended posts', exact: true })).toHaveCount(0)
 })
 
+test('a 200 that is not the API does not open the extension panels', async ({ page }) => {
+  // A proxy with a fallthrough route answers every path it does not own with the page
+  // itself: 200, `text/html`. The status alone would settle "this is Nodus" and pin every
+  // extension panel on the host until sign-out, so the body has to be the API's own answer.
+  await stubApi(page)
+  await page.route('**/api/v1/meta', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'access-control-allow-origin': '*',
+      },
+      body: '<!doctype html><html><body><div id="app"></div></body></html>',
+    }),
+  )
+  await signedIn(page)
+  await open(page, '/settings')
+
+  await expect(page.getByRole('heading', { name: 'Session style', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Moderation', exact: true })).toHaveCount(0)
+  // The refusal is remembered, so the next load does not ask again and does not waver.
+  expect(await page.evaluate(() => localStorage.getItem('nodus-extensions/1'))).toContain('no')
+})
+
 test('a Mastodon rail offers no staff doors', async ({ page }) => {
   test.skip(test.info().project.name !== 'desktop', 'the rail is the desktop shell')
   await stubMastodon(page)

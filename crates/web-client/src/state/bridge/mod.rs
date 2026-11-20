@@ -163,18 +163,18 @@ fn settle(host: &str, answer: bool, features: Vec<String>) -> bool {
 
 /// The `features` list of a `/api/v1/meta` body.
 ///
-/// Read leniently on purpose: a body without the field, a field that is not a list, and a
-/// body that is not JSON at all all mean the same thing to a caller — no feature is
-/// claimed — and none of them is worth a visible error.
-fn features_of(body: &[u8]) -> Vec<String> {
+/// `None` means the body is not the API's answer: it did not parse as JSON, or it carried
+/// no `features` list. That matters because a proxy with a fallthrough route answers every
+/// path with the page itself — a `200 text/html` — and believing that would pin the panels
+/// on the host until sign-out.
+fn features_of(body: &[u8]) -> Option<Vec<String>> {
     #[derive(serde::Deserialize)]
     struct Meta {
         #[serde(default)]
         features: Vec<String>,
     }
-    serde_json::from_slice::<Meta>(body)
-        .map(|meta| meta.features)
-        .unwrap_or_default()
+    let features = serde_json::from_slice::<Meta>(body).ok()?.features;
+    (!features.is_empty()).then_some(features)
 }
 
 /// Asks the account's instance what it serves, and which Nodus surfaces it advertises.
@@ -183,9 +183,11 @@ fn features_of(body: &[u8]) -> Vec<String> {
 /// repaints whatever read [`supports_extensions`] or [`feature`]. A question already in
 /// flight is not asked twice.
 ///
-/// The body is asked for, not just the status: the status says "this is Nodus" and the
-/// `features` list says what of it is here. Both are settled together, so a panel and the
-/// rail behind it can never disagree about whether the server serves them.
+/// The body is asked for, not just the status: the status says only that something
+/// answered, and the `features` list says what of Nodus is here. A 200 whose body is not
+/// the API — the page itself, from a proxy's fallthrough — is not support, and neither is a
+/// featureless body: both settle "no" and are remembered that way. Both answers are
+/// settled together, so a panel and the rail behind it can never disagree.
 ///
 /// The remembered answer is a fallback for a host that does not answer at all — a transport
 /// failure or a timeout — and it carries no feature list, so a Nodus browser that meets a
@@ -222,7 +224,10 @@ pub async fn probe_extensions() -> bool {
     let _claim = Claim;
     let answering = transport.fetch_bytes(transport.get(url));
     let (answer, features) = match patience(answering, PATIENCE).await {
-        Some(Ok(body)) => (true, features_of(&body)),
+        Some(Ok(body)) => match features_of(&body) {
+            Some(features) => (true, features),
+            None => (false, Vec::new()),
+        },
         Some(Err(_)) | None => (remembered_support(&host).unwrap_or(false), Vec::new()),
     };
     settle(&host, answer, features)
