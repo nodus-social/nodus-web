@@ -138,6 +138,27 @@ pub(crate) fn App() -> impl IntoView {
         }
     });
 
+    // The live stream: the instance can push what happens, and without this the rail's badge
+    // and the notifications page learned about it only on their next fetch.
+    //
+    // Gated on the *account's* instance being ours: a Mastodon server streams over a
+    // WebSocket on the same path, and an `EventSource` pointed at it would sit in silence
+    // while claiming to be live. Such an account keeps polling, which works.
+    //
+    // The route is read so this re-runs on every navigation: entering the shell starts the
+    // stream, leaving it (a signed-out screen) stops it, and a navigation while it is open
+    // must reuse it rather than open a second one — `stream::start` is what guarantees that.
+    Effect::new(move |_| {
+        let _ = route.get();
+        if signed_in.get() && extensions.get() {
+            crate::state::bridge::stream::start();
+        } else {
+            // Signed out, or an instance that does not speak this protocol: no stream to
+            // keep, and a retry already sleeping must not wake up and reopen one.
+            crate::state::bridge::stream::stop();
+        }
+    });
+
     // The door's state, not its count, is what the rail branches on: an instance that
     // answers 404 to the endpoint has no notifications to offer, and a reader should not
     // be shown a door that opens onto an error.

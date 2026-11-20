@@ -62,6 +62,11 @@ web-sys = { version = "0.3", features = [
     "Crypto",
     "DataTransfer",
     "DragEvent",
+    # The live stream is an `EventSource`: the browser parses the frames, dispatches the
+    # `event:` names, and holds the connection, so this crate only reads what it hands over.
+    "Event",
+    "EventSource",
+    "MessageEvent",
     "History",
     "Location",
     "IntersectionObserver",

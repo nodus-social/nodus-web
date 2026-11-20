@@ -300,6 +300,7 @@ pub mod seed;
 pub mod session;
 pub mod notifications;
 pub mod sidebar;
+pub mod stream;
 pub mod style;
 pub mod timeline;
 
