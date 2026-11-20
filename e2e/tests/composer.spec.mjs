@@ -276,8 +276,9 @@ test('a drive file is attached by id, never re-uploaded, and posted as media_ids
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: /sunset\.png/ }).click()
 
-  // The chip says where it came from, so it is not mistaken for an upload.
-  await expect(page.getByText('from your drive')).toBeVisible()
+  // The chip says where it came from, so it is not mistaken for an upload. `exact`
+  // keeps it off the picker's "Choose from your drive" heading.
+  await expect(page.getByText('from your drive', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: /sunset\.png/ })).toHaveCount(0)
 
   // One request to mint the attachment, carrying the drive id and no file at all: no
@@ -312,7 +313,9 @@ test('a drive file still being processed cannot be chosen', async ({ page }) => 
   // Disabled is also the answer to a forced click: no request leaves the page.
   await row.click({ force: true })
   expect(attachCalls).toHaveLength(0)
-  await expect(page.getByText('from your drive')).toHaveCount(0)
+  // The picker is still open here, so `exact` is what keeps its "Choose from your
+  // drive" heading from counting as a chip.
+  await expect(page.getByText('from your drive', { exact: true })).toHaveCount(0)
 })
 
 test('cancelling the drive picker adds nothing to the draft', async ({ page }) => {
@@ -331,6 +334,6 @@ test('cancelling the drive picker adds nothing to the draft', async ({ page }) =
 
   await expect(page.getByRole('dialog', { name: 'Choose from your drive' })).toHaveCount(0)
   expect(attachCalls).toHaveLength(0)
-  await expect(page.getByText('from your drive')).toHaveCount(0)
+  await expect(page.getByText('from your drive', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Post', exact: true })).toBeDisabled()
 })
