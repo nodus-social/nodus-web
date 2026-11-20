@@ -43,6 +43,37 @@ pub struct FolderRow {
     pub depth: usize,
 }
 
+/// The spans the link dialog offers, and the seconds each one sends.
+///
+/// A short list on purpose: the server accepts any span up to thirty days, but a picker
+/// wide enough to express that is a form, and a link is a small favour to a friend.
+pub const SHARE_SPANS: [(u64, &str); 4] = [
+    (3_600, "1 hour"),
+    (86_400, "1 day"),
+    (604_800, "7 days"),
+    (2_592_000, "30 days"),
+];
+
+/// The span the dialog starts on.
+pub const SHARE_DEFAULT_SECONDS: u64 = 604_800;
+
+/// What the instance answered when a link was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareOutcome {
+    /// A link anyone holding it can read, and when it stops working.
+    Minted {
+        /// Absolute and unauthenticated: `{instance}/media/share/{token}`.
+        url: String,
+        /// The instant the server named, as the wire spells it.
+        expires_at: String,
+        /// The same instant spelled out where the reader is, by the browser's clock.
+        stops_at: String,
+    },
+    /// The instance's own sentence, shown as the explanation it is: a private file, or
+    /// an instance with no share secret.
+    Refused(String),
+}
+
 fn visibility_label(value: &str) -> &'static str {
     match value {
         "unlisted_link" => "Link only",
@@ -90,6 +121,14 @@ pub fn DrivePage(
     /// and the download button, and no control that would answer `403`.
     #[prop(default = true)]
     write: bool,
+    /// What the instance answered the last mint, and the file it answered for.
+    #[prop(optional, into)]
+    share: Option<Signal<Option<(String, ShareOutcome)>>>,
+    /// Asks for a link for one file, for the given number of seconds.
+    #[prop(optional)] on_share: Option<Callback<(String, u64)>>,
+    /// Copies the link on screen; `true` when the browser's clipboard took it, `false`
+    /// when the text was only selected for the reader to copy themselves.
+    #[prop(optional)] on_copy: Option<Callback<(), bool>>,
     #[prop(optional)] on_open_folder: Option<Callback<Option<String>>>,
     #[prop(optional)] on_create_folder: Option<Callback<String>>,
     #[prop(optional)] on_rename_folder: Option<Callback<(String, String)>>,
@@ -106,6 +145,23 @@ pub fn DrivePage(
     let deleting_folder = RwSignal::new(None::<(String, String)>);
     let renaming_file = RwSignal::new(None::<(String, String)>);
     let deleting_file = RwSignal::new(None::<(String, String)>);
+    let sharing_file = RwSignal::new(None::<String>);
+    let share_span = RwSignal::new(SHARE_DEFAULT_SECONDS);
+    let share_busy = RwSignal::new(false);
+    let copied = RwSignal::new(None::<bool>);
+    let share = share.unwrap_or_else(|| Signal::derive(|| None));
+    // The mint answers asynchronously; the button stays inert until the outcome for this
+    // file lands, which is the only signal that the request is over.
+    Effect::new(move |_| {
+        let open = sharing_file.get();
+        if share
+            .get()
+            .map(|(id, _)| Some(id) == open)
+            .unwrap_or(false)
+        {
+            share_busy.set(false);
+        }
+    });
 
     let open_label = move || match current.get() {
         Some(id) => folders
@@ -432,10 +488,15 @@ pub fn DrivePage(
                                     let id_delete = file.id.clone();
                                     let id_show_rename = file.id.clone();
                                     let id_show_delete = file.id.clone();
+                                    let id_share = file.id.clone();
+                                    let id_dialog_show = file.id.clone();
                                     let filename = file.filename.clone();
                                     let filename_rename = filename.clone();
                                     let filename_delete = filename.clone();
+                                    let filename_dialog = filename.clone();
+                                    let filename_share = filename.clone();
                                     let visibility = file.visibility.clone();
+                                    let visibility_share = visibility.clone();
                                     let state = file.processing_state.clone();
                                     let badge = match state.as_str() {
                                         "pending" => Some((
@@ -484,6 +545,34 @@ pub fn DrivePage(
                                                 >
                                                     "Download"
                                                 </button>
+                                                {if visibility_share == "private" {
+                                                    view! {
+                                                        <p
+                                                            class="text-xs opacity-60"
+                                                            data-testid="share-private"
+                                                        >
+                                                            "A private file has no audience outside you."
+                                                        </p>
+                                                    }
+                                                        .into_any()
+                                                } else {
+                                                    view! {
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-ghost btn-xs"
+                                                            aria-label=format!("Copy a link {filename_share}")
+                                                            data-testid="share-file"
+                                                            on:click=move |_| {
+                                                                copied.set(None);
+                                                                share_span.set(SHARE_DEFAULT_SECONDS);
+                                                                sharing_file.set(Some(id_share.clone()));
+                                                            }
+                                                        >
+                                                            "Copy a link"
+                                                        </button>
+                                                    }
+                                                        .into_any()
+                                                }}
                                                 <button
                                                     type="button"
                                                     class="btn btn-ghost btn-xs"
@@ -579,6 +668,152 @@ pub fn DrivePage(
                                                     "Delete"
                                                 </button>
                                             </div>
+
+                                            <Show when=move || {
+                                                sharing_file.get().as_deref() == Some(id_dialog_show.as_str())
+                                            }>
+                                                <div
+                                                    class="rounded-box border border-base-300 bg-base-200 p-2 text-xs"
+                                                    role="dialog"
+                                                    aria-label=format!("Share {filename_dialog}")
+                                                    data-testid="share-dialog"
+                                                >
+                                                    <p class="font-medium">
+                                                        "How long should the link work for?"
+                                                    </p>
+                                                    <div class="flex flex-wrap items-center gap-1 pt-1">
+                                                        <select
+                                                            class="select select-xs select-bordered"
+                                                            aria-label="Link lifetime"
+                                                            prop:value=move || share_span.get().to_string()
+                                                            on:change=move |event| {
+                                                                if let Ok(seconds) = event_target_value(&event).parse() {
+                                                                    share_span.set(seconds);
+                                                                }
+                                                            }
+                                                        >
+                                                            {SHARE_SPANS
+                                                                .into_iter()
+                                                                .map(|(seconds, label)| {
+                                                                    view! {
+                                                                        <option
+                                                                            value=seconds.to_string()
+                                                                            selected=move || share_span.get() == seconds
+                                                                        >
+                                                                            {label}
+                                                                        </option>
+                                                                    }
+                                                                })
+                                                                .collect_view()}
+                                                        </select>
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-primary btn-xs"
+                                                            data-testid="mint-share-link"
+                                                            disabled=move || {
+                                                                share_busy.get() || on_share.is_none()
+                                                            }
+                                                            on:click=move |_| {
+                                                                if let Some(share) = on_share {
+                                                                    if let Some(id) = sharing_file.get_untracked() {
+                                                                        share_busy.set(true);
+                                                                        copied.set(None);
+                                                                        share
+                                                                            .run((
+                                                                                id,
+                                                                                share_span.get_untracked(),
+                                                                            ));
+                                                                    }
+                                                                }
+                                                            }
+                                                        >
+                                                            "Make link"
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-ghost btn-xs"
+                                                            on:click=move |_| {
+                                                                sharing_file.set(None);
+                                                                share_busy.set(false);
+                                                            }
+                                                        >
+                                                            "Close"
+                                                        </button>
+                                                    </div>
+                                                    {move || {
+                                                        match share.get() {
+                                                            Some((id, ShareOutcome::Minted { url, expires_at, stops_at }))
+                                                                if sharing_file.get().as_deref() == Some(id.as_str()) => {
+                                                                let url_input = url.clone();
+                                                                view! {
+                                                                    <div class="pt-2" data-testid="share-minted">
+                                                                        <p class="opacity-70">
+                                                                            "Anyone with this link can read the file:"
+                                                                        </p>
+                                                                        <div class="flex flex-wrap items-center gap-1 pt-1">
+                                                                            <input
+                                                                                id="share-link"
+                                                                                class="input input-xs input-bordered w-full max-w-md"
+                                                                                type="text"
+                                                                                readonly
+                                                                                aria-label="Share link"
+                                                                                prop:value=url_input
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                class="btn btn-xs"
+                                                                                data-testid="copy-share-link"
+                                                                                on:click=move |_| {
+                                                                                    if let Some(copy) = on_copy {
+                                                                                        copied.set(Some(copy.run(())));
+                                                                                    }
+                                                                                }
+                                                                            >
+                                                                                "Copy"
+                                                                            </button>
+                                                                            {move || {
+                                                                                copied
+                                                                                    .get()
+                                                                                    .map(|ok| {
+                                                                                        view! {
+                                                                                            <span
+                                                                                                class="text-success"
+                                                                                                role="status"
+                                                                                                data-testid="share-copied"
+                                                                                            >
+                                                                                                {if ok { "Copied" } else { "Selected — press ⌘C" }}
+                                                                                            </span>
+                                                                                        }
+                                                                                    })
+                                                                            }}
+                                                                        </div>
+                                                                        <p class="pt-1 opacity-70">
+                                                                            "It stops working on "
+                                                                            <time datetime=expires_at>{stops_at}</time>
+                                                                            "."
+                                                                        </p>
+                                                                    </div>
+                                                                }
+                                                                    .into_any()
+                                                            }
+                                                            Some((id, ShareOutcome::Refused(reason)))
+                                                                if sharing_file.get().as_deref() == Some(id.as_str()) => {
+                                                                view! {
+                                                                    <p
+                                                                        class="pt-2 text-error"
+                                                                        role="status"
+                                                                        data-testid="share-refusal"
+                                                                    >
+                                                                        {reason}
+                                                                    </p>
+                                                                }
+                                                                    .into_any()
+                                                            }
+                                                            _ => ().into_any(),
+                                                        }
+                                                    }}
+                                                </div>
+                                            </Show>
 
                                             <Show when=move || {
                                                 renaming_file.get().map(|(id, _)| id) == Some(id_show_rename.clone())

@@ -36,8 +36,8 @@ function file({ id = 'f1', filename = 'notes.txt', folder_id = null, visibility 
  * delete removes both, exactly as the API would, so the meter's change is measured rather
  * than asserted against a constant.
  */
-async function stubDrive(page, { files = [], folders = [] } = {}) {
-  const state = { files: [...files], folders: [...folders], calls: [] }
+async function stubDrive(page, { files = [], folders = [], shareRefusal = null } = {}) {
+  const state = { files: [...files], folders: [...folders], calls: [], shareRefusal }
 
   const tree = (parent = null) =>
     state.folders
@@ -132,6 +132,31 @@ async function stubDrive(page, { files = [], folders = [] } = {}) {
       state.files.push(uploaded)
       state.calls.push({ method, path })
       return route.fulfill({ status: 201, headers: CORS, json: uploaded })
+    }
+
+    const shareMatch = /^\/files\/([^/]+)\/share$/.exec(path)
+    if (shareMatch && method === 'POST') {
+      const id = shareMatch[1]
+      const row = state.files.find((entry) => entry.id === id)
+      const parsed = body ? JSON.parse(body) : null
+      state.calls.push({ method, path, body: parsed })
+      if (state.shareRefusal) {
+        return route.fulfill({
+          status: state.shareRefusal.status,
+          headers: CORS,
+          json: { error: state.shareRefusal.error },
+        })
+      }
+      if (!row || row.visibility === 'private') {
+        return route.fulfill({ status: 409, headers: CORS, json: { error: 'this file is private' } })
+      }
+      return route.fulfill({
+        headers: CORS,
+        json: {
+          url: `${new URL(request.url()).origin}/media/share/${'a'.repeat(32)}`,
+          expires_at: new Date(Date.now() + (parsed?.expires_in_seconds ?? 604800) * 1000).toISOString(),
+        },
+      })
     }
 
     const contentMatch = /^\/files\/([^/]+)\/content$/.exec(path)
@@ -294,4 +319,42 @@ test('downloading goes through the content endpoint', async ({ page }) => {
 
   expect(saved.suggestedFilename()).toBe('notes.txt')
   expect(state.files).toHaveLength(1)
+})
+
+test('a link is asked for with one span and shown as the instance made it', async ({ page }) => {
+  const state = await open(page, { files: [file({ visibility: 'unlisted_link' })] })
+
+  await page.getByLabel('Copy a link notes.txt').click()
+  await expect(page.getByTestId('share-dialog')).toBeVisible()
+  // The dialog offers spans, not a free-form expiry; the default is seven days.
+  await page.getByLabel('Link lifetime').selectOption({ label: '1 day' })
+  await page.getByTestId('mint-share-link').click()
+
+  // The request names the file, carries the span, and carries nothing else.
+  const share = state.calls.find((call) => call.path === '/files/f1/share')
+  expect(share.method).toBe('POST')
+  expect(share.body).toEqual({ expires_in_seconds: 86400 })
+
+  // The rendered link is the instance's own media route, which is the grant.
+  await expect(page.getByLabel('Share link')).toHaveValue(/^https?:\/\/[^/]+\/media\/share\//)
+  await expect(page.getByTestId('share-minted')).toContainText('It stops working on')
+})
+
+test('a private file says why there is no link to copy', async ({ page }) => {
+  await open(page, { files: [file()] })
+
+  await expect(page.getByTestId('share-private')).toHaveText('A private file has no audience outside you.')
+  await expect(page.getByTestId('share-file')).toHaveCount(0)
+})
+
+test("a refusal is the instance's own sentence", async ({ page }) => {
+  await open(page, {
+    files: [file({ visibility: 'public_federated' })],
+    shareRefusal: { status: 503, error: 'share links are not configured' },
+  })
+
+  await page.getByLabel('Copy a link notes.txt').click()
+  await page.getByTestId('mint-share-link').click()
+
+  await expect(page.getByTestId('share-refusal')).toHaveText('share links are not configured')
 })

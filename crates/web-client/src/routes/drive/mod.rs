@@ -18,7 +18,7 @@ use std::rc::Rc;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
-use nodus_pages::pages::drive::{DrivePage, FileRow, FolderRow};
+use nodus_pages::pages::drive::{DrivePage, FileRow, FolderRow, ShareOutcome};
 
 use crate::state::alive::Alive;
 use crate::state::bridge::drive;
@@ -34,6 +34,7 @@ pub fn DriveScreen() -> impl IntoView {
     let (busy, set_busy) = signal(None::<String>);
     let (error, set_error) = signal(None::<String>);
     let (upload_visibility, set_upload_visibility) = signal("private".to_owned());
+    let (share, set_share) = signal(None::<(String, ShareOutcome)>);
 
     // One flag for the screen. See the module note: a flag made inside a callback
     // belongs to whatever block invoked it, and that block is often gone by the reply.
@@ -155,6 +156,34 @@ pub fn DriveScreen() -> impl IntoView {
             }
             alive.if_alive(|| set_busy.set(None));
         });
+    });
+
+    let share_file = Callback::new(move |(id, seconds): (String, u64)| {
+        spawn_local(async move {
+            match drive::share(&id, seconds).await {
+                Ok(link) => alive.if_alive(|| {
+                    let stops_at = drive::local_time(&link.expires_at);
+                    set_share.set(Some((
+                        id.clone(),
+                        ShareOutcome::Minted {
+                            url: link.url,
+                            expires_at: link.expires_at,
+                            stops_at,
+                        },
+                    )));
+                }),
+                Err(reason) => alive.if_alive(|| {
+                    set_share.set(Some((id.clone(), ShareOutcome::Refused(reason))));
+                }),
+            }
+        });
+    });
+
+    // The clipboard write is fired by the bridge and answered at once; `false` means the
+    // browser had no clipboard API and the link's own input was selected instead.
+    let copy_link = Callback::new(move |()| match share.get_untracked() {
+        Some((_, ShareOutcome::Minted { url, .. })) => drive::copy_link(&url),
+        _ => false,
     });
 
     let download = Callback::new(move |id: String| {
@@ -293,6 +322,9 @@ pub fn DriveScreen() -> impl IntoView {
             on_visibility=visibility
             on_delete_file=delete_file
             on_download=download
+            share=Signal::derive(move || share.get())
+            on_share=share_file
+            on_copy=copy_link
         />
     }
 }

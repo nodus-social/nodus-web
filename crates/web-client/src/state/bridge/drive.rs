@@ -78,6 +78,15 @@ pub struct DriveFile {
     pub created_at: Option<String>,
 }
 
+/// A minted link, as `POST /api/v1/drive/files/{id}/share` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ShareLink {
+    /// Absolute and unauthenticated: `{instance}/media/share/{token}`.
+    pub url: String,
+    /// When the token stops being accepted, as the wire spells it.
+    pub expires_at: String,
+}
+
 /// A folder flattened for the sidebar and the move picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderRow {
@@ -290,6 +299,78 @@ pub async fn set_visibility(id: &str, visibility: &str) -> Result<(), String> {
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Mints a link a stranger can read, for `expires_in_seconds`.
+///
+/// The body carries that one field and nothing else: the route refuses a private file
+/// and an instance with no share secret, and a mint that named more than the span would
+/// be asking the server for a decision it does not take.
+pub async fn share(id: &str, expires_in_seconds: u64) -> Result<ShareLink, String> {
+    let transport = transport()?;
+    let body = serde_json::json!({ "expires_in_seconds": expires_in_seconds });
+    let request = json_request("POST", drive_url(&["files", id, "share"])?, &body)?;
+    match transport.fetch::<ShareLink>(request).await {
+        Ok(link) => Ok(link),
+        // The instance's sentence is the explanation, not a failure to translate: it is
+        // how "this file is private" and "share links are not configured" reach the
+        // reader, and rephrasing them here would hide which one happened.
+        Err(nodus_mastodon::Error::Status { message, .. }) if !message.trim().is_empty() => {
+            Err(message)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Copies a minted link, or selects it when the browser has no clipboard API.
+///
+/// The clipboard is only reachable from a secure context, so an instance served over
+/// plain HTTP has none. There the link's own readonly input is selected, which is what a
+/// reader needs to copy it by hand; `false` says that is all that happened.
+#[must_use]
+pub fn copy_link(url: &str) -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let navigator = window.navigator();
+    let clipboard = js_sys::Reflect::has(navigator.as_ref(), &JsValue::from_str("clipboard"))
+        .unwrap_or(false);
+    if clipboard {
+        let clipboard = navigator.clipboard();
+        let text = url.to_owned();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = JsFuture::from(clipboard.write_text(&text)).await;
+        });
+        return true;
+    }
+    if let Some(input) = window
+        .document()
+        .and_then(|document| document.get_element_by_id("share-link"))
+        .and_then(|element| element.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.select();
+    }
+    false
+}
+
+/// An RFC 3339 instant spelled out in the reader's own time zone.
+///
+/// The zone is the browser's, which no server can know; a stamp the browser cannot read
+/// is shown as it arrived rather than guessed at.
+#[must_use]
+pub fn local_time(rfc3339: &str) -> String {
+    let Some(seconds) = nodus_ui::components::format::unix_seconds(rfc3339) else {
+        return rfc3339.to_owned();
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "milliseconds since 1970 are exact in f64 well past this century"
+    )]
+    let millis = (seconds * 1_000) as f64;
+    let date = js_sys::Date::new(&JsValue::from_f64(millis));
+    date.to_locale_string("en", &JsValue::UNDEFINED)
+        .as_string()
+        .unwrap_or_else(|| rfc3339.to_owned())
 }
 
 /// Deletes one file and, when nothing else needs them, its bytes.
