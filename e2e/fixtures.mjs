@@ -86,7 +86,7 @@ export function sessionRecord({ host = HOST, token = TOKEN, id = ACCOUNT_ID, acc
  * stubbed body is delivered and then thrown away by the CORS check, which looks exactly
  * like a transport failure and used to sign the test session out.
  */
-const CORS = {
+export const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': '*',
   'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',

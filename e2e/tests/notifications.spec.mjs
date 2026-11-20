@@ -6,7 +6,7 @@
 
 import { expect, test } from '@playwright/test'
 
-import { account, hydrated, notification, signedIn, status, stubApi } from '../fixtures.mjs'
+import { CORS, account, hydrated, notification, signedIn, status, stubApi } from '../fixtures.mjs'
 
 /** A moderation notice, shaped like the server's `NotificationDto`. */
 function warning(overrides = {}) {
@@ -143,4 +143,31 @@ test('an instance without the notifications API offers no door to it', async ({ 
     'Notifications',
   )
   await expect(page.locator('[data-notice-door]')).toHaveCount(0)
+})
+
+test('clearing the list asks first, and a refusal keeps every row', async ({ page }) => {
+  await stubApi(page, { notifications: [warning()] })
+  const cleared = []
+  await page.route('**/api/v1/notifications/clear', (route) => {
+    cleared.push(route.request().method())
+    return route.fulfill({ headers: CORS, json: {} })
+  })
+  await signedIn(page)
+  await page.goto('/notifications')
+  await hydrated(page)
+
+  await page.locator('[data-clear-all]').click()
+  await expect(page.locator('[data-clear-question]')).toBeVisible()
+  await expect(page.locator('[data-notice-kind]')).toHaveCount(1)
+
+  await page.locator('[data-clear-cancel]').click()
+  await expect(page.locator('[data-clear-question]')).toHaveCount(0)
+  expect(cleared).toEqual([])
+
+  await page.locator('[data-clear-all]').click()
+  await page.locator('[data-clear-confirm]').click()
+
+  await expect(page.getByText('This instance has nothing for you yet.')).toBeVisible()
+  await expect(page.locator('[data-notice-kind]')).toHaveCount(0)
+  expect(cleared).toEqual(['POST'])
 })
