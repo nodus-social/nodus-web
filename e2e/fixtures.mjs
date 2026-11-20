@@ -140,6 +140,23 @@ export function moderationRule(overrides = {}) {
   }
 }
 
+/**
+ * One of the instance's own rules, as the rules editor reads it.
+ *
+ * These are the sentences the instance publishes about itself, and `ordinal` is the order a
+ * report cites them in — not a moderation-rule pattern.
+ */
+export function instanceRule(overrides = {}) {
+  return {
+    id: '8001',
+    text: 'Be excellent to each other.',
+    ordinal: 0,
+    created_at: '2026-11-01T09:00:00.000Z',
+    updated_at: '2026-11-01T09:00:00.000Z',
+    ...overrides,
+  }
+}
+
 /** An empty recommendation feed, in the envelope the discovery API uses. */
 export function emptyFeed() {
   return {
@@ -580,6 +597,12 @@ export async function adminApi(
     appealRefusals = {},
     quarantined = [quarantinedMedia()],
     rules = [moderationRule()],
+    instanceRules = [instanceRule(), instanceRule({ id: '8002', text: 'No spam.', ordinal: 1 })],
+    actorRefresh = {
+      changed: ['display_name'],
+      actor: { acct: 'ada@peer.example', display_name: 'Ada Lovelace' },
+    },
+    actorRefreshRefusal = null,
     escalation = escalationPolicy(),
     escalationRefusal = null,
     deliveries = [],
@@ -1103,6 +1126,59 @@ export async function adminApi(
     if (refusal) return json(route, { error: refusal }, 422)
     if (held) Object.assign(held, body, { id })
     return json(route, held ?? moderationRule({ id, ...body }))
+  })
+  // The instance's own rules. The list is the resource: a move or a delete renumbers it, so
+  // the stubs renumber the array they hold and answer with the row as it now stands — the
+  // editor redraws from the answer rather than reordering its own copy.
+  const renumber = () => instanceRules.forEach((held, at) => (held.ordinal = at))
+  const place = (id, ordinal) => {
+    const at = instanceRules.findIndex((held) => held.id === id)
+    if (at < 0) return null
+    const [held] = instanceRules.splice(at, 1)
+    instanceRules.splice(Math.max(0, Math.min(ordinal, instanceRules.length)), 0, held)
+    renumber()
+    return held
+  }
+  await page.route(/\/api\/v1\/admin\/rules$/, (route) => {
+    if (route.request().method() === 'GET') return json(route, instanceRules)
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    if (!String(body.text ?? '').trim()) return json(route, { error: 'a rule needs text' }, 422)
+    const created = instanceRule({
+      id: `80${instanceRules.length + 1}${instanceRules.length}`,
+      text: body.text.trim(),
+      ordinal: instanceRules.length,
+    })
+    instanceRules.push(created)
+    renumber()
+    return json(route, created, 201)
+  })
+  await page.route(/\/api\/v1\/admin\/rules\/[^/]+$/, (route) => {
+    const request = route.request()
+    const id = decodeURIComponent(request.url().split('/').at(-1))
+    const held = instanceRules.find((rule) => rule.id === id)
+    if (request.method() === 'DELETE') {
+      record(route)
+      if (held) instanceRules.splice(instanceRules.indexOf(held), 1)
+      renumber()
+      return route.fulfill({ status: 204, headers: CORS })
+    }
+    const body = JSON.parse(request.postData() ?? '{}')
+    if (!held) return json(route, { error: 'no such rule' }, 404)
+    if (body.ordinal !== undefined && body.ordinal < 0) {
+      return json(route, { error: 'ordinal must be zero or greater; positions start at zero' }, 422)
+    }
+    if (body.text !== undefined) held.text = body.text
+    if (body.ordinal !== undefined) place(id, body.ordinal)
+    return json(route, held)
+  })
+  // A refresh re-reads one remote actor from its own instance. The answer says which fields
+  // moved; a refusal is the peer's own sentence, passed through as the instance passes it.
+  await page.route(/\/api\/v1\/admin\/federation\/actors\/.+$/, (route) => {
+    record(route)
+    if (actorRefreshRefusal) {
+      return json(route, { error: actorRefreshRefusal.error }, actorRefreshRefusal.status)
+    }
+    return json(route, actorRefresh)
   })
   await page.route(/\/api\/v1\/admin\/media\/quarantined$/, (route) => json(route, quarantined))
   await page.route(/\/api\/v1\/admin\/stats(\?|$)/, (route) => json(route, stats))

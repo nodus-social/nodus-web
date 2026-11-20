@@ -34,6 +34,7 @@ use self::email::EmailDomains;
 use self::overview::Overview;
 use self::protocol::Protocol;
 use self::replies::Replies;
+use self::rules::Rules;
 use self::scanners::Scanners;
 use self::settings_transfer::SettingsTransfer;
 
@@ -46,6 +47,7 @@ mod federation;
 mod overview;
 mod protocol;
 mod replies;
+mod rules;
 mod scanners;
 mod settings_transfer;
 mod topology;
@@ -148,6 +150,9 @@ pub fn Admin(section: String) -> impl IntoView {
     let protocol = feature("protocol");
     // Warning presets are their own capability; the replies panel is what reads them.
     let warnings = feature("warnings");
+    // The instance's published rules are their own capability, and are not the moderation
+    // patterns: an instance may serve one without the other.
+    let instance_rules = feature("instance_rules");
     // Transfer is a Nodus extension: an instance that does not publish the name does not
     // serve the two endpoints, so the section is neither drawn nor offered.
     let transfer = feature("settings_transfer");
@@ -163,6 +168,7 @@ pub fn Admin(section: String) -> impl IntoView {
                 Section::Topology => topology.get(),
                 Section::Protocol => protocol.get(),
                 Section::SettingsTransfer => transfer.get(),
+                Section::Rules => instance_rules.get(),
                 _ => true,
             })
             .map(|section| section.slug().to_owned())
@@ -196,6 +202,8 @@ pub fn Admin(section: String) -> impl IntoView {
                     Section::Federation if !delivery.get() => missing("delivery"),
                     Section::Federation => view! { <federation::Deliveries/> }.into_any(),
                     Section::Announcements => view! { <Announcements/> }.into_any(),
+                    Section::Rules if !instance_rules.get() => missing("instance rules"),
+                    Section::Rules => view! { <Rules/> }.into_any(),
                     Section::Audit => view! { <Audit/> }.into_any(),
                     Section::Topology if !topology.get() => missing("topology"),
                     Section::Topology => view! { <topology::System/> }.into_any(),

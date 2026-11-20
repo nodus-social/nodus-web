@@ -47,6 +47,7 @@ const ADMINISTRATION = [
   'Escalation',
   'Deliveries',
   'Announcements',
+  'Instance rules',
   'Audit log',
   'System',
   'Protocol',
@@ -477,6 +478,63 @@ test('an account is suspended from its row and lifted after confirming', async (
   await expect(page.getByText('No remote account is moderated.')).toBeVisible()
 })
 
+test('refreshing an account says what the peer actually changed', async ({ page }) => {
+  await stubApi(page)
+  const calls = await adminApi(page, {
+    remoteAccounts: [remoteAccount()],
+    actorRefresh: {
+      changed: ['display_name'],
+      actor: { acct: 'x@peer.example', display_name: 'Ada Lovelace' },
+    },
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  await page.getByRole('button', { name: 'Refresh x@peer.example' }).click()
+
+  const refresh = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.includes('/federation/actors/'),
+  )
+  // The actor's whole address is the path's one segment, percent-encoded, with the verb the
+  // handler strips back off.
+  expect(decodeURIComponent(new URL(refresh.url).pathname)).toContain(
+    '/federation/actors/https://peer.example/users/x/refresh',
+  )
+  expect(refresh.body).toBeNull()
+
+  // What changed is the answer's, not the screen's guess: the field is named and the name
+  // the peer now spells is quoted, under the row that asked.
+  await expect(row(page, 'x@peer.example').getByRole('status')).toHaveText(
+    'Refreshed x@peer.example: the display name is now \u201cAda Lovelace\u201d.',
+  )
+})
+
+test('a peer that cannot be reached is reported in the peer\'s own words', async ({ page }) => {
+  await stubApi(page)
+  await adminApi(page, {
+    remoteAccounts: [remoteAccount()],
+    actorRefreshRefusal: {
+      status: 502,
+      error: 'could not fetch the actor: connection refused (peer.example:443)',
+    },
+  })
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/moderation/federation')
+  await hydrated(page)
+
+  await page.getByRole('button', { name: 'Refresh x@peer.example' }).click()
+
+  // A 502 is not "nothing happened": it is this instance saying it could not read the peer,
+  // and the peer's error travels inside it rather than being replaced by a shrug.
+  await expect(row(page, 'x@peer.example').getByRole('status')).toHaveText(
+    'Could not reach the peer: could not fetch the actor: connection refused (peer.example:443).',
+  )
+})
+
 test('a grant without admin:write can read moderated accounts but not move them', async ({
   page,
 }) => {
@@ -492,12 +550,13 @@ test('a grant without admin:write can read moderated accounts but not move them'
 
   // The list is a read, so the row is painted with what it records.
   await expect(row(page, 'x@peer.example')).toContainText('Ban evasion.')
-  // The three mutations need the second grant's write scope, and the row says so.
+  // The mutations need the second grant's write scope, and the row says so.
   await expect(page.getByLabel('Action for x@peer.example')).toBeDisabled()
   await expect(page.getByLabel('Reason for x@peer.example')).toBeDisabled()
   await expect(page.getByLabel('Expiry for x@peer.example')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Lift', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Refresh x@peer.example' })).toBeDisabled()
 })
 
 test('an instance that moderates no remote account says so', async ({ page }) => {

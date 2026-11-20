@@ -19,6 +19,7 @@ import {
   escalationPolicy,
   granted,
   hydrated,
+  instanceRule,
   moderationRule,
   pausedDomain,
   performanceStats,
@@ -865,6 +866,83 @@ test('a pattern that cannot compile is refused with the instance message', async
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('the pattern is not a valid regex')
   await expect(page.getByTestId('rules-empty')).toBeVisible()
+})
+
+test('the instance rules are added, edited, moved and deleted, in the order they are read', async ({
+  page,
+}) => {
+  const calls = await consoleAs(page, {
+    instanceRules: [instanceRule(), instanceRule({ id: '8002', text: 'No spam.', ordinal: 1 })],
+  })
+  await open(page, '/admin/rules')
+
+  // These are the instance's own sentences, not the moderation-rule patterns: the panel is
+  // named for the resource, and the headings count the positions a report cites.
+  await expect(page.getByRole('heading', { name: 'Instance rules' })).toBeVisible()
+  await expect(page.getByText('Be excellent to each other.')).toBeVisible()
+  await expect(page.getByText('Rule 1', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rule 2', { exact: true })).toBeVisible()
+
+  // Adding appends, so only the sentence travels.
+  await page.getByLabel('New rule text').fill('Credit the artist.')
+  await page.getByRole('button', { name: 'Add rule' }).click()
+  const added = await sent(
+    calls,
+    (call) => call.method === 'POST' && call.url.endsWith('/api/v1/admin/rules'),
+  )
+  expect(JSON.parse(added.body)).toEqual({ text: 'Credit the artist.' })
+  await expect(page.getByText('Credit the artist.')).toBeVisible()
+  await expect(page.getByText('Rule 3', { exact: true })).toBeVisible()
+
+  // Editing sends the words and leaves the position alone: the rule keeps its identity, so
+  // a report that cited rule 1 still cites the sentence it was written against.
+  const first = page.getByRole('listitem').filter({ hasText: 'Be excellent' })
+  await first.getByRole('button', { name: 'Edit Rule 1' }).click()
+  await first.getByLabel('Rule 1 text').fill('Be excellent to one another.')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  const edited = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/rules/8001'),
+  )
+  expect(JSON.parse(edited.body)).toEqual({ text: 'Be excellent to one another.' })
+  await expect(page.getByText('Be excellent to one another.')).toBeVisible()
+
+  // Moving sends the position the rule should hold, and reads the list back rather than
+  // guessing what the instance renumbered.
+  await page.getByRole('button', { name: 'Move Rule 2 up' }).click()
+  const moved = await sent(
+    calls,
+    (call) => call.method === 'PUT' && call.url.endsWith('/api/v1/admin/rules/8002'),
+  )
+  expect(JSON.parse(moved.body)).toEqual({ ordinal: 0 })
+  const second = page.getByRole('listitem').filter({ hasText: 'No spam.' })
+  await expect(second.getByText('Rule 1', { exact: true })).toBeVisible()
+
+  // Deleting asks first, and says what a delete leaves alone.
+  const last = page.getByRole('listitem').filter({ hasText: 'Credit the artist.' })
+  await last.getByRole('button', { name: 'Delete Rule 3' }).click()
+  await expect(page.getByText('Delete this rule? Reports that cited it keep the reference.')).toBeVisible()
+  expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(0)
+  await page.getByRole('button', { name: 'Delete rule' }).click()
+  const removed = await sent(
+    calls,
+    (call) => call.method === 'DELETE' && call.url.includes('/api/v1/admin/rules/80'),
+  )
+  expect(removed.body).toBeNull()
+  await expect(page.getByText('Credit the artist.')).toHaveCount(0)
+})
+
+test('an instance whose features omit instance_rules serves no rules panel', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'instance_rules')
+  await stubApi(page, { features })
+  await adminApi(page)
+  await signedIn(page)
+  await granted(page)
+  await page.goto('/admin/rules')
+  await hydrated(page)
+
+  await expect(page.getByRole('tab', { name: 'Instance rules' })).toHaveCount(0)
+  await expect(page.getByText(/does not serve the instance rules panel/)).toBeVisible()
 })
 
 test('the escalation ladder reads rung by rung, and says its order out loud', async ({ page }) => {

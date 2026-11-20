@@ -25,6 +25,7 @@ pub mod federation;
 pub mod overview;
 pub mod protocol;
 pub mod replies;
+pub mod rules;
 pub mod scanners;
 pub mod settings_transfer;
 pub mod topology;
@@ -48,6 +49,8 @@ pub enum Section {
     Federation,
     /// What the instance is telling everyone.
     Announcements,
+    /// The rules this instance publishes, and the order a report cites them in.
+    Rules,
     /// What staff have done.
     Audit,
     /// What the instance's own processes are doing.
@@ -60,7 +63,7 @@ pub enum Section {
 
 impl Section {
     /// Every section, in the order the strip shows them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Overview,
         Self::Scanners,
         Self::Domains,
@@ -69,6 +72,7 @@ impl Section {
         Self::Escalation,
         Self::Federation,
         Self::Announcements,
+        Self::Rules,
         Self::Audit,
         Self::Topology,
         Self::Protocol,
@@ -87,6 +91,7 @@ impl Section {
             Self::Escalation => "escalation",
             Self::Federation => "federation",
             Self::Announcements => "announcements",
+            Self::Rules => "rules",
             Self::Audit => "audit",
             Self::Topology => "system",
             Self::Protocol => "protocol",
@@ -115,6 +120,7 @@ impl Section {
             Self::Escalation => "Escalation",
             Self::Federation => "Deliveries",
             Self::Announcements => "Announcements",
+            Self::Rules => "Instance rules",
             Self::Audit => "Audit log",
             Self::Topology => "System",
             Self::Protocol => "Protocol",
@@ -134,6 +140,9 @@ impl Section {
             Self::Escalation => "What a number of strikes adds, and in which order",
             Self::Federation => "What this instance still has to deliver to its peers, and why a delivery stopped",
             Self::Announcements => "What the instance is telling everyone",
+            Self::Rules => {
+                "The rules this instance publishes, and the order a report cites them in"
+            }
             Self::Audit => "Administrative actions recorded by this server",
             Self::Topology => "What each process is doing, and what it just said",
             Self::Protocol => "The client API the SDK selects for this server",
@@ -155,6 +164,7 @@ impl Section {
             Self::Escalation => Icon::Shield,
             Self::Federation => Icon::Link,
             Self::Announcements => Icon::Bell,
+            Self::Rules => Icon::List,
             Self::Audit => Icon::List,
             Self::Topology => Icon::List,
             Self::SettingsTransfer => Icon::List,

@@ -36,6 +36,9 @@ pub(super) fn RemoteAccountList() -> impl IntoView {
     let (confirming, set_confirming) = signal(None::<String>);
     let (busy, set_busy) = signal(true);
     let (error, set_error) = signal(None::<String>);
+    // What the last refresh did, kept beside the row that asked for it: the answer names the
+    // fields that moved, and that sentence belongs under that account, not above the list.
+    let (refreshed, set_refreshed) = signal(None::<(String, String)>);
 
     let reload = Callback::new(move |()| {
         spawn_local(async move {
@@ -112,6 +115,24 @@ pub(super) fn RemoteAccountList() -> impl IntoView {
         });
     });
 
+    // A refresh re-reads the account at the peer. It changes the profile the instance
+    // stores, not the action this list is about, so the row is not rewritten from the
+    // answer — the sentence says what moved, in the peer's own terms.
+    let refresh = Callback::new(move |actor: String| {
+        set_busy.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            let outcome = admin::refresh_remote_actor(&actor).await;
+            alive.if_alive(move || {
+                set_busy.set(false);
+                match outcome {
+                    Ok(outcome) => set_refreshed.set(Some((actor, refresh_sentence(&outcome)))),
+                    Err(message) => set_error.set(Some(message)),
+                }
+            });
+        });
+    });
+
     view! {
         <RemoteAccountsPage
             accounts=accounts
@@ -122,7 +143,78 @@ pub(super) fn RemoteAccountList() -> impl IntoView {
             on_ask=ask
             on_cancel=cancel
             on_lift=lift
+            refreshed=refreshed
+            on_refresh=refresh
             write=Some(admin::may_write())
         />
+    }
+}
+
+/// What one refresh answer means, as a sentence the row can print.
+///
+/// The changed fields are the instance's own words for what moved; they are named here
+/// rather than counted, because "2 fields changed" makes a reader open the account to find
+/// out which. A display name is spelled out in full, since that is the change a reader can
+/// check against the peer without leaving the page.
+fn refresh_sentence(outcome: &admin::RefreshOutcome) -> String {
+    match outcome {
+        admin::RefreshOutcome::Changed {
+            changed,
+            display_name,
+            acct,
+        } => {
+            if changed.is_empty() {
+                return format!(
+                    "Refreshed {acct}: the peer's profile already matches what this instance holds, so nothing changed."
+                );
+            }
+            let named = |fields: &[String]| {
+                fields
+                    .iter()
+                    .map(|field| field_name(field))
+                    .collect::<Vec<&str>>()
+                    .join(", ")
+            };
+            // A display name is spelled out in full: it is the change a reader can check
+            // against the peer from this page, without opening the account.
+            if !changed.iter().any(|field| field == "display_name") {
+                return format!("Refreshed {acct}: {} changed.", named(changed));
+            }
+            let others = changed
+                .iter()
+                .filter(|field| field.as_str() != "display_name")
+                .cloned()
+                .collect::<Vec<String>>();
+            let base = format!(
+                "Refreshed {acct}: the display name is now \u{201c}{display_name}\u{201d}."
+            );
+            if others.is_empty() {
+                base
+            } else {
+                format!("{base} Also changed: {}.", named(&others))
+            }
+        }
+        // `422`: the peer answered with somebody else's document. Nothing was written, so
+        // the sentence says that first — there is nothing here to retry.
+        admin::RefreshOutcome::Mismatch(message) => {
+            format!("Nothing was written: {message}.")
+        }
+        // `502`: the peer could not be read. The instance passes the peer's own error
+        // through, and it is quoted rather than replaced.
+        admin::RefreshOutcome::Unreachable(message) => {
+            format!("Could not reach the peer: {message}.")
+        }
+    }
+}
+
+/// The profile field a `changed` entry names, in the words a reader uses.
+fn field_name(field: &str) -> &str {
+    match field {
+        "display_name" => "the display name",
+        "note" => "the note",
+        "avatar_url" => "the avatar",
+        "header_url" => "the header",
+        "moved_to" => "the moved-to address",
+        other => other,
     }
 }

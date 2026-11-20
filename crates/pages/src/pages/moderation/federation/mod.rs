@@ -385,6 +385,16 @@ pub fn RemoteAccountsPage(
     /// Lifts one row, once confirmed. Absent where nothing can be sent.
     #[prop(optional)]
     on_lift: Option<Callback<String>>,
+    /// What the last refresh did, as the address it refreshed and one sentence about it.
+    ///
+    /// The sentence is the answer's own: which fields moved, or the peer's refusal in the
+    /// peer's words. A row shows it because the reader pressed the button on that row.
+    #[prop(into)]
+    #[prop(optional)]
+    refreshed: Signal<Option<(String, String)>>,
+    /// Re-reads one account from its own instance. Absent where nothing can be sent.
+    #[prop(optional)]
+    on_refresh: Option<Callback<String>>,
     /// Whether this browser's grant carries `admin:write`. Absent means "assume yes".
     #[prop(optional_no_strip)]
     write: Option<Signal<bool>>,
@@ -425,6 +435,7 @@ pub fn RemoteAccountsPage(
                             expires_at: account.expiry_day(),
                         });
                         let select_label = format!("Action for {name}");
+                        let refresh_label = StoredValue::new(format!("Refresh {name}"));
                         let reason_label = format!("Reason for {name}");
                         let expiry_label = format!("Expiry for {name}");
                         view! {
@@ -539,7 +550,35 @@ pub fn RemoteAccountsPage(
                                             "Lift"
                                         </button>
                                     </Show>
+                                    <button
+                                        class="btn btn-ghost btn-xs"
+                                        aria-label=refresh_label.get_value()
+                                        disabled=move || busy.get() || on_refresh.is_none() || !write.get()
+                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        on:click=move |_| {
+                                            if let Some(on_refresh) = on_refresh {
+                                                on_refresh.run(target.get_value());
+                                            }
+                                        }
+                                    >
+                                        "Refresh"
+                                    </button>
                                 </div>
+                                <Show when=move || {
+                                    refreshed
+                                        .get()
+                                        .is_some_and(|(actor, _)| actor == target.get_value())
+                                }>
+                                    <p class="text-xs opacity-70" role="status">
+                                        {move || {
+                                            refreshed
+                                                .get()
+                                                .filter(|(actor, _)| *actor == target.get_value())
+                                                .map(|(_, sentence)| sentence)
+                                                .unwrap_or_default()
+                                        }}
+                                    </p>
+                                </Show>
                             </li>
                         }
                     }

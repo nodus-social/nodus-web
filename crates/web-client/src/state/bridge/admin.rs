@@ -3188,3 +3188,193 @@ pub async fn lift_domain_pause(domain: &str) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())
 }
+
+/// One of the instance's own rules, as `GET /api/v1/admin/rules` answers it.
+///
+/// This is the document a report cites — `instance_rules`, which the sign-up form and the
+/// about page publish — and not the `/admin/moderation-rules` panel beside it, whose rows
+/// are patterns the scanning engine matches. The two are separate resources and separate
+/// capabilities, so they are separate types here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct InstanceRule {
+    pub id: String,
+    #[serde(default)]
+    pub text: String,
+    /// Zero-based position, which is the order a reader cites: "rule 3".
+    #[serde(default)]
+    pub ordinal: i32,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+fn instance_rules_url() -> Result<(nodus_mastodon::BrowserInstance, url::Url), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url("/api/v1/admin/rules")
+        .map_err(|error| error.to_string())?;
+    Ok((transport, url))
+}
+
+/// The instance's rules, in the order it publishes them. Requires `admin:read`.
+pub async fn instance_rules() -> Result<Vec<InstanceRule>, String> {
+    let (transport, url) = instance_rules_url()?;
+    transport
+        .fetch(transport.get(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Adds one rule. `ordinal` places it; absent appends, which is what the add form does.
+pub async fn create_instance_rule(text: &str, ordinal: Option<i32>) -> Result<InstanceRule, String> {
+    let (transport, url) = instance_rules_url()?;
+    let mut body = serde_json::json!({ "text": text.trim() });
+    if let Some(ordinal) = ordinal {
+        body["ordinal"] = serde_json::json!(ordinal);
+    }
+    let body = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
+    let mut request = transport.post(url);
+    request
+        .headers
+        .push(("Content-Type".to_owned(), "application/json".to_owned()));
+    request.body = Some(body);
+    transport
+        .fetch::<InstanceRule>(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Rewrites a rule's text, moves it, or both.
+///
+/// `text: None` leaves the words alone and `ordinal: None` leaves the position alone, which
+/// is how the endpoint is written: a reorder does not have to resend the sentence, and an
+/// edit does not have to restate where the rule already is.
+pub async fn update_instance_rule(
+    id: &str,
+    text: Option<&str>,
+    ordinal: Option<i32>,
+) -> Result<InstanceRule, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "rules", id])
+        .map_err(|error| error.to_string())?;
+    let mut body = serde_json::Map::new();
+    if let Some(text) = text {
+        body.insert(
+            "text".to_owned(),
+            serde_json::Value::String(text.trim().to_owned()),
+        );
+    }
+    if let Some(ordinal) = ordinal {
+        body.insert("ordinal".to_owned(), serde_json::json!(ordinal));
+    }
+    let body = serde_json::to_vec(&serde_json::Value::Object(body))
+        .map_err(|error| error.to_string())?;
+    transport
+        .fetch::<InstanceRule>(transport.put_body(url, body))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Removes one rule. A report that cited it keeps the id it cited.
+pub async fn delete_instance_rule(id: &str) -> Result<(), String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "admin", "rules", id])
+        .map_err(|error| error.to_string())?;
+    transport
+        .send_empty(transport.delete(url))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// What a refresh of one remote actor did, in the three shapes the instance answers with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    /// The peer answered and the stored profile was compared against it. The list of field
+    /// names is the instance's own: it says which fields actually moved, and an empty list
+    /// means the peer's document already matched what this instance holds.
+    Changed {
+        /// `display_name`, `note`, `avatar_url`, `header_url`, `moved_to` — only the ones
+        /// that changed.
+        changed: Vec<String>,
+        /// The account's name as the refreshed document spells it, so a screen can say
+        /// what the name is now rather than only that it moved.
+        display_name: String,
+        /// The account's address, `someone@instance.example`.
+        acct: String,
+    },
+    /// `422`: the peer answered with a document for some other actor, so nothing was
+    /// written. This is a mismatch to report, not a refresh to retry.
+    Mismatch(String),
+    /// `502`: the peer could not be reached. The sentence carries the peer's own error.
+    Unreachable(String),
+}
+
+/// The account as the refresh answer carries it, cut down to what the screen says.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RefreshedActor {
+    #[serde(default)]
+    pub acct: String,
+    #[serde(default)]
+    pub display_name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ActorRefreshAnswer {
+    #[serde(default)]
+    changed: Vec<String>,
+    actor: RefreshedActor,
+}
+
+/// Re-reads one remote actor from its own instance, now, instead of waiting for it to
+/// federate something new.
+///
+/// The address is the path's one segment — `url_segments` percent-encodes it, and the route
+/// behind it is a wildcard, so the encoded slashes arrive intact — with the `/refresh`
+/// suffix the handler strips back off.
+pub async fn refresh_remote_actor(actor_uri: &str) -> Result<RefreshOutcome, String> {
+    let transport = admin_transport()
+        .or_else(instance_transport)
+        .ok_or_else(|| "Not signed in.".to_owned())?;
+    let url = transport
+        .url_segments(&[
+            "api",
+            "v1",
+            "admin",
+            "federation",
+            "actors",
+            actor_uri,
+            "refresh",
+        ])
+        .map_err(|error| error.to_string())?;
+    match transport
+        .fetch::<ActorRefreshAnswer>(transport.post(url))
+        .await
+    {
+        Ok(answer) => Ok(RefreshOutcome::Changed {
+            changed: answer.changed,
+            display_name: answer.actor.display_name,
+            acct: answer.actor.acct,
+        }),
+        // The three arms are read apart because they mean different things to a reader:
+        // an unreachable peer is the network's, a mismatched document is the peer's, and
+        // anything else is this instance's.
+        Err(nodus_client_core::Error::Status {
+            status: 422,
+            message,
+        }) => Ok(RefreshOutcome::Mismatch(message)),
+        Err(nodus_client_core::Error::Status {
+            status: 502,
+            message,
+        }) => Ok(RefreshOutcome::Unreachable(message)),
+        Err(error) => Err(error.to_string()),
+    }
+}
