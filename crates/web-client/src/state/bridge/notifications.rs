@@ -253,6 +253,52 @@ pub fn reload() {
     });
 }
 
+/// Adds a row the live stream just pushed, or refreshes the row already holding that id.
+///
+/// Deduped by id, not by content: a reconnecting stream replays what was missed, and a
+/// list that appended the repeat would count one favourite twice in the rail's badge. A
+/// repeat replaces the row in place — the instance's copy is the newer one — and that is
+/// also the path an `update` for the row's status takes.
+pub fn push(notice: Notice) {
+    // A push is proof the endpoint exists, whatever the rail was told before: the stream
+    // only sends notifications the instance can also list.
+    available_signal().set(Some(true));
+    items_signal().update(|rows| match rows.iter().position(|row| row.id == notice.id) {
+        Some(index) => rows[index] = notice,
+        None => rows.insert(0, notice),
+    });
+}
+
+/// Replaces the inline copy of a status the stream says changed.
+///
+/// The row itself is not touched: an edited post still is the post that was favourited, and
+/// the notice is a record of the event, not a snapshot of the status.
+pub fn refresh_status(status: &Status) {
+    items_signal().update(|rows| {
+        for row in rows.iter_mut() {
+            if row.status.as_ref().is_some_and(|held| held.id == status.id) {
+                row.status = Some(status.clone());
+            }
+        }
+    });
+}
+
+/// Drops the inline copy of a status the stream says was deleted.
+///
+/// The row stays, with no status: the notification is still something that happened, and
+/// the instance keeps sending it (with `status: null`) for exactly that reason. What goes
+/// is the post body, which would otherwise be rendered from a copy nothing can serve.
+pub fn forget_status(id: &str) {
+    items_signal().update(|rows| {
+        for row in rows.iter_mut() {
+            if row.status.as_ref().is_some_and(|held| held.id == id) {
+                row.status = None;
+            }
+        }
+    });
+    revision_signal().update(|revision| *revision += 1);
+}
+
 /// Appends the next page, when the instance offered one.
 pub fn load_more() {
     let Some(cursor) = cursor_signal().get_untracked() else {
