@@ -13,7 +13,8 @@ test('the first visit to notifications shows what was fetched', async ({ page })
   await signedIn(page)
   await page.goto('/notifications')
 
-  // The notification carries a status, whose body is the fixture's text.
-  await expect(page.getByText('Hello from the fixture.')).toBeVisible()
+  // The notification carries a status, and the row links to it rather than inlining the
+  // body: "View post" is the current, intended markup.
+  await expect(page.getByRole('link', { name: 'View post' })).toBeVisible()
   await expect(page.getByText('Nothing here yet.')).toHaveCount(0)
 })
