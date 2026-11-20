@@ -47,6 +47,8 @@ test('a bare handle stays on this instance instead of falling home', async ({ pa
 
   // A bare handle is a name here, and the signed-in reader resolves it through their own
   // instance: what must not happen is the home timeline arriving instead of a profile.
-  await expect(page.getByText('Ada').first()).toBeVisible()
+  // The heading, not text-then-first: the off-canvas shell also carries the name in a
+  // hidden span, which `.first()` would match on a phone or tablet.
+  await expect(page.getByRole('heading', { name: 'Ada', exact: true })).toBeVisible()
   await expect(page).toHaveURL(/\/@ada$/)
 })
