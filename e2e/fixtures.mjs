@@ -5,6 +5,8 @@
 //! cheap enough to run on every commit — and honest, because a test that needed a live
 //! instance would be measuring the instance.
 
+import { expect } from '@playwright/test'
+
 export const HOST = 'stub.instance'
 export const TOKEN = 'stub-token'
 export const ACCOUNT_ID = '1'
@@ -174,11 +176,70 @@ export async function stubApi(
   page,
   { statuses = [status()], status: single, notifications = [], features = FEATURES, role = 'admin' } = {},
 ) {
+  // A request that leaves the stub reaches the fixture hostname's real DNS, and the miss
+  // arrives as `transport error: … Failed to fetch` instead of naming the route nobody
+  // answered. Fail on the request itself, whether the network completed or refused it.
+  // A stubbed response has no network leg — Playwright reports `requestStart` as -1 — so
+  // a request to the fixture host with a real start time is one the routes did not catch.
+  const onFixtureHost = (request) => new URL(request.url()).host === HOST
+  page.on('requestfinished', (request) => {
+    if (!onFixtureHost(request)) return
+    expect(request.timing().requestStart, `request escaped the stub: ${request.method()} ${request.url()}`).toBe(-1)
+  })
+  page.on('requestfailed', (request) => {
+    if (!onFixtureHost(request)) return
+    throw new Error(
+      `request escaped the stub: ${request.method()} ${request.url()} (${request.failure()?.errorText})`,
+    )
+  })
+
+  // A cold load touches more of the instance than any one screen names: the shell asks
+  // for announcements, emojis, trends and the instance card before a route ever paints.
+  // This answers whatever the named routes below do not, so an unlisted endpoint is an
+  // empty answer rather than a leak to the network. Registered first because Playwright
+  // consults handlers newest-first: every named route wins, this is the last word.
+  await page.route('**/api/**', (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fulfill({ status: 204, headers: CORS })
+      : route.fulfill({ headers: CORS, json: [] }),
+  )
+
   await page.route('**/api/v1/meta', (route) =>
     route.fulfill({ headers: CORS, json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features } }),
   )
   await page.route('**/api/v1/accounts/verify_credentials', (route) =>
     route.fulfill({ headers: CORS, json: account }),
+  )
+  // The account page, and anything that resolves an id from a mention. Registered after
+  // `verify_credentials` so that newer, literal route keeps its own answer.
+  await page.route(/\/api\/v1\/accounts\/[^/]+$/, (route) =>
+    route.fulfill({ headers: CORS, json: account }),
+  )
+  await page.route('**/api/v2/instance', (route) =>
+    route.fulfill({ headers: CORS, json: {
+        domain: HOST,
+        title: 'Stub instance',
+        version: '4.3.0',
+        source_url: 'https://github.com/nodus-social/nodus',
+        description: '',
+        short_description: '',
+        languages: ['en'],
+        registrations: { enabled: false, approval_required: false },
+        rules: [],
+        configuration: { statuses: { max_characters: 500, max_media_attachments: 4 } },
+      },
+    }),
+  )
+  await page.route('**/api/v1/instance/languages', (route) =>
+    route.fulfill({ headers: CORS, json: [] }),
+  )
+  await page.route('**/api/v1/custom_emojis', (route) => route.fulfill({ headers: CORS, json: [] }))
+  await page.route('**/api/v1/announcements', (route) => route.fulfill({ headers: CORS, json: [] }))
+  await page.route('**/api/v1/trends/**', (route) => route.fulfill({ headers: CORS, json: [] }))
+  // The style bridge reads an envelope, not a bare map: an empty array here deserialises
+  // to a failure and silently drops the account's saved styling.
+  await page.route('**/api/v1/nodus/account/metadata**', (route) =>
+    route.fulfill({ headers: CORS, json: { metadata: {} } }),
   )
   await page.route('**/api/v1/timelines/home**', (route) => route.fulfill({ headers: CORS, json: statuses }))
   await page.route('**/api/v1/timelines/public**', (route) => route.fulfill({ headers: CORS, json: statuses }))
@@ -222,7 +283,8 @@ export async function stubApi(
     route.fulfill({ headers: CORS, json: { role, scopes: scopesOf(role) } }),
   )
   // Registered last: Playwright consults handlers newest-first, so this sees the preflight
-  // before any method-specific handler and defers everything else.
+  // before any method-specific handler and defers everything else to them (and finally to
+  // the catch-all registered first, which answers).
   await page.route('**/api/**', (route) =>
     route.request().method() === 'OPTIONS'
       ? route.fulfill({ status: 204, headers: CORS })
