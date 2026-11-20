@@ -288,6 +288,7 @@ pub fn forget_extensions() {
 pub mod admin;
 mod admin_token;
 pub mod backfill;
+pub mod drive;
 mod feed;
 mod impressions;
 pub mod limits;

@@ -18,6 +18,7 @@ pub use account as accounts;
 pub mod admin;
 pub mod compose;
 pub mod directory;
+pub mod drive;
 pub mod feed;
 pub mod landing;
 pub mod lists;

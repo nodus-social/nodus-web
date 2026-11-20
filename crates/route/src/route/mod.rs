@@ -685,6 +685,22 @@ pub fn RouteView(
             <ModerationScreen runtime section/>
         }
         .into_any(),
+        // The drive is the account's own storage, read with a token the stateless render
+        // does not have. The address still answers: a link to `/drive` says where it leads
+        // rather than falling back to the feed.
+        Route::Drive => view! {
+            <crate::Screen>
+                <crate::PageHeader
+                    title="Drive"
+                    description="Your own files, in folders only you can see."
+                />
+                <crate::Note>
+                    "The drive is read with your session, which this render does not have. 
+                     Open this address in the app to see your files."
+                </crate::Note>
+            </crate::Screen>
+        }
+        .into_any(),
         other @ Route::OauthCallback => {
             let path = other.path();
             view! {

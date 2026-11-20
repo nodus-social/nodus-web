@@ -69,6 +69,8 @@ pub enum Route {
     Mutes,
     /// Accounts the viewer blocked.
     Blocks,
+    /// The cloud drive: this account's own folders and files.
+    Drive,
     Admin(String),
     Moderation(String),
     /// Settings, with the section in the address (`/settings/privacy`). Empty is the
@@ -136,6 +138,7 @@ impl Route {
             Self::ComposeEdit(id) => format!("/compose/{id}"),
             Self::Mutes => "/mutes".to_owned(),
             Self::Blocks => "/blocks".to_owned(),
+            Self::Drive => "/drive".to_owned(),
             Self::Admin(section) => format!("/admin/{section}"),
             Self::Moderation(section) => format!("/moderation/{section}"),
             Self::Settings(section) => format!("/settings/{section}"),
@@ -285,6 +288,7 @@ impl Route {
             "/compose" => Self::Compose,
             "/mutes" => Self::Mutes,
             "/blocks" => Self::Blocks,
+            "/drive" => Self::Drive,
             "/admin" => Self::Admin(ADMIN_DEFAULT.to_owned()),
             "/moderation" => Self::Moderation(MODERATION_DEFAULT.to_owned()),
             "/settings" => Self::Settings(SECTION_DEFAULT.to_owned()),

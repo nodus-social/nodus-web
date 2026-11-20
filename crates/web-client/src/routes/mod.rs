@@ -5,6 +5,7 @@
 pub mod admin;
 pub mod callback;
 pub mod compose;
+pub mod drive;
 pub mod feed;
 pub mod filtering;
 pub mod format;

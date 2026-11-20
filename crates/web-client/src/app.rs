@@ -69,6 +69,12 @@ pub(crate) fn App() -> impl IntoView {
     let feed_accounts = crate::state::bridge::feature("feed_accounts");
     let admin_on = crate::state::bridge::feature("admin");
     let moderation_on = crate::state::bridge::feature("moderation");
+    // `/api/v1/meta` does not publish a `drive` feature, so the door follows the grant the
+    // session already carries instead of a capability name no instance answers. The stored
+    // session is `read write follow` (see `session::scopes`), so `read` is the wider grant
+    // a drive-readable token carries; a token without `read:drive` still gets the server's
+    // 403, which the screen shows rather than hides.
+    let drive_on = Memo::new(move |_| crate::state::bridge::drive::may_read());
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
@@ -239,6 +245,20 @@ pub(crate) fn App() -> impl IntoView {
                             Route::StyleEditor => {
                                 view! { <SignIn note="Sign in to arrange your page."/> }
                                     .into_any()
+                            }
+                            // The drive is the account's own storage: it needs a session to
+                            // name whose drive it is, and a grant that can read it.
+                            Route::Drive if !signed_in => {
+                                view! { <SignIn note="Sign in to use the drive."/> }.into_any()
+                            }
+                            Route::Drive if !drive_on.get() => unavailable(
+                                "Drive",
+                                "The drive is served by Nodus, and this session's grant does not \
+                                 include it. Signing in again asks the instance for the drive \
+                                 scopes.",
+                            ),
+                            Route::Drive => {
+                                view! { <crate::routes::drive::DriveScreen/> }.into_any()
                             }
                             // The console itself is drawn by `RouteView`, which knows each
                             // section; only a signed-out visitor is sent to sign in.
