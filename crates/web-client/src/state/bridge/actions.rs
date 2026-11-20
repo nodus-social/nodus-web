@@ -628,6 +628,22 @@ pub async fn unfeature_tag(id: &str) -> Result<(), String> {
     call(transport()?.unfeature_tag(id)).await
 }
 
+/// Tags the instance suggests featuring, busiest first.
+///
+/// A failure is answered as an empty list on purpose: a suggestion is an offer, and an
+/// instance that cannot make one (an old Mastodon without the endpoint, a network blip)
+/// should leave the form as it was rather than put an error under a reader who never
+/// asked for suggestions.
+pub async fn featured_tag_suggestions() -> Vec<String> {
+    match transport() {
+        Ok(instance) => call(instance.featured_tag_suggestions())
+            .await
+            .map(|tags| tags.into_iter().map(|tag| tag.hashtag()).collect())
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// One tag's header, with the reader's subscription state.
 ///
 /// A 404 is answered as `Ok(None)` rather than an error: on this API a name nobody has
