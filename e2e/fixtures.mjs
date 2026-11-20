@@ -5,8 +5,6 @@
 //! cheap enough to run on every commit — and honest, because a test that needed a live
 //! instance would be measuring the instance.
 
-import { expect } from '@playwright/test'
-
 export const HOST = 'stub.instance'
 export const TOKEN = 'stub-token'
 export const ACCOUNT_ID = '1'
@@ -178,18 +176,21 @@ export async function stubApi(
 ) {
   // A request that leaves the stub reaches the fixture hostname's real DNS, and the miss
   // arrives as `transport error: … Failed to fetch` instead of naming the route nobody
-  // answered. Fail on the request itself, whether the network completed or refused it.
-  // A stubbed response has no network leg — Playwright reports `requestStart` as -1 — so
-  // a request to the fixture host with a real start time is one the routes did not catch.
-  const onFixtureHost = (request) => new URL(request.url()).host === HOST
-  page.on('requestfinished', (request) => {
-    if (!onFixtureHost(request)) return
-    expect(request.timing().requestStart, `request escaped the stub: ${request.method()} ${request.url()}`).toBe(-1)
-  })
+  // answered. Fail on the request itself, so the message names the URL rather than a
+  // symptom three layers up.
+  //
+  // `requestfailed` is the only event that can tell the two apart. A route handler that
+  // fulfils a request still emits `request` and `requestfinished` — a stub is a response,
+  // not the absence of one — so those events fire for every stubbed call and cannot say
+  // whether the browser went anywhere. A fulfilled request has no network leg and never
+  // emits `requestfailed`; only a request no route answered reaches DNS, fails there, and
+  // is reported here.
   page.on('requestfailed', (request) => {
-    if (!onFixtureHost(request)) return
+    const url = request.url()
+    if (new URL(url).host !== HOST) return
     throw new Error(
-      `request escaped the stub: ${request.method()} ${request.url()} (${request.failure()?.errorText})`,
+      `request escaped the stub: ${request.method()} ${url} left the browser for ${HOST} and failed ` +
+        `(${request.failure()?.errorText ?? 'no failure text'}) — no route answered it`,
     )
   })
 
