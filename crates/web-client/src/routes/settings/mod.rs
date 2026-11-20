@@ -49,6 +49,9 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     // The sync card is one Nodus capability: an instance that does not keep the token does
     // not answer for it, and the card is not drawn.
     let sync_token = crate::state::bridge::feature("sync_token");
+    // Session styling is ours alone — the editor writes a document this instance stores —
+    // so an account on a Mastodon server is not offered the card that opens it.
+    let extensions = crate::state::bridge::supports_extensions();
 
     let host = move || {
         revision.get();
@@ -72,12 +75,14 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     view! {
             <Show when=move || section == SettingsSection::Account>
                 <SessionCard host=host acct=acct/>
-                <SessionStyleCard
-                    style=bridge_style::active_style_signal()
-                    on_edit=Some(Callback::new(move |()| {
-                        router::navigate(Route::StyleEditor);
-                    }))
-                />
+                <Show when=move || extensions.get()>
+                    <SessionStyleCard
+                        style=bridge_style::active_style_signal()
+                        on_edit=Some(Callback::new(move |()| {
+                            router::navigate(Route::StyleEditor);
+                        }))
+                    />
+                </Show>
                 <AccountsCard/>
                 <ModerationLinks/>
             </Show>
