@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "file": "web/e2e/tests/layout.spec.mjs",
+      "title": "the rail groups reading, finding and library, with the feeds under Feed",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is the desktop shell",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/layout.spec.mjs",
+      "title": "a rail click is a client-side navigation, not a page load",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is the desktop shell",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/layout.spec.mjs",
+      "title": "the composer sits above the feed timeline, open",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the composer sits inside the sheet on a phone",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/layout.spec.mjs",
+      "title": "a feed can be hidden from the home tabs in settings",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is hidden on a phone",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/layout.spec.mjs",
+      "title": "home stays in the navigation, and the feed can be closed",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is hidden on a phone",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/loading.spec.mjs",
+      "title": "a timeline is fetched once, and revisited from the store",
+      "kind": "fixme",
+      "projects": ["*"],
+      "reason": "duplicate boot-time caller; the revisit-from-store half already passes",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/mastodon.spec.mjs",
+      "title": "a Mastodon rail offers no staff doors",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is the desktop shell",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    },
+    {
+      "file": "web/e2e/tests/rail-mastodon.spec.mjs",
+      "title": "a Mastodon instance still draws the rail",
+      "kind": "skip",
+      "projects": ["tablet", "phone"],
+      "reason": "the rail is the desktop shell",
+      "issue": "nodus-social/nodus#42",
+      "documented": "2026-11-21"
+    }
+  ]
+}
