@@ -252,13 +252,16 @@ test('moving a file picks a folder from a list', async ({ page }) => {
 
   await page.getByLabel('Move notes.txt to a folder').selectOption({ label: 'Archive' })
 
+  // The open folder is still the root, so the file has left the list it was in. The row
+  // goes only once the move has been answered and the list refetched, so this is the
+  // signal that the recorded call below is there: asserting the calls on its own races
+  // the request leaving the browser.
+  await expect(page.getByTestId('drive-file')).toHaveCount(0)
   expect(state.calls).toContainEqual({
     method: 'PATCH',
     path: '/files/f1',
     body: { folder_id: 'd1' },
   })
-  // The open folder is still the root, so the file has left the list it was in.
-  await expect(page.getByTestId('drive-file')).toHaveCount(0)
 })
 
 test('deleting asks first, and the confirmation names what goes', async ({ page }) => {
