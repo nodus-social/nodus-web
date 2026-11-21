@@ -138,7 +138,9 @@ impl Section {
             Self::Email => "Mail domains that may not sign up",
             Self::Replies => "The sentences a moderator can send",
             Self::Escalation => "What a number of strikes adds, and in which order",
-            Self::Federation => "What this instance still has to deliver to its peers, and why a delivery stopped",
+            Self::Federation => {
+                "What this instance still has to deliver to its peers, and why a delivery stopped"
+            }
             Self::Announcements => "What the instance is telling everyone",
             Self::Rules => {
                 "The rules this instance publishes, and the order a report cites them in"

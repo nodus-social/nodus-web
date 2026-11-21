@@ -167,7 +167,7 @@ fn mount(
 ) {
     use leptos::task::spawn_local;
     use wasm_bindgen::JsCast as _;
-    
+
     let alive = StoredValue::new(true);
     let generation = StoredValue::new(0_u32);
     let handle = StoredValue::new_local(None::<js_sys::Object>);

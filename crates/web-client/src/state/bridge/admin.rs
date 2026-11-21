@@ -5,9 +5,6 @@ use std::rc::Rc;
 
 use super::{admin_scope, admin_transport, instance_transport};
 use leptos::prelude::{Get, RwSignal, Signal, Update};
-use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{ReadableStreamDefaultReader, TextDecodeOptions, TextDecoder};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
@@ -17,6 +14,9 @@ use nodus_client_core::model::{
     ScanFlag, ScanRequest, ScanSeverity, Scanner, ScannerAsset, ScannerKind, ScannerRule, Topology,
     TriggerOutcome, WarningPreset,
 };
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{ReadableStreamDefaultReader, TextDecodeOptions, TextDecoder};
 
 /// How many rows a moderation screen asks for.
 ///
@@ -808,7 +808,9 @@ pub async fn settings_export(sections: &[String]) -> Result<SettingsDocument, St
         .get("instance")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
-    let held = document.get("sections").and_then(serde_json::Value::as_object);
+    let held = document
+        .get("sections")
+        .and_then(serde_json::Value::as_object);
     // Counted here rather than by the screen: a section the document does not carry at all
     // is shown as missing, and a section it carries empty is shown as zero. The two are
     // different facts, and an operator exporting a file needs to know which they have.
@@ -861,25 +863,24 @@ pub async fn settings_import(
         }
     }
     let answer: serde_json::Value = transport
-        .fetch(transport.post_body(
-            url,
-            "application/json",
-            document.as_bytes().to_vec(),
-        ))
+        .fetch(transport.post_body(url, "application/json", document.as_bytes().to_vec()))
         .await
         .map_err(|error| error.to_string())?;
     let reported = answer
         .get("dry_run")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(dry_run);
-    let held = answer.get("sections").and_then(serde_json::Value::as_object);
+    let held = answer
+        .get("sections")
+        .and_then(serde_json::Value::as_object);
     let mut outcomes = Vec::new();
     if let Some(held) = held {
         for key in SETTINGS_SECTIONS {
             let Some(value) = held.get(key) else { continue };
-            let outcome = serde_json::from_value::<SettingsOutcome>(value.clone()).map_err(
-                |error| format!("The instance's answer for {key} is not an import report: {error}"),
-            )?;
+            let outcome =
+                serde_json::from_value::<SettingsOutcome>(value.clone()).map_err(|error| {
+                    format!("The instance's answer for {key} is not an import report: {error}")
+                })?;
             outcomes.push((key.to_owned(), outcome));
         }
     }
@@ -1697,7 +1698,13 @@ impl LogTail {
     /// stream cannot be held — the caller falls back to reading the drawer on a timer.
     /// A stream the instance ends by itself is not a refusal: a node restarting closes it,
     /// so it is opened again after [`RECONNECT_GAP_MS`].
-    pub async fn follow<F>(&self, name: &str, min_level: &str, limit: u16, mut on_line: F) -> Result<(), String>
+    pub async fn follow<F>(
+        &self,
+        name: &str,
+        min_level: &str,
+        limit: u16,
+        mut on_line: F,
+    ) -> Result<(), String>
     where
         F: FnMut(NodeLog),
     {
@@ -1748,8 +1755,8 @@ impl LogTail {
         }
         init.set_headers_headers(&headers);
 
-        let request = web_sys::Request::new_with_str_and_init(url.as_str(), &init)
-            .map_err(browser_error)?;
+        let request =
+            web_sys::Request::new_with_str_and_init(url.as_str(), &init).map_err(browser_error)?;
         let answer = JsFuture::from(window.fetch_with_request(&request))
             .await
             .map_err(browser_error)?;
@@ -2461,7 +2468,9 @@ pub async fn decide_media(id: &str, release: bool, reason: &str) -> Result<Clear
         .await
     {
         Ok(verdict) => Ok(Cleared::Row(verdict)),
-        Err(nodus_client_core::Error::Status { status: 404 | 422, .. }) => Ok(Cleared::AlreadyCleared),
+        Err(nodus_client_core::Error::Status {
+            status: 404 | 422, ..
+        }) => Ok(Cleared::AlreadyCleared),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -2892,8 +2901,8 @@ pub async fn send_warning(
     if let Some(preset_id) = preset_id.filter(|value| !value.is_empty()) {
         body.insert("preset_id".to_owned(), serde_json::Value::from(preset_id));
     }
-    let body = serde_json::to_vec(&serde_json::Value::Object(body))
-        .map_err(|error| error.to_string())?;
+    let body =
+        serde_json::to_vec(&serde_json::Value::Object(body)).map_err(|error| error.to_string())?;
     transport
         .fetch(transport.post_body(url, "application/json", body))
         .await
@@ -3173,14 +3182,7 @@ pub async fn lift_domain_pause(domain: &str) -> Result<(), String> {
         .or_else(instance_transport)
         .ok_or_else(|| "Not signed in.".to_owned())?;
     let url = transport
-        .url_segments(&[
-            "api",
-            "v1",
-            "admin",
-            "federation",
-            "domain-pauses",
-            domain,
-        ])
+        .url_segments(&["api", "v1", "admin", "federation", "domain-pauses", domain])
         .map_err(|error| error.to_string())?;
     // A `DELETE` with no body: the domain is already the path's segment.
     transport
@@ -3229,7 +3231,10 @@ pub async fn instance_rules() -> Result<Vec<InstanceRule>, String> {
 }
 
 /// Adds one rule. `ordinal` places it; absent appends, which is what the add form does.
-pub async fn create_instance_rule(text: &str, ordinal: Option<i32>) -> Result<InstanceRule, String> {
+pub async fn create_instance_rule(
+    text: &str,
+    ordinal: Option<i32>,
+) -> Result<InstanceRule, String> {
     let (transport, url) = instance_rules_url()?;
     let mut body = serde_json::json!({ "text": text.trim() });
     if let Some(ordinal) = ordinal {
@@ -3273,8 +3278,8 @@ pub async fn update_instance_rule(
     if let Some(ordinal) = ordinal {
         body.insert("ordinal".to_owned(), serde_json::json!(ordinal));
     }
-    let body = serde_json::to_vec(&serde_json::Value::Object(body))
-        .map_err(|error| error.to_string())?;
+    let body =
+        serde_json::to_vec(&serde_json::Value::Object(body)).map_err(|error| error.to_string())?;
     transport
         .fetch::<InstanceRule>(transport.put_body(url, body))
         .await

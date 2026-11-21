@@ -9,7 +9,7 @@ use nodus_client_core::model::{
     AccountDetail, AdminAccount, AdminAccountQuery, ModerationAction, WarningPreset,
 };
 use nodus_pages::pages::moderation::accounts::{
-    AccountsPage, NextStep, RowFacts, StrikeHistory, StrikeHint, StrikeRecord, Warning,
+    AccountsPage, NextStep, RowFacts, StrikeHint, StrikeHistory, StrikeRecord, Warning,
     WarningNotice,
 };
 use nodus_pages::pages::moderation::{AccountBatch, BulkOutcome};

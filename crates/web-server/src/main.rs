@@ -640,8 +640,8 @@ fn prepare_render() {
 /// A page path may contain a dot — `/@name@host` is a handle, not a file — so an extension
 /// on its own does not mean "asset", only one of these does.
 const ASSET_EXTENSIONS: [&str; 15] = [
-    "js", "mjs", "wasm", "css", "map", "json", "png", "jpg", "jpeg", "gif", "webp", "svg",
-    "ico", "woff", "woff2",
+    "js", "mjs", "wasm", "css", "map", "json", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico",
+    "woff", "woff2",
 ];
 
 /// Whether `path` names an asset the bundle should have served, rather than a page.

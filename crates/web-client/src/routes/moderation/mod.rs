@@ -13,8 +13,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use nodus_pages::pages::moderation::{ModerationPage, Section};
-use nodus_ui::chrome::StaffStanding;
 use nodus_ui::Note;
+use nodus_ui::chrome::StaffStanding;
 
 use crate::router::{self, Route};
 use crate::state::alive::Alive;
@@ -26,8 +26,8 @@ use self::federation::Federation;
 use self::flags::Scans;
 use self::media::QuarantinedMediaList;
 use self::registrations::Registrations;
-use self::rules::Rules;
 use self::reports::ReportQueue;
+use self::rules::Rules;
 
 mod accounts;
 mod appeals;
@@ -35,8 +35,8 @@ mod federation;
 mod flags;
 mod media;
 mod registrations;
-mod rules;
 mod reports;
+mod rules;
 
 /// The moderation area for one section.
 #[expect(

@@ -45,22 +45,19 @@ pub fn settled() -> Signal<bool> {
 /// The instance decides what a token may do; the console only knows the scopes the
 /// `/api/v1/admin/meta` answer named, so a control outside them explains itself before it is
 /// pressed rather than after the refusal.
-pub const NO_WRITE: &str =
-    "This browser's staff grant does not include admin:write, so the instance would refuse this change.";
+pub const NO_WRITE: &str = "This browser's staff grant does not include admin:write, so the instance would refuse this change.";
 
 /// The sentence a control carries when the route behind it asks for the administrator role.
 ///
 /// The account's staff role is a different question from the grant's scopes: the
 /// administrator flag and media retention answer `role == admin` whatever the token holds.
-pub const NO_ADMIN_ROLE: &str =
-    "This needs an administrator role rather than a moderator's: the instance refuses this request whatever the grant's scopes.";
+pub const NO_ADMIN_ROLE: &str = "This needs an administrator role rather than a moderator's: the instance refuses this request whatever the grant's scopes.";
 
 /// The sentence an administrator-only panel carries above its controls.
 ///
 /// Said out loud rather than left to a disabled button: the grant's scopes are not the role,
 /// and a moderator holding `admin:write` is still refused by these routes.
-pub const ADMIN_ONLY: &str =
-    "Administrators only. The instance answers this panel's routes with the admin role, not a moderator's, so nothing here can be changed from this account.";
+pub const ADMIN_ONLY: &str = "Administrators only. The instance answers this panel's routes with the admin role, not a moderator's, so nothing here can be changed from this account.";
 
 /// The sentence a control carries when the account may not press it, or `""` when it may.
 ///

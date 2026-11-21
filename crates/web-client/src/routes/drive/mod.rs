@@ -17,8 +17,8 @@ use std::rc::Rc;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use wasm_bindgen::JsCast;
 use nodus_pages::pages::drive::{DrivePage, FileRow, FolderRow, ShareOutcome};
+use wasm_bindgen::JsCast;
 
 use crate::state::alive::Alive;
 use crate::state::bridge::drive;
@@ -187,11 +187,7 @@ pub fn DriveScreen() -> impl IntoView {
     });
 
     let download = Callback::new(move |id: String| {
-        let Some(file) = files
-            .get_untracked()
-            .into_iter()
-            .find(|file| file.id == id)
-        else {
+        let Some(file) = files.get_untracked().into_iter().find(|file| file.id == id) else {
             return;
         };
         spawn_local(async move {
@@ -225,8 +221,10 @@ pub fn DriveScreen() -> impl IntoView {
                 let total = picked.len();
                 for (index, file) in picked.into_iter().enumerate() {
                     let name = file.name();
-                    set_busy
-                        .set(Some(format!("Uploading {name} ({} of {total})…", index + 1)));
+                    set_busy.set(Some(format!(
+                        "Uploading {name} ({} of {total})…",
+                        index + 1
+                    )));
                     let progress = {
                         let name = name.clone();
                         let ticker = set_busy;

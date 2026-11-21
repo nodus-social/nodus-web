@@ -125,10 +125,12 @@ pub fn DrivePage(
     #[prop(optional, into)]
     share: Option<Signal<Option<(String, ShareOutcome)>>>,
     /// Asks for a link for one file, for the given number of seconds.
-    #[prop(optional)] on_share: Option<Callback<(String, u64)>>,
+    #[prop(optional)]
+    on_share: Option<Callback<(String, u64)>>,
     /// Copies the link on screen; `true` when the browser's clipboard took it, `false`
     /// when the text was only selected for the reader to copy themselves.
-    #[prop(optional)] on_copy: Option<Callback<(), bool>>,
+    #[prop(optional)]
+    on_copy: Option<Callback<(), bool>>,
     #[prop(optional)] on_open_folder: Option<Callback<Option<String>>>,
     #[prop(optional)] on_create_folder: Option<Callback<String>>,
     #[prop(optional)] on_rename_folder: Option<Callback<(String, String)>>,
@@ -154,11 +156,7 @@ pub fn DrivePage(
     // file lands, which is the only signal that the request is over.
     Effect::new(move |_| {
         let open = sharing_file.get();
-        if share
-            .get()
-            .map(|(id, _)| Some(id) == open)
-            .unwrap_or(false)
-        {
+        if share.get().map(|(id, _)| Some(id) == open).unwrap_or(false) {
             share_busy.set(false);
         }
     });

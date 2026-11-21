@@ -493,12 +493,7 @@ pub trait Runtime: Send + Sync + 'static {
     ///
     /// The returned tag is what the screen shows: `following` is the server's answer, not
     /// the reader's click. `Ok(None)` is the same absent-tag answer as [`Self::load_tag`].
-    fn follow_tag(
-        &self,
-        _name: String,
-        _on: bool,
-        done: Callback<Result<Option<Tag>, String>>,
-    ) {
+    fn follow_tag(&self, _name: String, _on: bool, done: Callback<Result<Option<Tag>, String>>) {
         done.run(Err("Following a tag needs the app.".to_owned()));
     }
 

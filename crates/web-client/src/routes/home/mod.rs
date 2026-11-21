@@ -20,8 +20,7 @@ pub use self::trouble::Trouble;
 
 fn timeline(route: crate::router::Route) -> impl IntoView {
     let header: ChildrenFn = std::sync::Arc::new(|| view! { <TimelineHeader/> }.into_any());
-    let banner: ChildrenFn =
-        std::sync::Arc::new(|| view! { <Trouble/> <Banner/> }.into_any());
+    let banner: ChildrenFn = std::sync::Arc::new(|| view! { <Trouble/> <Banner/> }.into_any());
     let card: nodus_ui::components::CardRenderer = std::sync::Arc::new(|status| {
         view! { <crate::routes::status::StatusCard status=status/> }.into_any()
     });

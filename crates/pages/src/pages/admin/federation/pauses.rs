@@ -14,9 +14,9 @@
 
 use leptos::prelude::*;
 
-use crate::components::panel::Panel;
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::components::panel::Panel;
+use crate::props::{NO_WRITE, writable};
 
 /// The difference between a pause and a block, said once for the whole panel.
 pub const PAUSE_VERSUS_BLOCK: &str = "A pause is temporary and unannounced: this instance stops delivering to the domain and keeps its posts out of timelines, and the peer is never told. It ends by itself at the expiry, or when it is lifted. A block is permanent and announced: the peer is told it is blocked. Pause to wait something out; block to refuse it and say so.";

@@ -16,9 +16,7 @@ use nodus_pages::pages::admin::settings_transfer::{
 
 use crate::platform::download::save_bytes;
 use crate::state::alive::Alive;
-use crate::state::bridge::admin::{
-    self, SettingsDocument, SettingsOutcome, SETTINGS_SECTIONS,
-};
+use crate::state::bridge::admin::{self, SETTINGS_SECTIONS, SettingsDocument, SettingsOutcome};
 
 use super::read_document_file;
 

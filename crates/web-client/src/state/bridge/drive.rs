@@ -221,11 +221,7 @@ pub async fn create_folder(name: &str, parent: Option<&str>) -> Result<(), Strin
     let transport = transport()?;
     let body = serde_json::json!({ "name": name.trim(), "parent_id": parent });
     transport
-        .fetch::<serde_json::Value>(json_request(
-            "POST",
-            drive_url(&["folders"])?,
-            &body,
-        )?)
+        .fetch::<serde_json::Value>(json_request("POST", drive_url(&["folders"])?, &body)?)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -236,11 +232,7 @@ pub async fn rename_folder(id: &str, name: &str) -> Result<(), String> {
     let transport = transport()?;
     let body = serde_json::json!({ "name": name.trim() });
     transport
-        .fetch::<serde_json::Value>(json_request(
-            "PATCH",
-            drive_url(&["folders", id])?,
-            &body,
-        )?)
+        .fetch::<serde_json::Value>(json_request("PATCH", drive_url(&["folders", id])?, &body)?)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -261,11 +253,7 @@ pub async fn rename_file(id: &str, filename: &str) -> Result<(), String> {
     let transport = transport()?;
     let body = serde_json::json!({ "filename": filename.trim() });
     transport
-        .fetch::<serde_json::Value>(json_request(
-            "PATCH",
-            drive_url(&["files", id])?,
-            &body,
-        )?)
+        .fetch::<serde_json::Value>(json_request("PATCH", drive_url(&["files", id])?, &body)?)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -276,11 +264,7 @@ pub async fn move_file(id: &str, folder: Option<&str>) -> Result<(), String> {
     let transport = transport()?;
     let body = serde_json::json!({ "folder_id": folder });
     transport
-        .fetch::<serde_json::Value>(json_request(
-            "PATCH",
-            drive_url(&["files", id])?,
-            &body,
-        )?)
+        .fetch::<serde_json::Value>(json_request("PATCH", drive_url(&["files", id])?, &body)?)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -291,11 +275,7 @@ pub async fn set_visibility(id: &str, visibility: &str) -> Result<(), String> {
     let transport = transport()?;
     let body = serde_json::json!({ "visibility": visibility });
     transport
-        .fetch::<serde_json::Value>(json_request(
-            "PATCH",
-            drive_url(&["files", id])?,
-            &body,
-        )?)
+        .fetch::<serde_json::Value>(json_request("PATCH", drive_url(&["files", id])?, &body)?)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -333,8 +313,8 @@ pub fn copy_link(url: &str) -> bool {
         return false;
     };
     let navigator = window.navigator();
-    let clipboard = js_sys::Reflect::has(navigator.as_ref(), &JsValue::from_str("clipboard"))
-        .unwrap_or(false);
+    let clipboard =
+        js_sys::Reflect::has(navigator.as_ref(), &JsValue::from_str("clipboard")).unwrap_or(false);
     if clipboard {
         let clipboard = navigator.clipboard();
         let text = url.to_owned();
@@ -406,7 +386,8 @@ pub async fn upload(
     form.append_with_str("visibility", visibility)
         .map_err(|_| "This browser refused the upload.".to_owned())?;
 
-    let xhr = web_sys::XmlHttpRequest::new().map_err(|_| "This browser refused the upload.".to_owned())?;
+    let xhr = web_sys::XmlHttpRequest::new()
+        .map_err(|_| "This browser refused the upload.".to_owned())?;
     xhr.open_with_async("POST", url.as_str(), true)
         .map_err(|_| "This browser refused the upload.".to_owned())?;
     let token = transport.token().expose();
@@ -415,7 +396,9 @@ pub async fn upload(
             .map_err(|_| "This browser refused the upload.".to_owned())?;
     }
     xhr.set_response_type(web_sys::XmlHttpRequestResponseType::Text);
-    let upload = xhr.upload().map_err(|_| "This browser refused the upload.".to_owned())?;
+    let upload = xhr
+        .upload()
+        .map_err(|_| "This browser refused the upload.".to_owned())?;
     let ticker = Rc::clone(&on_progress);
     let upload_ticker = Closure::<dyn FnMut(ProgressEvent)>::new(move |event: ProgressEvent| {
         if event.length_computable() && event.total() > 0.0 {
@@ -456,7 +439,9 @@ pub async fn upload(
         .await
         .map_err(|_| "The upload was interrupted.".to_owned())?;
 
-    let status = xhr.status().map_err(|_| "The upload was interrupted.".to_owned())?;
+    let status = xhr
+        .status()
+        .map_err(|_| "The upload was interrupted.".to_owned())?;
     let text = xhr
         .response_text()
         .map_err(|_| "The upload was interrupted.".to_owned())?
@@ -480,9 +465,13 @@ pub async fn download(file: &DriveFile) -> Result<(), String> {
             .fetch_with_request(&{
                 let init = RequestInit::new();
                 init.set_method("GET");
-                let headers = web_sys::Headers::new().map_err(|_| "This browser refused the download.".to_owned())?;
+                let headers = web_sys::Headers::new()
+                    .map_err(|_| "This browser refused the download.".to_owned())?;
                 headers
-                    .set("Authorization", &format!("Bearer {}", transport.token().expose()))
+                    .set(
+                        "Authorization",
+                        &format!("Bearer {}", transport.token().expose()),
+                    )
                     .map_err(|_| "This browser refused the download.".to_owned())?;
                 init.set_headers_headers(&headers);
                 web_sys::Request::new_with_str_and_init(url.as_str(), &init)
@@ -494,11 +483,18 @@ pub async fn download(file: &DriveFile) -> Result<(), String> {
     .dyn_into::<Response>()
     .map_err(|_| "The answer was not a response.".to_owned())?;
     if !response.ok() {
-        return Err(format!("The instance answered {} for the download.", response.status()));
+        return Err(format!(
+            "The instance answered {} for the download.",
+            response.status()
+        ));
     }
-    let blob = JsFuture::from(response.blob().map_err(|_| "The file could not be read.".to_owned())?)
-        .await
-        .map_err(|_| "The file could not be read.".to_owned())?;
+    let blob = JsFuture::from(
+        response
+            .blob()
+            .map_err(|_| "The file could not be read.".to_owned())?,
+    )
+    .await
+    .map_err(|_| "The file could not be read.".to_owned())?;
     let blob: web_sys::Blob = blob
         .dyn_into()
         .map_err(|_| "The answer was not a file.".to_owned())?;

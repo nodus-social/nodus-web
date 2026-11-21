@@ -212,7 +212,10 @@ fn fold_groups(rows: Vec<Notice>) -> Vec<Group> {
 }
 
 #[component]
-fn NoticeRow(#[prop(into)] group: Group, seen: Signal<std::collections::HashSet<String>>) -> impl IntoView {
+fn NoticeRow(
+    #[prop(into)] group: Group,
+    seen: Signal<std::collections::HashSet<String>>,
+) -> impl IntoView {
     let notice = group.notice.clone();
     let id = notice.id.clone();
     let unread = {
@@ -334,13 +337,11 @@ fn ModerationBox(notice_id: String, moderation: Moderation) -> impl IntoView {
             .and_then(|row| row.moderation.clone())
     });
     let appeal = Signal::derive(move || live.get().and_then(|moderation| moderation.appeal));
-    let can_appeal = Signal::derive(move || live.get().is_some_and(|moderation| moderation.can_appeal));
+    let can_appeal =
+        Signal::derive(move || live.get().is_some_and(|moderation| moderation.can_appeal));
     let decided = Signal::derive(move || appeal.get().filter(Appeal::decided));
-    let pending = Signal::derive(move || {
-        appeal
-            .get()
-            .is_some_and(|appeal| !Appeal::decided(&appeal))
-    });
+    let pending =
+        Signal::derive(move || appeal.get().is_some_and(|appeal| !Appeal::decided(&appeal)));
 
     let send = Callback::new({
         let id = notice_id.clone();

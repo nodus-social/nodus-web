@@ -263,10 +263,12 @@ pub fn push(notice: Notice) {
     // A push is proof the endpoint exists, whatever the rail was told before: the stream
     // only sends notifications the instance can also list.
     available_signal().set(Some(true));
-    items_signal().update(|rows| match rows.iter().position(|row| row.id == notice.id) {
-        Some(index) => rows[index] = notice,
-        None => rows.insert(0, notice),
-    });
+    items_signal().update(
+        |rows| match rows.iter().position(|row| row.id == notice.id) {
+            Some(index) => rows[index] = notice,
+            None => rows.insert(0, notice),
+        },
+    );
 }
 
 /// Replaces the inline copy of a status the stream says changed.

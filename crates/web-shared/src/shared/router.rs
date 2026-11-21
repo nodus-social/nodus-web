@@ -409,7 +409,10 @@ mod tests {
 
     #[test]
     fn a_tag_is_a_place_and_its_name_survives_the_round_trip() {
-        assert_eq!(Route::from_path("/tags/rust"), Route::Tag("rust".to_owned()));
+        assert_eq!(
+            Route::from_path("/tags/rust"),
+            Route::Tag("rust".to_owned())
+        );
         assert_eq!(
             Route::from_path("/tags/%23rust"),
             Route::Tag("rust".to_owned())
@@ -467,7 +470,10 @@ mod tests {
     #[test]
     fn a_handle_path_keeps_its_canonical_address_so_links_are_stable() {
         let (route, url) = Route::parse_href("/@Gargron@mastodon.social");
-        assert_eq!(url, format!("{}/accounts/mastodon.social/Gargron", super::BASE));
+        assert_eq!(
+            url,
+            format!("{}/accounts/mastodon.social/Gargron", super::BASE)
+        );
         assert_eq!(route, Route::Account("mastodon.social/Gargron".to_owned()));
     }
 

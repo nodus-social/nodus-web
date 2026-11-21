@@ -35,8 +35,8 @@ use std::cell::{Cell, RefCell};
 use gloo_timers::future::TimeoutFuture;
 use nodus_client_core::model::Status;
 use nodus_client_sdk::Command;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use super::notifications::{self, Notice};
@@ -100,10 +100,8 @@ impl Stream {
             source.set_onopen(None);
             source.set_onerror(None);
             for (event, callback) in &self.listeners {
-                let _ = source.remove_event_listener_with_callback(
-                    event,
-                    callback.as_ref().unchecked_ref(),
-                );
+                let _ = source
+                    .remove_event_listener_with_callback(event, callback.as_ref().unchecked_ref());
             }
             source.close();
         }
@@ -328,8 +326,7 @@ fn listen(
     handle: impl FnMut(web_sys::Event) + 'static,
 ) -> Closure<dyn FnMut(web_sys::Event)> {
     let callback = Closure::<dyn FnMut(web_sys::Event)>::new(handle);
-    let _ = source
-        .add_event_listener_with_callback(event, callback.as_ref().unchecked_ref());
+    let _ = source.add_event_listener_with_callback(event, callback.as_ref().unchecked_ref());
     callback
 }
 

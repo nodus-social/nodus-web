@@ -15,8 +15,8 @@
 
 use leptos::prelude::*;
 
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::props::{NO_WRITE, writable};
 
 /// Which appeals the queue is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

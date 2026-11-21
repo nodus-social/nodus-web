@@ -33,7 +33,8 @@ const FORWARDED_PAGE: u16 = 50;
 fn reason_of(problem: String) -> String {
     let body = match problem.split_once(": ") {
         Some((lead, rest))
-            if lead.starts_with("discovery returned ") || lead.starts_with("instance returned ") =>
+            if lead.starts_with("discovery returned ")
+                || lead.starts_with("instance returned ") =>
         {
             rest
         }
@@ -41,7 +42,13 @@ fn reason_of(problem: String) -> String {
     };
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|envelope| envelope.get("error")?.get("message")?.as_str().map(str::to_owned))
+        .and_then(|envelope| {
+            envelope
+                .get("error")?
+                .get("message")?
+                .as_str()
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| body.to_owned())
 }
 

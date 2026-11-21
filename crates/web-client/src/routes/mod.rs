@@ -10,9 +10,9 @@ pub mod feed;
 pub mod filtering;
 pub mod format;
 pub mod home;
-pub mod notifications;
 #[cfg(feature = "admin")]
 pub mod moderation;
+pub mod notifications;
 pub mod settings;
 pub mod sign_in;
 pub mod status;

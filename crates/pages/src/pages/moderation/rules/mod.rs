@@ -11,9 +11,9 @@
 
 use leptos::prelude::*;
 
-use crate::components::panel::Panel;
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::components::panel::Panel;
+use crate::props::{NO_WRITE, writable};
 
 /// One rule as the screen draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]

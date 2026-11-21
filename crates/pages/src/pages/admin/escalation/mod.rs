@@ -19,9 +19,9 @@
 
 use leptos::prelude::*;
 
-use crate::components::panel::Panel;
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::components::panel::Panel;
+use crate::props::{NO_WRITE, writable};
 
 /// One rung: the live strike count it answers, what it applies, and for how long.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,11 +125,7 @@ fn duration_line(step: &Step) -> String {
 /// One rung read back in a sentence — the whole point of the ladder.
 #[must_use]
 pub fn step_line(step: &Step) -> String {
-    format!(
-        "Strike {} {}",
-        step.strikes,
-        action_line(&step.action)
-    ) + &duration_line(step)
+    format!("Strike {} {}", step.strikes, action_line(&step.action)) + &duration_line(step)
 }
 
 /// The whole ladder in one sentence, so the sequence is legible before it is read rung by rung.
@@ -164,7 +160,10 @@ pub fn sequence_line(draft: &Draft) -> String {
 /// the sentence and the row end up side by side.
 fn named_step(error: &str) -> Option<usize> {
     let rest = error.split("step ").nth(1)?;
-    let digits = rest.chars().take_while(char::is_ascii_digit).collect::<String>();
+    let digits = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
     digits.parse().ok()
 }
 
@@ -468,7 +467,7 @@ pub fn EscalationPage(
 
 #[cfg(test)]
 mod tests {
-    use super::{named_step, sequence_line, step_line, Draft, Policy, Step};
+    use super::{Draft, Policy, Step, named_step, sequence_line, step_line};
 
     fn step(strikes: i64, action: &str, duration_days: Option<i64>) -> Step {
         Step {
@@ -523,10 +522,15 @@ mod tests {
     #[test]
     fn a_refusal_names_the_rung_it_is_about() {
         assert_eq!(
-            named_step("instance returned 422: step 3: strike counts must ascend, 2 does not follow 4"),
+            named_step(
+                "instance returned 422: step 3: strike counts must ascend, 2 does not follow 4"
+            ),
             Some(3)
         );
-        assert_eq!(named_step("instance returned 422: window_days must be between 1 and 3650"), None);
+        assert_eq!(
+            named_step("instance returned 422: window_days must be between 1 and 3650"),
+            None
+        );
     }
 
     #[test]

@@ -8,9 +8,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use nodus_pages::pages::moderation::appeals::{
-    Appeal, AppealDecision, AppealFilter, AppealsPage,
-};
+use nodus_pages::pages::moderation::appeals::{Appeal, AppealDecision, AppealFilter, AppealsPage};
 
 use crate::state::alive::Alive;
 use crate::state::bridge::admin::{self, AdminAppeal, Decided};
@@ -143,9 +141,7 @@ pub fn Appeals() -> impl IntoView {
 
 /// The queue under `filter`, and how many appeals are waiting — the same read when the filter
 /// is the work list, and one extra read otherwise.
-async fn queue(
-    filter: AppealFilter,
-) -> (Result<Vec<AdminAppeal>, String>, Option<(usize, bool)>) {
+async fn queue(filter: AppealFilter) -> (Result<Vec<AdminAppeal>, String>, Option<(usize, bool)>) {
     let page = admin::appeals(filter.wire(), 0).await;
     let pending = match filter {
         AppealFilter::Pending => page.as_ref().map(|rows| rows.len()).ok(),

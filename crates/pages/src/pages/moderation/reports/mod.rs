@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use nodus_client_core::model::{Report, ReportState};
 
 use super::{BulkOutcome, ReportBatch, ReportBulkAction};
-use crate::pages::admin::federation::forwarded::{forward_of, Forward};
+use crate::pages::admin::federation::forwarded::{Forward, forward_of};
 
 /// What forwarding has answered about this queue's rows so far.
 ///
@@ -420,10 +420,12 @@ fn row(
     let change_id = StoredValue::new(report.id.clone());
     // Where a remote target is: a report about `@someone@peer.example` is the only kind that
     // can leave this instance, so the host half of the handle is what the forward addresses.
-    let peer = report
-        .target_account
-        .as_ref()
-        .and_then(|account| account.acct.split_once('@').map(|(_, host)| host.to_owned()));
+    let peer = report.target_account.as_ref().and_then(|account| {
+        account
+            .acct
+            .split_once('@')
+            .map(|(_, host)| host.to_owned())
+    });
     let peer = StoredValue::new(peer);
     let forward_id = StoredValue::new(report.id.clone());
     let forward_note = StoredValue::new(String::new());

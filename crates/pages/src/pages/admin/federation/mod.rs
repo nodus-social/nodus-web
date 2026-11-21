@@ -13,9 +13,9 @@
 
 use leptos::prelude::*;
 
-use crate::components::panel::Panel;
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::components::panel::Panel;
+use crate::props::{NO_WRITE, writable};
 
 pub mod forwarded;
 pub mod pauses;
@@ -147,7 +147,9 @@ pub fn stop_line(row: &Delivery) -> String {
         ),
         None => format!(
             "{host} never answered ({} after {}): the peer was unreachable, so the queue retried with backoff and then gave up.",
-            row.last_error.as_deref().unwrap_or("no detail was recorded"),
+            row.last_error
+                .as_deref()
+                .unwrap_or("no detail was recorded"),
             attempts_line(row.attempts)
         ),
     }

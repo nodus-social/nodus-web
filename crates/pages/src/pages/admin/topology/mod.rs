@@ -96,9 +96,10 @@ fn node_card(
     let triggerable = work.is_some() && node.status != NodeStatus::Dead;
     let trigger_name = StoredValue::new(node.name.clone());
     let detail = match (&node.last_error, node.last_seen_at.as_deref()) {
-        (Some(error), Some(seen)) => {
-            Some(format!("{error} — it last answered {}", &seen[..seen.len().min(19)]))
-        }
+        (Some(error), Some(seen)) => Some(format!(
+            "{error} — it last answered {}",
+            &seen[..seen.len().min(19)]
+        )),
         (Some(error), None) => Some(format!("{error} — it has never answered")),
         (None, _) => None,
     };
@@ -157,7 +158,11 @@ fn node_card(
 }
 
 fn log_line(entry: NodeLog) -> impl IntoView {
-    let when = entry.timestamp.get(11..19).unwrap_or(&entry.timestamp).to_owned();
+    let when = entry
+        .timestamp
+        .get(11..19)
+        .unwrap_or(&entry.timestamp)
+        .to_owned();
     let class = match entry.level.as_str() {
         "error" => "font-mono text-xs text-error",
         "warn" => "font-mono text-xs text-warning",

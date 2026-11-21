@@ -12,8 +12,8 @@
 
 use leptos::prelude::*;
 
-use crate::props::{writable, NO_WRITE};
 use crate::Note;
+use crate::props::{NO_WRITE, writable};
 
 /// One attachment a content set caught, as the queue draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]

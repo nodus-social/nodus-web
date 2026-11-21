@@ -46,17 +46,15 @@ pub fn Rules() -> impl IntoView {
 
     // Every write follows the same shape: say what is happening, send it, then read the list
     // again — the hit count and the enabled flag are the instance's, not the form's.
-    let finish = move |outcome: Result<(), String>, done: &'static str| {
-        match outcome {
-            Ok(()) => {
-                set_error.set(None);
-                set_notice.set(Some(done.to_owned()));
-                reload.run(());
-            }
-            Err(message) => {
-                set_notice.set(None);
-                set_error.set(Some(message));
-            }
+    let finish = move |outcome: Result<(), String>, done: &'static str| match outcome {
+        Ok(()) => {
+            set_error.set(None);
+            set_notice.set(Some(done.to_owned()));
+            reload.run(());
+        }
+        Err(message) => {
+            set_notice.set(None);
+            set_error.set(Some(message));
         }
     };
 
@@ -134,9 +132,7 @@ pub fn Rules() -> impl IntoView {
                             .filter(|held| !held.is_empty())
                             .unwrap_or(id),
                         matched: answer.matched,
-                        span: answer
-                            .span
-                            .map(|span| (span.start, span.end, span.text)),
+                        span: answer.span.map(|span| (span.start, span.end, span.text)),
                         reason: answer.reason,
                         scanned_bytes: answer.scanned_bytes,
                         truncated: answer.truncated,

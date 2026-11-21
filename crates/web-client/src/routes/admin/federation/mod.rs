@@ -10,7 +10,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use nodus_pages::pages::admin::federation::{Counts, DeliveriesPage, Delivery, Query, PAGE};
+use nodus_pages::pages::admin::federation::{Counts, DeliveriesPage, Delivery, PAGE, Query};
 
 use crate::state::alive::Alive;
 use crate::state::bridge::{admin, feature};
@@ -68,7 +68,11 @@ pub fn Deliveries() -> impl IntoView {
             let host = asked.host.trim().to_owned();
             let outcome = admin::deliveries(
                 asked.state.as_deref(),
-                if host.is_empty() { None } else { Some(host.as_str()) },
+                if host.is_empty() {
+                    None
+                } else {
+                    Some(host.as_str())
+                },
                 offset,
                 PAGE,
             )
@@ -143,7 +147,11 @@ pub fn Deliveries() -> impl IntoView {
                         // actually waiting, and zero is a real answer.
                         set_notice.set(Some(format!(
                             "Requeued {requeued} failed {}. They will be attempted again now.",
-                            if requeued == 1 { "delivery" } else { "deliveries" }
+                            if requeued == 1 {
+                                "delivery"
+                            } else {
+                                "deliveries"
+                            }
                         )));
                         read.run(0);
                     }

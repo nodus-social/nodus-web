@@ -48,22 +48,23 @@ pub fn Scans() -> impl IntoView {
     });
 
     let (notice, set_notice) = signal(None::<String>);
-    let scan = Callback::new(move |status: String| {
-        spawn_local(async move {
-            match admin::scan_subject(&status).await {
-                Ok(queued) => alive.if_alive(|| {
-                    set_error.set(None);
-                    set_notice.set(Some(match queued {
+    let scan =
+        Callback::new(move |status: String| {
+            spawn_local(async move {
+                match admin::scan_subject(&status).await {
+                    Ok(queued) => alive.if_alive(|| {
+                        set_error.set(None);
+                        set_notice.set(Some(match queued {
                         0 => "Nothing new to queue: every scanner that is on already has this post."
                             .to_owned(),
                         1 => "Queued 1 scan for this post.".to_owned(),
                         scans => format!("Queued {scans} scans for this post."),
                     }));
-                }),
-                Err(message) => alive.if_alive(|| set_error.set(Some(message))),
-            }
+                    }),
+                    Err(message) => alive.if_alive(|| set_error.set(Some(message))),
+                }
+            });
         });
-    });
 
     view! {
         <FlagsPage

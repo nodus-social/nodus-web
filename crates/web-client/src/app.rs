@@ -77,9 +77,8 @@ pub(crate) fn App() -> impl IntoView {
     // `session::scopes`), so `read` is the wider grant a drive-readable token carries; a token
     // without `read:drive` still gets the server's 403, which the screen shows rather than hides.
     let drive_feature = crate::state::bridge::feature("drive");
-    let drive_on = Memo::new(move |_| {
-        drive_feature.get() || crate::state::bridge::drive::may_read()
-    });
+    let drive_on =
+        Memo::new(move |_| drive_feature.get() || crate::state::bridge::drive::may_read());
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
