@@ -7,6 +7,8 @@
 //! account model in the SDK does not carry `fields` yet, so the answer is read into a local
 //! struct that keeps the account for the store and the rows for the editor.
 
+use std::cell::RefCell;
+
 use nodus_client_core::model::Account;
 use nodus_pages::pages::settings::form::{ProfileField, parse_field_error};
 use serde::Deserialize;
@@ -68,6 +70,27 @@ pub enum SaveError {
     Form(String),
 }
 
+thread_local! {
+    /// The rows the last credential read answered with. A profile is opened more often
+    /// than the settings card, and the rows do not change between the two, so the read is
+    /// kept here rather than repeated: a per-profile refetch would be a new request for
+    /// every mount, and the account document carries no rows to read instead.
+    static LAST_ROWS: RefCell<Option<Vec<ProfileField>>> = const { RefCell::new(None) };
+}
+
+/// The rows the last credential read answered with, if one has landed.
+///
+/// `None` means nobody has read the credentials yet in this page; the caller asks for the
+/// read rather than drawing an empty profile as if the account had no rows.
+#[must_use]
+pub fn cached_fields() -> Option<Vec<ProfileField>> {
+    LAST_ROWS.with(|rows| rows.borrow().clone())
+}
+
+fn remember(rows: &[ProfileField]) {
+    LAST_ROWS.with(|held| *held.borrow_mut() = Some(rows.to_vec()));
+}
+
 /// The signed-in account's metadata rows.
 pub async fn fields() -> Result<Vec<ProfileField>, String> {
     let transport = super::instance_transport().ok_or_else(|| "Not signed in.".to_owned())?;
@@ -76,7 +99,9 @@ pub async fn fields() -> Result<Vec<ProfileField>, String> {
         .fetch(transport.get(url))
         .await
         .map_err(|error| error.to_string())?;
-    Ok(answer.rows())
+    let rows = answer.rows();
+    remember(&rows);
+    Ok(rows)
 }
 
 /// Writes the name, the bio and the rows in one partial update, and returns the rows as the
@@ -126,5 +151,7 @@ pub async fn save(
     super::dispatch(nodus_client_sdk::Command::AccountsUpserted {
         accounts: vec![answer.account.clone()],
     });
-    Ok(answer.rows())
+    let rows = answer.rows();
+    remember(&rows);
+    Ok(rows)
 }

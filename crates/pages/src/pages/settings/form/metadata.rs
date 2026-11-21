@@ -2,17 +2,7 @@
 
 use leptos::prelude::*;
 
-use super::fields::{MAX_FIELDS, ProfileField};
-
-/// Whether a row's value looks like a link.
-///
-/// Only a link can be verified by an instance, so the mark is never drawn beside a
-/// sentence or a handle: a verified-looking tick on something the instance cannot check
-/// would read as a claim the writer made.
-fn is_link(value: &str) -> bool {
-    let value = value.trim();
-    value.starts_with("https://") || value.starts_with("http://")
-}
+use super::fields::{MAX_FIELDS, ProfileField, is_link};
 
 /// The account's metadata rows, and the control that adds one.
 ///

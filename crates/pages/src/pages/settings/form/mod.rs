@@ -152,7 +152,8 @@ mod metadata;
 mod profile;
 
 pub use fields::{
-    FieldError, MAX_FIELDS, MAX_NAME_CHARS, ProfileField, parse_field_error, validate_fields,
+    FieldError, MAX_FIELDS, MAX_NAME_CHARS, ProfileField, is_link, parse_field_error,
+    validate_fields,
 };
 pub use filter::{FeaturedTagField, FilterFields};
 pub use metadata::MetadataFields;

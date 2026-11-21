@@ -14,6 +14,7 @@
 
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, Relationship, Status};
+use crate::pages::settings::form::{ProfileField, is_link};
 
 use crate::components::CardRenderer;
 use crate::display_name;
@@ -67,6 +68,13 @@ pub fn ProfilePage(
     /// Whether the reader can act on the relationship at all.
     #[prop(default = true)]
     show_verbs: bool,
+    /// The metadata rows this account carries, or `None` when the caller has none to show.
+    ///
+    /// Only the signed-in account's own rows are known without another read: the account
+    /// document the page fetches does not carry them, and a visitor's profile has no
+    /// credential read to borrow.
+    #[prop(optional)]
+    fields: Option<Signal<Vec<ProfileField>>>,
 ) -> impl IntoView {
     let name = display_name(&account.display_name, &account.acct);
     let handle = format!("@{}", account.acct);
@@ -156,6 +164,7 @@ pub fn ProfilePage(
                                 ></p>
                             }
                         })}
+                    {fields.map(metadata)}
                     <Show when=move || show_verbs>
                         <div class="flex flex-wrap items-center gap-2">
                             {verb(follow, "btn btn-primary btn-sm", follow_on, target, on_follow, ready)}
@@ -216,6 +225,47 @@ fn face(
         <span class="avatar cursor-default pointer-events-none" title="Expand picture">
             <div class="w-16 rounded-full bg-base-300">{picture}</div>
         </span>
+    }
+    .into_any()
+}
+
+/// The metadata rows, under the bio: a label and what it points at.
+///
+/// The block is absent when there are no rows, and each value is a `rel="me"` link only
+/// when it is one: the mark says the instance verified a link, so a tick beside a sentence
+/// would be a claim about something the instance never checked.
+fn metadata(fields: Signal<Vec<ProfileField>>) -> AnyView {
+    view! {
+        <Show when=move || !fields.get().is_empty()>
+            <dl class="mt-2 flex flex-col gap-1 text-sm">
+                {move || fields.get().into_iter().map(metadata_row).collect_view()}
+            </dl>
+        </Show>
+    }
+    .into_any()
+}
+
+/// One metadata row: the label, then the value and the instance's verdict on it.
+fn metadata_row(field: ProfileField) -> AnyView {
+    let value = field.value.trim().to_owned();
+    let linked = is_link(&value);
+    let shown = if linked {
+        view! { <a class="link" rel="me" href=value.clone()>{value.clone()}</a> }.into_any()
+    } else {
+        view! { <span>{value.clone()}</span> }.into_any()
+    };
+    let mark = field.verified_at.is_some().then(|| {
+        view! {
+            <span class="badge badge-success badge-xs ml-1" role="img" aria-label="Verified link">
+                "✔"
+            </span>
+        }
+    });
+    view! {
+        <div class="flex gap-2">
+            <dt class="shrink-0 font-semibold">{field.name}</dt>
+            <dd class="min-w-0 break-all">{shown}{mark}</dd>
+        </div>
     }
     .into_any()
 }
@@ -324,6 +374,7 @@ mod tests {
                 on_block: None,
                 on_avatar: None,
                 show_verbs: false,
+                fields: None,
             })
             .to_html()
         })

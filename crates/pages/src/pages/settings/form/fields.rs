@@ -78,6 +78,17 @@ pub fn validate_fields(fields: &[ProfileField]) -> Vec<FieldError> {
     errors
 }
 
+/// Whether a row's value looks like a link.
+///
+/// Only a link can be verified by an instance, so the mark is never drawn beside a
+/// sentence or a handle: a verified-looking tick on something the instance cannot check
+/// would read as a claim the writer made.
+#[must_use]
+pub fn is_link(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
 /// Whether the text carries a tag, which the instance refuses to store as metadata.
 ///
 /// A bare comparison rather than a parser: the instance sanitises with its own HTML

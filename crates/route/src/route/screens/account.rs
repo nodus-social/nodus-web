@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, Relationship};
+use nodus_pages::pages::settings::form::ProfileField;
 
 use crate::chrome::{ButtonTabList, LoadMore};
 use crate::components::CardRenderer;
@@ -159,6 +160,27 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
         .into_any()
     });
 
+    // The rows belong to the signed-in account alone: the only read that carries them is
+    // the credential read, which answers about the reader, not about the account this page
+    // is showing. Another account's profile draws none rather than the reader's.
+    let fields = RwSignal::new(Vec::<ProfileField>::new());
+    let fields_id = page_id.get_value();
+    Effect::new(move |_| {
+        let own = runtime
+            .get_value()
+            .session()
+            .is_some_and(|session| session.account_id == fields_id);
+        if !own {
+            return;
+        }
+        let done = Callback::new(move |result: Result<Vec<ProfileField>, String>| {
+            if let Ok(rows) = result {
+                fields.set(rows);
+            }
+        });
+        runtime.get_value().load_profile_fields(done);
+    });
+
     let age_of = StoredValue::new(Callback::new(move |created_at: String| {
         crate::relative_age(&created_at, runtime.get_value().now_millis())
     }));
@@ -226,6 +248,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                             );
                         }
                     })
+                    fields=Signal::derive(move || fields.get())
                     on_avatar=on_avatar
                 />
             }

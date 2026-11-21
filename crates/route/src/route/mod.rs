@@ -11,6 +11,7 @@ use leptos::prelude::*;
 use nodus_client_core::model::{
     Account, Context, Conversation, Filter, List, Poll, Relationship, Status, Tag,
 };
+use nodus_pages::pages::settings::form::ProfileField;
 use nodus_shared::{AccountItem, PostItem};
 use nodus_state::page::{PageEntry, PageKind};
 use nodus_web::shared::router::Route;
@@ -301,6 +302,15 @@ pub trait Runtime: Send + Sync + 'static {
         let message = "This post needs a host that can be read.".to_owned();
         status.run(Err(message.clone()));
         context.run(Err(message));
+    }
+
+    /// Loads the signed-in account's metadata rows, in row order.
+    ///
+    /// The account document a profile is fetched with carries no rows, so the signed-in
+    /// reader's own profile borrows the credential read the client already has rather than
+    /// asking the instance a second question per profile.
+    fn load_profile_fields(&self, done: Callback<Result<Vec<ProfileField>, String>>) {
+        done.run(Ok(Vec::new()));
     }
 
     /// Loads a profile and the relationship that decides its verbs.
