@@ -61,7 +61,10 @@ fn local_host_name(headers: &HeaderMap) -> Option<String> {
 /// already has the row `public_page` serves; `None` means it does not hold this id (the
 /// peer's own numbering, an unknown post), and the caller relays to the peer instead of
 /// inventing a second lookup.
-async fn local_read(headers: &HeaderMap, path: &str, remote_host: &str) -> Option<Response> {
+///
+/// The origin answers by id alone: it is never told which host the address claimed, so a
+/// caller that serves these bytes must check `answers_for` first.
+async fn local_json(headers: &HeaderMap, path: &str, remote_host: &str) -> Option<Value> {
     let local = local_host_name(headers)?;
     if local == remote_host || !host_valid(&local) {
         return None;
@@ -72,12 +75,67 @@ async fn local_read(headers: &HeaderMap, path: &str, remote_host: &str) -> Optio
         .send()
         .await
         .ok()?;
-    if response.status() == StatusCode::NOT_FOUND {
+    if !response.status().is_success() {
         return None;
     }
-    let status = response.status();
-    let body = response.text().await.ok()?;
-    Some((status, [(header::CONTENT_TYPE, "application/json")], body).into_response())
+    response.json().await.ok()
+}
+
+/// Whether a row this origin stored is an object that lives on `host`, the instance the
+/// address named.
+///
+/// The id alone cannot answer this, which is why it is checked rather than assumed: this
+/// origin numbers its own posts and the ones it copied from peers in one space, so
+/// `/status/mastodon.test/<a local id>` resolves locally and would answer 200 with
+/// `"uri": "https://<this host>/@ada/..."`. The bytes are public either way, but the link
+/// would claim the post lives on `mastodon.test`, and anything keyed on that path segment —
+/// a cache entry, a trust ruling, a moderation badge — would read a local row as the
+/// peer's. A mismatch therefore falls through to the relay, which 404s or 502s for that id
+/// exactly as it would for any id the peer does not have.
+///
+/// The row's own links are the evidence: `uri` and `url` point at the instance that holds
+/// the object, and a row that names no host at all is refused for the same reason.
+fn answers_for(row: &Value, host: &str) -> bool {
+    let named = ["uri", "url"]
+        .into_iter()
+        .filter_map(|key| row.get(key).and_then(Value::as_str))
+        .map(host_of)
+        .find(|named| !named.is_empty());
+    match named {
+        Some(named) => named == host,
+        None => row
+            .get("acct")
+            .and_then(Value::as_str)
+            .and_then(|acct| acct.rsplit_once('@'))
+            .is_some_and(|(_, acct_host)| acct_host == host),
+    }
+}
+
+/// The response an anonymous read may take from this origin's stored row, if any.
+///
+/// A signed-in reader keeps today's relay: their home instance holds the copy it pulled and
+/// is the one trusted for them. An anonymous reader has no home instance to ask, so the row
+/// this origin stores answers — but only when it belongs to the host the address named.
+fn from_origin(token: Option<&str>, row: Option<Value>, host: &str) -> Option<Response> {
+    if token.is_some() {
+        return None;
+    }
+    let row = row.filter(|row| answers_for(row, host))?;
+    Some(Json(row).into_response())
+}
+
+/// This origin's own copy of `path`, served under the name the address gave.
+async fn origin_copy(
+    headers: &HeaderMap,
+    token: Option<&str>,
+    path: &str,
+    host: &str,
+) -> Option<Response> {
+    if token.is_some() {
+        return None;
+    }
+    let row = local_json(headers, path, host).await?;
+    from_origin(token, Some(row), host)
 }
 
 fn hydrate_base() -> Option<String> {
@@ -407,8 +465,13 @@ pub async fn status(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
-    if token.is_none()
-        && let Some(response) = local_read(&headers, &format!("/api/v1/statuses/{id}"), &host).await
+    if let Some(response) = origin_copy(
+        &headers,
+        token.as_deref(),
+        &format!("/api/v1/statuses/{id}"),
+        &host,
+    )
+    .await
     {
         return response;
     }
@@ -429,10 +492,10 @@ pub async fn context(
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
     if token.is_none()
-        && let Some(response) =
-            local_read(&headers, &format!("/api/v1/statuses/{id}/context"), &host).await
+        && let Some(body) =
+            local_json(&headers, &format!("/api/v1/statuses/{id}/context"), &host).await
     {
-        return response;
+        return Json(body).into_response();
     }
     relay(
         format!("https://{target}/api/v1/statuses/{id}/context"),
@@ -454,6 +517,16 @@ pub async fn account(
         return StatusCode::NOT_FOUND.into_response();
     };
     let (target, id, token) = account_target(&app, &headers, &host, &resolved).await;
+    if let Some(response) = origin_copy(
+        &headers,
+        token.as_deref(),
+        &format!("/api/v1/accounts/{id}"),
+        &host,
+    )
+    .await
+    {
+        return response;
+    }
     relay(
         format!("https://{target}/api/v1/accounts/{id}"),
         token.as_deref(),
@@ -485,7 +558,7 @@ pub async fn account_statuses(
         .map(|max| format!("?max_id={max}"))
         .unwrap_or_default();
     if token.is_none()
-        && let Some(response) = local_read(
+        && let Some(body) = local_json(
             &headers,
             &format!(
                 "/api/v1/accounts/{id}/statuses?limit=20{}",
@@ -495,7 +568,7 @@ pub async fn account_statuses(
         )
         .await
     {
-        return response;
+        return Json(body).into_response();
     }
     if let Some(value) = json(
         &format!(
@@ -561,7 +634,68 @@ pub async fn following(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_of, host_valid};
+    use super::{answers_for, from_origin, host_of, host_valid};
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    /// A post this origin copied from `host`: its own links name the instance that holds it.
+    fn copied_post(host: &str) -> serde_json::Value {
+        json!({
+            "id": "01m7yzm11115gn85zsr68vhcx4",
+            "uri": format!("https://{host}/@ada/01m7yzm11115gn85zsr68vhcx4"),
+            "url": format!("https://{host}/@ada/01m7yzm11115gn85zsr68vhcx4"),
+            "content": "<p>hello</p>"
+        })
+    }
+
+    #[tokio::test]
+    async fn a_matching_host_row_is_answered_from_this_origin() {
+        let response = from_origin(None, Some(copied_post("mastodon.test")), "mastodon.test")
+            .expect("a row that names the requested host answers from here");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap_or_default();
+        assert!(
+            String::from_utf8_lossy(&body).contains("mastodon.test"),
+            "the row itself is handed back"
+        );
+    }
+
+    #[test]
+    fn a_row_that_lives_here_is_refused_under_another_instance() {
+        // The live case: ada's local post read through a permalink naming the peer.
+        assert!(!answers_for(&copied_post("nodus.test"), "mastodon.test"));
+        assert!(from_origin(None, Some(copied_post("nodus.test")), "mastodon.test").is_none());
+        // The port a deployment may carry is not part of the name.
+        assert!(answers_for(&copied_post("nodus.test"), "nodus.test"));
+        assert!(answers_for(
+            &copied_post("mastodon.test:18443"),
+            "mastodon.test"
+        ));
+        // A row that names no host proves nothing, so it is refused too.
+        assert!(!answers_for(
+            &json!({"id": "1", "content": "<p>hello</p>"}),
+            "mastodon.test"
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_profile_read_prefers_this_origin() {
+        let profile = json!({
+            "id": "01m7yznagw96czhm7tzaqyk8w6",
+            "acct": "ada@mastodon.test",
+            "url": "https://mastodon.test/@ada",
+            "display_name": "Ada"
+        });
+        let response = from_origin(None, Some(profile.clone()), "mastodon.test")
+            .expect("an anonymous reader is served the stored profile");
+        assert_eq!(response.status(), StatusCode::OK);
+        // A signed-in reader keeps the relay to their home instance.
+        assert!(from_origin(Some("token"), Some(profile), "mastodon.test").is_none());
+        assert!(from_origin(None, None, "mastodon.test").is_none());
+    }
 
     #[test]
     fn host_of_reads_a_name_through_a_scheme_path_or_port() {
