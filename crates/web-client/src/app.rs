@@ -6,7 +6,7 @@
 
 use crate::router::{self, Route};
 use crate::routes::callback::Callback;
-use crate::routes::home::HomeTimeline;
+use crate::routes::home::{FederatedTimeline, HomeTimeline, LocalTimeline};
 use crate::routes::notifications::NotificationsView;
 use crate::routes::sign_in::SignIn;
 use crate::shell;
@@ -263,6 +263,16 @@ pub(crate) fn App() -> impl IntoView {
                                  to rank here. Your home timeline still works.",
                             ),
                             Route::Home if signed_in => view! { <HomeTimeline/> }.into_any(),
+                            // Local and Federated are the same screen as Home: the store, the
+                            // paging cursor and the caption all come from the timeline kind. Their
+                            // own arms exist because the screen is also the header block — the
+                            // composer and the switch between timelines — and the shared route view
+                            // takes that as a slot the client fills. Without these arms the reader
+                            // who clicks Local lands on a page with no tab strip and cannot leave.
+                            Route::Local if signed_in => view! { <LocalTimeline/> }.into_any(),
+                            Route::Federated if signed_in => {
+                                view! { <FederatedTimeline/> }.into_any()
+                            }
                             // The middle of the editor is not being edited: the rail and the
                             // banners are. So it is the dumping ground — every card that
                             // exists, with the ones on the rail marked, one click from either
