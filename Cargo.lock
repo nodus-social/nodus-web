@@ -2195,6 +2195,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodus-misskey"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "nodus-client-core",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "nodus-pages"
 version = "0.1.0"
 dependencies = [
@@ -2323,6 +2334,7 @@ dependencies = [
  "nodus-discovery",
  "nodus-editor",
  "nodus-mastodon",
+ "nodus-misskey",
  "nodus-pages",
  "nodus-route",
  "nodus-shared",

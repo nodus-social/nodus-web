@@ -16,7 +16,7 @@ use nodus_client_core::model::Status;
 
 use crate::media_grid::Picture;
 use crate::status_body::{StatusBody, StatusBodyProps};
-use crate::status_footer::{StatusFooter, StatusFooterProps};
+use crate::status_footer::{ReactionTally, StatusFooter, StatusFooterProps};
 use crate::status_header::{StatusHeader, StatusHeaderProps};
 
 /// A status card: who wrote it, what it says, and what can be done with it.
@@ -39,17 +39,21 @@ pub fn StatusCard(
     /// Opens the post from the body.
     #[prop(optional)]
     on_open: Option<Callback<String>>,
-    /// Boosts, or undoes the boost.
-    #[prop(optional)]
+    /// Boosts, or undoes the boost; absent when the instance has no boost verb.
+    ///
+    /// `optional_no_strip` keeps this an `Option` in the builder, because a client that
+    /// knows the provider may pass `None` at run time — a plain `optional` would accept the
+    /// callback and wrap it, leaving no way to say "this dialect cannot boost".
+    #[prop(optional_no_strip)]
     on_boost: Option<Callback<String>>,
     /// Favourites, or removes the favourite.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_favourite: Option<Callback<String>>,
     /// Bookmarks, or removes the bookmark.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_bookmark: Option<Callback<String>>,
     /// Opens the thread from the action row.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_reply: Option<Callback<String>>,
     /// The client's own controls, drawn where the menu sits.
     #[prop(optional)]
@@ -72,6 +76,18 @@ pub fn StatusCard(
     /// The client's own addition under the action row, such as its transport error.
     #[prop(optional)]
     extra: Option<ChildrenFn>,
+    /// The note's reactions, on a server that keeps a tally.
+    #[prop(optional_no_strip)]
+    reactions: Option<ReactionTally>,
+    /// Sets the reader's reaction; absent when the instance cannot take one.
+    #[prop(optional_no_strip)]
+    on_react: Option<Callback<String>>,
+    /// Removes the reader's reaction; absent when the instance cannot take one.
+    #[prop(optional_no_strip)]
+    on_unreact: Option<Callback<()>>,
+    /// Why the reaction row offers no control, when the instance serves none.
+    #[prop(optional_no_strip)]
+    reactions_note: Option<String>,
 ) -> impl IntoView {
     // The line and the unwrapping are one decision: a boost shows the boosted status, so the
     // wrapper contributes its author's name and nothing else.
@@ -139,6 +155,10 @@ pub fn StatusCard(
                     on_bookmark,
                     before_verbs,
                     after_verbs,
+                    reactions,
+                    on_react,
+                    on_unreact,
+                    reactions_note,
                 })}
                 {extra.with_value(|extra| extra.as_ref().map(|children| children()))}
             </div>

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use leptos::prelude::*;
 
 use nodus_client_core::model::Status;
+use nodus_client_sdk::protocol::Protocol;
 
 use crate::router::{self, Route};
 
@@ -102,11 +103,30 @@ pub fn StatusCard(status: Status) -> impl IntoView {
     };
     let thread_path = StoredValue::new(thread_path);
     let navigate = Callback::new(move |path: String| router::navigate(Route::from_path(&path)));
+    // Which dialect the session speaks decides which verbs the row may draw: a Misskey
+    // server answers neither a boost nor a bookmark, so offering one would be offering a
+    // button that cannot work.
+    let protocol = crate::state::bridge::provider::protocol();
+    let misskey = Signal::derive(move || protocol.get() == Protocol::Misskey);
+    let tally = crate::state::bridge::misskey::reactions::tally(&header.id);
+    let serves = crate::state::bridge::misskey::reactions::serves();
+    // The map is asked for on its own, once the probe has said the session speaks Misskey:
+    // the first card paints while the probe is still answering, and a status a card received
+    // from a public read carries no map to draw.
+    let wanted = header.id.clone();
+    Effect::new(move |_| {
+        if protocol.get() == Protocol::Misskey {
+            crate::state::bridge::misskey::reactions::load(&wanted);
+        }
+    });
+
     let CardActions {
         on_reply,
         on_boost,
         on_favourite,
         on_bookmark,
+        on_react,
+        on_unreact,
         before_verbs,
         after_verbs,
     } = footer::card_actions(shown, set_shown, busy, set_busy, set_error);
@@ -168,12 +188,17 @@ pub fn StatusCard(status: Status) -> impl IntoView {
                 author_path=author_path.clone()
                 thread_path=thread_path.get_value()
                 on_navigate=navigate
-                on_reply=on_reply
-                on_boost=on_boost
-                on_favourite=on_favourite
-                on_bookmark=on_bookmark
+                on_reply=Some(on_reply)
+                on_boost=(!misskey.get()).then_some(on_boost)
+                on_favourite=Some(on_favourite)
+                on_bookmark=(!misskey.get()).then_some(on_bookmark)
                 before_verbs=before_verbs.clone()
                 after_verbs=after_verbs.clone()
+                reactions=if misskey.get() { tally.get() } else { None }
+                on_react=(misskey.get() && serves.get()).then_some(on_react)
+                on_unreact=(misskey.get() && serves.get()).then_some(on_unreact)
+                reactions_note=(misskey.get() && !serves.get())
+                    .then(|| "This instance does not serve reactions.".to_owned())
                 body=body.clone()
                 extra=extra.clone()
             />

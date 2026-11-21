@@ -36,6 +36,8 @@ use crate::state::oauth;
 
 pub mod accounts;
 pub mod actions;
+pub mod misskey;
+pub mod provider;
 
 // Whether the account's instance serves the Nodus extension surface, as the answer for one
 // host. A session can live on any server, so "this deployment has a recommendation engine" is
@@ -213,7 +215,11 @@ pub async fn probe_extensions() -> bool {
         return remembered_support(&host).unwrap_or(false);
     }
     let Some(transport) = instance_transport() else {
-        return settle(&host, remembered_support(&host).unwrap_or(false), Vec::new());
+        return settle(
+            &host,
+            remembered_support(&host).unwrap_or(false),
+            Vec::new(),
+        );
     };
     let Ok(url) = transport.url("/api/v1/meta") else {
         return settle(&host, false, Vec::new());
@@ -248,7 +254,10 @@ impl Drop for Claim {
 /// Waits for `future`, or for `limit`, whichever comes first.
 ///
 /// `None` means the instance did not answer in time; the caller treats that as "no".
-pub(super) async fn patience<F: std::future::Future>(future: F, limit: std::time::Duration) -> Option<F::Output> {
+pub(super) async fn patience<F: std::future::Future>(
+    future: F,
+    limit: std::time::Duration,
+) -> Option<F::Output> {
     use std::cell::RefCell;
     use std::rc::Rc;
     let slot: Rc<RefCell<Option<F::Output>>> = Rc::new(RefCell::new(None));
@@ -298,12 +307,12 @@ mod feed;
 mod impressions;
 pub mod limits;
 pub mod notices;
+pub mod notifications;
 pub mod pages;
 mod posts;
 mod runtime;
 pub mod seed;
 pub mod session;
-pub mod notifications;
 pub mod sidebar;
 pub mod stream;
 pub mod style;
@@ -608,6 +617,10 @@ fn install(instance: &Instance, token: &str) -> Result<(), String> {
     INSTANCE.with_borrow_mut(|slot| *slot = Some(transport));
     REGISTRY.with_borrow_mut(|reg| reg.stage(token.to_owned(), live));
     SDK.with_borrow_mut(|slot| *slot = Some(sdk));
+    // Which API this server speaks is a property of the session, so it is asked for
+    // once here and read from the record by every screen after that.
+    provider::watch(instance);
+    misskey::install(instance, token);
     revision().update(|generation| *generation += 1);
     Ok(())
 }
@@ -692,6 +705,11 @@ pub fn switch(key: &str) -> Result<(), String> {
     })?;
 
     impressions::finish_all();
+    // The new account may be on a different server than the one on screen, so the protocol
+    // is asked again for its host before anything is drawn with it.
+    let instance = Instance::parse(&meta.host).map_err(|error| error.to_string())?;
+    provider::watch(&instance);
+    misskey::install(&instance, &meta.token);
     INSTANCE.with_borrow_mut(|slot| *slot = Some(transport));
     SDK.with_borrow_mut(|slot| *slot = Some(sdk));
     accounts::set_active(Some(key));
@@ -718,6 +736,8 @@ pub fn forget(key: &str) {
                 REGISTRY.with_borrow_mut(AccountRegistry::clear_token);
                 SDK.with_borrow_mut(|slot| *slot = None);
                 INSTANCE.with_borrow_mut(|slot| *slot = None);
+                provider::forget();
+                misskey::forget();
                 style::on_signed_out();
                 revision().update(|generation| *generation += 1);
             }
@@ -755,12 +775,15 @@ pub async fn keep_admin_token(host: &str, account: &str, token: &str) -> Result<
     let url = transport
         .url("/api/v1/admin/meta")
         .map_err(|error| error.to_string())?;
-    transport.fetch_bytes(transport.get(url)).await.map_err(|error| {
-        format!(
-            "That account cannot open the console on {}, so the grant was not kept: {error}",
-            endpoint.host
-        )
-    })?;
+    transport
+        .fetch_bytes(transport.get(url))
+        .await
+        .map_err(|error| {
+            format!(
+                "That account cannot open the console on {}, so the grant was not kept: {error}",
+                endpoint.host
+            )
+        })?;
     admin_token::store(&endpoint.host, account, token);
     admin::forget_standing();
     Ok(())

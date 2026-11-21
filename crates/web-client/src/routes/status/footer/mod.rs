@@ -34,6 +34,10 @@ pub(super) struct CardActions {
     pub on_favourite: Callback<String>,
     /// Bookmarks, or removes the bookmark.
     pub on_bookmark: Callback<String>,
+    /// Sets the reader's reaction to a key.
+    pub on_react: Callback<String>,
+    /// Removes the reader's reaction, whichever key it is.
+    pub on_unreact: Callback<()>,
     /// The post's menu, drawn where it sits in the row.
     pub before_verbs: ChildrenFn,
     /// The copy button, drawn after the verbs.
@@ -99,6 +103,35 @@ pub(super) fn card_actions(
         );
     });
 
+    // A reaction is not a toggle of the status, so it does not fold a status back into the
+    // card: the tally the row draws lives in the bridge, and the call that changed it is what
+    // repaints the row.
+    let on_react = Callback::new(move |emoji: String| {
+        if busy.get_untracked() {
+            return;
+        }
+        let id = shown.get_untracked().id;
+        dispatch_reaction(
+            async move { actions::react(&id, &emoji).await },
+            alive,
+            set_busy,
+            set_error,
+        );
+    });
+
+    let on_unreact = Callback::new(move |()| {
+        if busy.get_untracked() {
+            return;
+        }
+        let id = shown.get_untracked().id;
+        dispatch_reaction(
+            async move { actions::unreact(&id).await },
+            alive,
+            set_busy,
+            set_error,
+        );
+    });
+
     // A `ChildrenFn` is cloned on every repaint of the card, so the slots clone rather than
     // move. Both are present here: the app always has a menu and a copy button, and the
     // absent case belongs to the paint that has no transport.
@@ -112,9 +145,32 @@ pub(super) fn card_actions(
         on_boost,
         on_favourite,
         on_bookmark,
+        on_react,
+        on_unreact,
         before_verbs: menu,
         after_verbs: share,
     }
+}
+
+/// Runs one reaction call, which has no status to fold back in.
+///
+/// Same busy flag and same error channel as [`dispatch`], because a reader pressing the star
+/// and then a chip should see one request at a time and one place where the failure appears.
+fn dispatch_reaction(
+    call: impl Future<Output = Result<(), String>> + 'static,
+    alive: Alive,
+    set_busy: WriteSignal<bool>,
+    set_error: WriteSignal<Option<String>>,
+) {
+    set_busy.set(true);
+    set_error.set(None);
+
+    spawn_local(async move {
+        if let Err(message) = call.await {
+            alive.if_alive(|| set_error.set(Some(message)));
+        }
+        alive.if_alive(|| set_busy.set(false));
+    });
 }
 
 /// Runs one verb and folds its answer back into the card.

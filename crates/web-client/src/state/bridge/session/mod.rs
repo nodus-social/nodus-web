@@ -7,13 +7,15 @@
 
 use leptos::prelude::*;
 use nodus_client_sdk::instance_api::{Instance, InstanceApi};
+use nodus_client_sdk::protocol::Protocol;
 use nodus_client_sdk::state::Session;
-use nodus_mastodon::BrowserInstance;
+use nodus_mastodon::{BrowserInstance, GlooTransport};
 use wasm_bindgen::JsCast as _;
 
 use self::record::StoredSession;
 use super::feed::load_first_page;
-use super::{WebSdkError, feed_ui, handle, install};
+use super::misskey::MisskeyBridge;
+use super::{WebSdkError, feed_ui, handle, install, provider};
 
 mod record;
 
@@ -93,11 +95,27 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
     // `admin_transport`.
     let endpoint = crate::state::oauth::normalise_host(host)?;
     let instance = Instance::parse(&endpoint.url("")).map_err(|error| error.to_string())?;
-    let probe = BrowserInstance::new(&instance, token);
-    probe
-        .verify_credentials()
-        .await
-        .map_err(|error| format!("The instance rejected this token: {error}"))?;
+
+    // Which API the server serves decides which client can even check the token: a Misskey
+    // instance has no `accounts/verify_credentials`, so probing it with the Mastodon client
+    // would reject a token the instance would have accepted. The probe is the same one the
+    // session installs, started once here and awaited.
+    provider::watch(&instance);
+    let protocol = provider::ensure().await;
+    let rejected = |error: String| format!("The instance rejected this token: {error}");
+    let account = match protocol {
+        Protocol::Misskey => {
+            let bridge = MisskeyBridge::with_transport(&instance, token, GlooTransport::new());
+            bridge
+                .verify_credentials()
+                .await
+                .map_err(|error| rejected(error.to_string()))?
+        }
+        Protocol::Nodus | Protocol::Mastodon => BrowserInstance::new(&instance, token)
+            .verify_credentials()
+            .await
+            .map_err(|error| rejected(error.to_string()))?,
+    };
 
     install(&instance, token)?;
 
@@ -106,10 +124,25 @@ pub async fn sign_in(host: &str, token: &str) -> Result<(), String> {
     };
     let ui = feed_ui();
     ui.error.set(None);
-    let session = sdk
-        .sign_in(&endpoint.host, scopes())
-        .await
-        .map_err(|error| error.to_string())?;
+    let session = match protocol {
+        Protocol::Misskey => {
+            // The SDK's own sign-in verifies through its Mastodon client, which a Misskey
+            // server cannot answer; the token was just proved against the API this server
+            // does serve, so the session is adopted rather than re-verified.
+            let session = Session {
+                host: endpoint.host.clone(),
+                account_id: account.id,
+                acct: account.acct,
+                scopes: scopes(),
+            };
+            sdk.adopt_session(session.clone());
+            session
+        }
+        Protocol::Nodus | Protocol::Mastodon => sdk
+            .sign_in(&endpoint.host, scopes())
+            .await
+            .map_err(|error| error.to_string())?,
+    };
     // After `sign_in`, because the account handle it returns is what a restored
     // session needs to display before its first request.
     save_session(&endpoint.host, token, &session);
@@ -303,9 +336,10 @@ fn restore(stored: StoredSession) {
         let answered = super::patience(asking, RESTORE_PATIENCE).await;
         match answered.unwrap_or_else(|| {
             Err(WebSdkError::Instance(
-                nodus_client_sdk::instance_api::Error::Transport(
-                    format!("{} did not answer in time", stored.host),
-                ),
+                nodus_client_sdk::instance_api::Error::Transport(format!(
+                    "{} did not answer in time",
+                    stored.host
+                )),
             ))
         }) {
             Ok(session) => {

@@ -19,12 +19,26 @@ use nodus_client_core::model::{
     Language, List, LocalId, MediaAttachment, Poll, PollDraft, ProfileUpdate, Relationship,
     SearchResults, Status, Tag,
 };
+use nodus_client_sdk::protocol::Protocol;
 use nodus_mastodon::BrowserInstance;
 use nodus_web::shared::account_state::AccountCache;
 
 pub use nodus_client_core::model::Visibility;
 
-use super::{active_cache_key, instance_transport};
+use super::misskey::BrowserMisskey;
+use super::{active_cache_key, instance_transport, misskey, provider};
+
+/// The Misskey bridge, when the session's server is a Misskey one.
+///
+/// The protocol is awaited rather than read as a signal: a read that picked a transport
+/// from a probe still in flight would send a Misskey verb to a Mastodon server and report
+/// the `404` as a failure, when all that happened is that the answer had not landed yet.
+async fn misskey_bridge() -> Option<BrowserMisskey> {
+    if provider::ensure().await != Protocol::Misskey {
+        return None;
+    }
+    misskey::current()
+}
 
 async fn cached_list<T: Clone>(
     cache: &'static std::thread::LocalKey<RefCell<AccountCache<Vec<T>>>>,
@@ -168,11 +182,19 @@ pub const PAGE: u16 = 20;
 
 /// One status.
 pub async fn status(id: &str) -> Result<Status, String> {
+    if let Some(bridge) = misskey_bridge().await {
+        let note = call(bridge.note(id)).await?;
+        misskey::remember(id, &note);
+        return Ok(note.status);
+    }
     call(transport()?.status(id)).await
 }
 
 /// The ancestors and descendants of a status.
 pub async fn thread(id: &str) -> Result<Context, String> {
+    if let Some(bridge) = misskey_bridge().await {
+        return call(bridge.status_context(id)).await;
+    }
     call(transport()?.status_context(id)).await
 }
 
@@ -191,12 +213,31 @@ pub async fn relationship(id: &str) -> Result<Option<Relationship>, String> {
 
 /// Favourites or un-favourites a status.
 pub async fn favourite(id: &str, on: bool) -> Result<Status, String> {
+    if let Some(bridge) = misskey_bridge().await {
+        // The star is Misskey's private favourite, not its public reaction: the two are
+        // separate verbs on that API, and the star has always meant "keep this".
+        return if on {
+            call(bridge.favourite(id)).await
+        } else {
+            call(bridge.unfavourite(id)).await
+        };
+    }
     let transport = transport()?;
     if on {
         call(transport.favourite(id)).await
     } else {
         call(transport.unfavourite(id)).await
     }
+}
+
+/// Adds the reader's reaction to a note, replacing any reaction already there.
+pub async fn react(id: &str, emoji: &str) -> Result<(), String> {
+    misskey::reactions::react(id, emoji).await
+}
+
+/// Removes the reader's reaction, whichever key it was.
+pub async fn unreact(id: &str) -> Result<(), String> {
+    misskey::reactions::unreact(id).await
 }
 
 /// Boosts or un-boosts a status.
@@ -432,12 +473,16 @@ pub async fn attach_from_drive(object_id: &str) -> Result<MediaAttachment, Strin
         loaded.forget();
         failed.forget();
     });
-    xhr.send_with_opt_form_data(Some(&form)).map_err(|_| refused())?;
+    xhr.send_with_opt_form_data(Some(&form))
+        .map_err(|_| refused())?;
     wasm_bindgen_futures::JsFuture::from(promise)
         .await
         .map_err(|_| refused())?;
 
-    let text = xhr.response_text().map_err(|_| refused())?.unwrap_or_default();
+    let text = xhr
+        .response_text()
+        .map_err(|_| refused())?
+        .unwrap_or_default();
     if xhr.status().map_err(|_| refused())? >= 400 {
         return Err(format!("The instance refused the drive file: {text}"));
     }

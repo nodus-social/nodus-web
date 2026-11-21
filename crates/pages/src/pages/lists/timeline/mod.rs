@@ -114,6 +114,10 @@ fn read_only_card(status: Status, age: String) -> AnyView {
         interactive: false,
         body: None,
         extra: None,
+        reactions: None,
+        on_react: None,
+        on_unreact: None,
+        reactions_note: None,
     })
     .into_any()
 }

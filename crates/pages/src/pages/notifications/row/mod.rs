@@ -105,6 +105,10 @@ fn shared_card(status: Status, age: String, on_open: Option<Callback<String>>) -
         interactive: false,
         body: None,
         extra: None,
+        reactions: None,
+        on_react: None,
+        on_unreact: None,
+        reactions_note: None,
     })
     .into_any()
 }

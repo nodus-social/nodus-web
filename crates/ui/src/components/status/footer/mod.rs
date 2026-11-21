@@ -13,6 +13,10 @@ use nodus_client_core::model::Status;
 
 use crate::icons::Icon;
 
+mod reactions;
+
+pub use reactions::{PALETTE, ReactionRow, ReactionTally};
+
 /// Counts and the actions a reader can take on a status.
 ///
 /// Each callback receives the status id; on the server every one of them is absent.
@@ -47,6 +51,21 @@ pub fn StatusFooter(
     /// The client's own controls, drawn after the verbs.
     #[prop(optional)]
     after_verbs: Option<ChildrenFn>,
+    /// The note's reactions, on a server that keeps a tally.
+    ///
+    /// `None` on every other server: a Mastodon status has no reaction map, and an empty row
+    /// would push the row of verbs off the card for nothing.
+    #[prop(optional)]
+    reactions: Option<ReactionTally>,
+    /// Sets the reader's reaction; absent when the instance cannot take one.
+    #[prop(optional)]
+    on_react: Option<Callback<String>>,
+    /// Removes the reader's reaction; absent when the instance cannot take one.
+    #[prop(optional)]
+    on_unreact: Option<Callback<()>>,
+    /// Why the row offers no control, when the instance said it serves no reactions.
+    #[prop(optional, into)]
+    reactions_note: Option<String>,
 ) -> impl IntoView {
     // The id is read by four handlers, so it lives in a stored value: a `String` captured by
     // value would make the first handler `FnOnce`, and a stored value is `Copy`. The slots
@@ -110,6 +129,17 @@ pub fn StatusFooter(
                 )}
                 {after.with_value(|after| after.as_ref().map(|children| children()))}
             </div>
+            {(reactions.is_some() || reactions_note.is_some())
+                .then(|| {
+                    view! {
+                        <ReactionRow
+                            tally=reactions.unwrap_or_default()
+                            on_react=on_react
+                            on_unreact=on_unreact
+                            note=reactions_note
+                        />
+                    }
+                })}
         </footer>
     }
 }
