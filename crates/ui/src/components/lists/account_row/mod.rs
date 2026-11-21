@@ -149,6 +149,7 @@ mod tests {
             discoverable: None,
             indexable: None,
             noindex: None,
+            fields: Vec::new(),
         };
         let rendered = Owner::new().with(|| {
             AccountRow(AccountRowProps {

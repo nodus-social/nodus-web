@@ -10,7 +10,6 @@ use leptos::task::spawn_local;
 use nodus_client_core::model::{Account, Context, Relationship, Status, Tag};
 use nodus_client_sdk::page::{PageEntry, PageKind};
 use nodus_client_sdk::{Command, Timeline};
-use nodus_pages::pages::settings::form::ProfileField;
 use nodus_pages::pages::settings::nav::SettingsSection;
 use nodus_route::route::{
     Action, ActionResult, FeedKind, FeedPeopleView, FeedPostsView, Runtime, SessionView,
@@ -385,16 +384,6 @@ impl Runtime for ClientRuntime {
                 revision().update(|n| *n += 1);
             }
             done.run(result);
-        });
-    }
-
-    fn load_profile_fields(&self, done: Callback<Result<Vec<ProfileField>, String>>) {
-        if let Some(rows) = crate::state::bridge::profile::cached_fields() {
-            done.run(Ok(rows));
-            return;
-        }
-        spawn_local(async move {
-            done.run(crate::state::bridge::profile::fields().await);
         });
     }
 

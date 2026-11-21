@@ -83,6 +83,7 @@ fn status_of(item: &PostItem, body: String) -> Status {
             discoverable: None,
             indexable: None,
             noindex: None,
+            fields: Vec::new(),
             followers_count: 0,
             following_count: 0,
             statuses_count: 0,

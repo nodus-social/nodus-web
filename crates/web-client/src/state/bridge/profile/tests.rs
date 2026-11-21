@@ -14,9 +14,8 @@ use serde_json::{Value, json};
 
 use super::{SaveError, write};
 
-const ACCOUNT_JSON: &str = r#"{"id":"1","acct":"alice","display_name":"Alice"}"#;
-
-/// The credential read's answer: the rows as the instance stored and verified them.
+/// The update's answer: the rows as the instance stored and verified them. A save reads the
+/// rows from this same response, so the fake instance answers the PATCH with it.
 const ROWS_JSON: &str = r#"{
     "id": "1",
     "acct": "alice",
@@ -26,6 +25,8 @@ const ROWS_JSON: &str = r#"{
         {"name": "Pronouns", "value": "she/her", "verified_at": null}
     ]
 }"#;
+
+const ACCOUNT_JSON: &str = r#"{"id":"1","acct":"alice","display_name":"Alice"}"#;
 
 /// One request the save made, kept for the assertions.
 #[derive(Debug, Clone)]
@@ -128,7 +129,7 @@ fn instance(answers: Vec<HttpResponse>) -> (RestInstance<FakeTransport>, FakeTra
 
 #[test]
 fn a_two_row_save_sends_the_rows_through_the_sdk() {
-    let (instance, transport) = instance(vec![ok_json(ACCOUNT_JSON), ok_json(ROWS_JSON)]);
+    let (instance, transport) = instance(vec![ok_json(ROWS_JSON)]);
     let fields = vec![
         field(" Blog ", " https://example.test "),
         field("Pronouns", "she/her"),
@@ -143,7 +144,11 @@ fn a_two_row_save_sends_the_rows_through_the_sdk() {
     .expect("the fake instance answers");
 
     let sent = transport.sent.borrow();
-    assert_eq!(sent.len(), 2, "the save and the read that returns its rows");
+    assert_eq!(
+        sent.len(),
+        1,
+        "the update's own answer carries the rows; no read back"
+    );
     let request = &sent[0];
     assert_eq!(request.method, "Patch");
     assert!(
@@ -160,12 +165,6 @@ fn a_two_row_save_sends_the_rows_through_the_sdk() {
     assert_eq!(request.body["note"], "Hello");
     assert_eq!(request.body["fields"], rows);
     assert_eq!(request.body["fields_attributes"], rows);
-    assert_eq!(sent[1].method, "Get");
-    assert!(
-        sent[1].url.ends_with("/api/v1/accounts/verify_credentials"),
-        "{}",
-        sent[1].url
-    );
     // The rows the editor paints come from the instance's answer, not from the input: a
     // verified link keeps its stamp and the sent whitespace is not shown back.
     assert_eq!(stored.len(), 2);
@@ -179,12 +178,9 @@ fn a_two_row_save_sends_the_rows_through_the_sdk() {
 
 #[test]
 fn removing_every_row_still_sends_an_empty_list() {
-    let (instance, transport) = instance(vec![
-        ok_json(ACCOUNT_JSON),
-        ok_json(r#"{"id":"1","acct":"alice","fields":[]}"#),
-    ]);
+    let (instance, transport) = instance(vec![ok_json(r#"{"id":"1","acct":"alice","fields":[]}"#)]);
 
-    block_on(write(
+    let stored = block_on(write(
         &instance,
         "Alice".to_owned(),
         String::new(),
@@ -193,8 +189,10 @@ fn removing_every_row_still_sends_an_empty_list() {
     .expect("the fake instance answers");
 
     let sent = transport.sent.borrow();
+    assert_eq!(sent.len(), 1, "the update answers with the cleared list");
     assert_eq!(sent[0].body["fields"], json!([]));
     assert_eq!(sent[0].body["fields_attributes"], json!([]));
+    assert!(stored.is_empty(), "the editor paints no rows after a clear");
 }
 
 #[test]

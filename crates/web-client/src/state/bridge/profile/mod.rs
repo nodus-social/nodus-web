@@ -2,56 +2,19 @@
 //! which of them are verified links.
 //!
 //! The write goes through the SDK, which owns the endpoint's wire shape: rows cannot ride in
-//! a form body, so an update carrying them is sent as JSON. The account model does not carry
-//! `fields` yet, so the rows are read from a credential answer into a local struct — both
-//! the read that opens the editor and the read after a save, since the instance is the
-//! authority on what it stored and which links it verified.
+//! a form body, so an update carrying them is sent as JSON. The SDK's account model carries
+//! those rows on both answers — the credential read that opens the editor, and the update's
+//! own answer — so `verified_at` is read from the account instead of decoded a second time.
 
-use std::cell::RefCell;
-
+use nodus_client_core::InstanceApi;
 use nodus_client_core::actions::AccountActions;
 use nodus_client_core::model::{Account, ProfileField as SdkField, ProfileUpdate};
 use nodus_client_core::rest::Transport;
 use nodus_mastodon::rest::RestInstance;
 use nodus_pages::pages::settings::form::{ProfileField, parse_field_error};
-use serde::Deserialize;
 
 #[cfg(test)]
 mod tests;
-
-const VERIFY: &str = "/api/v1/accounts/verify_credentials";
-
-/// The rows inside a credential answer, the account's own members ignored.
-#[derive(Debug, Deserialize)]
-struct CredentialAnswer {
-    #[serde(default)]
-    fields: Vec<WireField>,
-}
-
-/// One metadata row as the wire spells it.
-#[derive(Debug, Deserialize)]
-struct WireField {
-    name: String,
-    value: String,
-    #[serde(default)]
-    verified_at: Option<String>,
-}
-
-impl From<WireField> for ProfileField {
-    fn from(field: WireField) -> Self {
-        Self {
-            name: field.name,
-            value: field.value,
-            verified_at: field.verified_at,
-        }
-    }
-}
-
-impl CredentialAnswer {
-    fn rows(self) -> Vec<ProfileField> {
-        self.fields.into_iter().map(ProfileField::from).collect()
-    }
-}
 
 /// Why a save did not land, in the shape the editor can show.
 ///
@@ -70,43 +33,27 @@ pub enum SaveError {
     Form(String),
 }
 
-thread_local! {
-    /// The rows the last credential read answered with. A profile is opened more often
-    /// than the settings card, and the rows do not change between the two, so the read is
-    /// kept here rather than repeated: a per-profile refetch would be a new request for
-    /// every mount, and the account document carries no rows to read instead.
-    static LAST_ROWS: RefCell<Option<Vec<ProfileField>>> = const { RefCell::new(None) };
+/// The rows an account carries, in row order.
+fn account_rows(account: &Account) -> Vec<ProfileField> {
+    account
+        .fields
+        .iter()
+        .map(|field| ProfileField {
+            name: field.name.clone(),
+            value: field.value.clone(),
+            verified_at: field.verified_at.clone(),
+        })
+        .collect()
 }
 
-/// The rows the last credential read answered with, if one has landed.
-///
-/// `None` means nobody has read the credentials yet in this page; the caller asks for the
-/// read rather than drawing an empty profile as if the account had no rows.
-#[must_use]
-pub fn cached_fields() -> Option<Vec<ProfileField>> {
-    LAST_ROWS.with(|rows| rows.borrow().clone())
-}
-
-fn remember(rows: &[ProfileField]) {
-    LAST_ROWS.with(|held| *held.borrow_mut() = Some(rows.to_vec()));
-}
-
-/// The signed-in account's metadata rows.
+/// The signed-in account's metadata rows, as the instance holds them.
 pub async fn fields() -> Result<Vec<ProfileField>, String> {
     let transport = super::instance_transport().ok_or_else(|| "Not signed in.".to_owned())?;
-    let rows = read(&transport).await?;
-    remember(&rows);
-    Ok(rows)
-}
-
-/// One credential read: the rows as the instance holds them, `verified_at` included.
-async fn read<T: Transport>(transport: &RestInstance<T>) -> Result<Vec<ProfileField>, String> {
-    let url = transport.url(VERIFY).map_err(|error| error.to_string())?;
-    let answer: CredentialAnswer = transport
-        .fetch(transport.get(url))
+    let account = transport
+        .verify_credentials()
         .await
         .map_err(|error| error.to_string())?;
-    Ok(answer.rows())
+    Ok(account_rows(&account))
 }
 
 /// Writes the name, the bio and the rows in one partial update, and returns the rows as the
@@ -122,9 +69,7 @@ pub async fn save(
 ) -> Result<Vec<ProfileField>, SaveError> {
     let transport =
         super::instance_transport().ok_or_else(|| SaveError::Form("Not signed in.".to_owned()))?;
-    let rows = write(&transport, display_name, note, fields).await?;
-    remember(&rows);
-    Ok(rows)
+    write(&transport, display_name, note, fields).await
 }
 
 /// The save itself, against any transport so the wire body can be inspected in a test.
@@ -161,11 +106,11 @@ async fn write<T: Transport>(
                 },
                 error => SaveError::Form(error.to_string()),
             })?;
+    // The rows the editor paints are the instance's, not the ones this module trimmed: an
+    // instance stamps `verified_at` and is free to store something other than what arrived.
+    let stored = account_rows(&account);
     super::dispatch(nodus_client_sdk::Command::AccountsUpserted {
         accounts: vec![account],
     });
-    // The rows the editor paints are the instance's, not the ones this module trimmed: an
-    // instance stamps `verified_at` and is free to store something other than what arrived.
-    // The update answer cannot carry them (`Account` has no rows), so they are read back.
-    read(transport).await.map_err(SaveError::Form)
+    Ok(stored)
 }

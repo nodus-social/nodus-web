@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use leptos::prelude::*;
-use nodus_client_core::model::{Account, Relationship};
+use nodus_client_core::model::{Account, ProfileField as SdkField, Relationship};
 use nodus_pages::pages::settings::form::ProfileField;
 
 use crate::chrome::{ButtonTabList, LoadMore};
@@ -160,25 +160,22 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
         .into_any()
     });
 
-    // The rows belong to the signed-in account alone: the only read that carries them is
-    // the credential read, which answers about the reader, not about the account this page
-    // is showing. Another account's profile draws none rather than the reader's.
-    let fields = RwSignal::new(Vec::<ProfileField>::new());
-    let fields_id = page_id.get_value();
-    Effect::new(move |_| {
-        let own = runtime
-            .get_value()
-            .session()
-            .is_some_and(|session| session.account_id == fields_id);
-        if !own {
-            return;
+    // The rows ride on the account document, so the reader's own profile reads them from
+    // the account already in hand rather than asking the instance a second question. They
+    // stay the reader's: this screen has only ever drawn the signed-in reader's rows, and
+    // another account's are not it to grow. A visitor's page carries none at all.
+    let own_fields = runtime
+        .get_value()
+        .session()
+        .is_some_and(|session| session.account_id == page_id.get_value());
+    let fields = Signal::derive(move || {
+        if !own_fields {
+            return Vec::new();
         }
-        let done = Callback::new(move |result: Result<Vec<ProfileField>, String>| {
-            if let Ok(rows) = result {
-                fields.set(rows);
-            }
-        });
-        runtime.get_value().load_profile_fields(done);
+        account
+            .get()
+            .map(|profile| profile_rows(&profile.fields))
+            .unwrap_or_default()
     });
 
     let age_of = StoredValue::new(Callback::new(move |created_at: String| {
@@ -248,12 +245,24 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                             );
                         }
                     })
-                    fields=Signal::derive(move || fields.get())
+                    fields=fields
                     on_avatar=on_avatar
                 />
             }
         })}
     }
+}
+
+/// The rows an account carries, in the shape the profile page draws them.
+fn profile_rows(fields: &[SdkField]) -> Vec<ProfileField> {
+    fields
+        .iter()
+        .map(|field| ProfileField {
+            name: field.name.clone(),
+            value: field.value.clone(),
+            verified_at: field.verified_at.clone(),
+        })
+        .collect()
 }
 
 fn toggle(
@@ -291,7 +300,8 @@ mod tests {
 
     use super::{AccountScreen, AccountScreenProps};
     use crate::components::CardRenderer;
-    use crate::route::{Runtime, TimelineKind, TimelineReply};
+    use crate::route::{Runtime, SessionView, TimelineKind, TimelineReply};
+    use nodus_client_core::model::ProfileField as SdkField;
 
     struct HeldAccountRuntime;
 
@@ -338,6 +348,7 @@ mod tests {
                 discoverable: None,
                 indexable: None,
                 noindex: None,
+                fields: Vec::new(),
             })
         }
     }
@@ -360,5 +371,106 @@ mod tests {
             !load_more_tag.contains("disabled"),
             "Load more button must not be disabled when timeline is held: {load_more_tag}"
         );
+    }
+
+    /// The signed-in reader of the stub instance, holding the rows given to it.
+    struct OwnProfileRuntime {
+        fields: Vec<SdkField>,
+    }
+
+    impl Runtime for OwnProfileRuntime {
+        fn revision(&self) -> Signal<u64> {
+            Signal::derive(|| 0)
+        }
+
+        fn now_millis(&self) -> f64 {
+            0.0
+        }
+
+        fn timeline(&self, _kind: &TimelineKind) -> TimelineReply {
+            TimelineReply {
+                items: Vec::new(),
+                cursor: None,
+                held: true,
+                unavailable: false,
+            }
+        }
+
+        fn load_timeline(
+            &self,
+            _kind: TimelineKind,
+            _cursor: Option<String>,
+            _done: Callback<Result<(), String>>,
+        ) {
+        }
+
+        fn session(&self) -> Option<SessionView> {
+            Some(SessionView {
+                host: "stub.instance".to_owned(),
+                account_id: "42".to_owned(),
+                acct: "alice".to_owned(),
+            })
+        }
+
+        fn account(&self, id: &str) -> Option<Account> {
+            (id == "42").then(|| Account {
+                id: "42".to_owned(),
+                acct: "alice".to_owned(),
+                display_name: "Alice".to_owned(),
+                note: String::new(),
+                avatar: String::new(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 0,
+                following_count: 0,
+                statuses_count: 0,
+                last_status_at: None,
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+                fields: self.fields.clone(),
+            })
+        }
+    }
+
+    fn render_own_profile(fields: Vec<SdkField>) -> String {
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        Owner::new().with(|| {
+            AccountScreen(AccountScreenProps {
+                runtime: Arc::new(OwnProfileRuntime { fields }),
+                id: "42".to_owned(),
+                card,
+            })
+            .to_html()
+        })
+    }
+
+    #[test]
+    fn own_profile_shows_the_rows_with_the_instances_verification() {
+        let html = render_own_profile(vec![
+            SdkField::new("Blog", "https://example.test").verified_at("2026-01-01T00:00:00Z"),
+            SdkField::new("Pronouns", "she/her"),
+        ]);
+
+        assert!(html.contains("https://example.test"), "{html}");
+        assert!(html.contains("she/her"), "{html}");
+        assert!(
+            html.contains(r#"aria-label="Verified link""#),
+            "a server-authored verified_at must draw the tick: {html}"
+        );
+        assert_eq!(
+            html.matches(r#"aria-label="Verified link""#).count(),
+            1,
+            "only the verified row is ticked"
+        );
+    }
+
+    #[test]
+    fn clearing_every_row_leaves_the_profile_row_free() {
+        let html = render_own_profile(Vec::new());
+
+        assert!(!html.contains("Verified link"), "{html}");
+        assert!(!html.contains("https://example.test"), "{html}");
     }
 }

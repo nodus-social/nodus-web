@@ -11,6 +11,9 @@ use crate::relative_age;
 
 use super::super::Runtime;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Posts,

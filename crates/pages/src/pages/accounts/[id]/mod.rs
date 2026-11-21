@@ -12,9 +12,9 @@
 //! transport behind each verb. They arrive as slots, and the page owns their order — header,
 //! tabs, the status list, then whatever the screen adds under it.
 
+use crate::pages::settings::form::{ProfileField, is_link};
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, Relationship, Status};
-use crate::pages::settings::form::{ProfileField, is_link};
 
 use crate::components::CardRenderer;
 use crate::display_name;
@@ -70,9 +70,9 @@ pub fn ProfilePage(
     show_verbs: bool,
     /// The metadata rows this account carries, or `None` when the caller has none to show.
     ///
-    /// Only the signed-in account's own rows are known without another read: the account
-    /// document the page fetches does not carry them, and a visitor's profile has no
-    /// credential read to borrow.
+    /// The rows the account's owner wrote, ticked where the instance verified the link.
+    /// Passed only for the reader's own profile: rows belong to the signed-in account, and
+    /// a visitor's page has no session to attribute them to.
     #[prop(optional)]
     fields: Option<Signal<Vec<ProfileField>>>,
 ) -> impl IntoView {
@@ -357,6 +357,7 @@ mod tests {
             discoverable: None,
             indexable: None,
             noindex: None,
+            fields: Vec::new(),
         };
         Owner::new().with(|| {
             let statuses = Signal::derive(Vec::new);

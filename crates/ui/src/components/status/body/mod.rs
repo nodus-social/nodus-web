@@ -572,6 +572,7 @@ mod tests {
                 discoverable: None,
                 indexable: None,
                 noindex: None,
+                fields: Vec::new(),
             },
             favourites_count: 0,
             reblogs_count: 0,
