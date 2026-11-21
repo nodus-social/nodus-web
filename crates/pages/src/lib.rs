@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! The page bodies both paints draw, from data and callbacks they are handed.
 //!
 //! `nodus-ui` holds the pieces; this crate composes them into screens. It knows nothing

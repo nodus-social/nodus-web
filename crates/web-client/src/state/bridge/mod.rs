@@ -310,6 +310,7 @@ pub mod notices;
 pub mod notifications;
 pub mod pages;
 mod posts;
+pub mod profile;
 mod runtime;
 pub mod seed;
 pub mod session;
