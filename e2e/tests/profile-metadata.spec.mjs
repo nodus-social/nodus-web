@@ -1,15 +1,18 @@
 //! The metadata rows: the editor writes them, the profile reads them back.
 //!
-//! The rows are not part of the account document, so the instance is stubbed twice: the
-//! credential read answers with the rows as the instance stores them, and the credential
-//! write answers with the rows it kept. A save that lands is visible after a reload only
-//! because the read answers the rows the write stored, which is what these stubs model.
+//! The rows ride on the account document: the credential read answers them for the editor,
+//! and the profile screen paints the reader's own rows from the account it already holds.
+//! The instance is therefore stubbed twice — the account read and the credential read — and
+//! the credential write answers with the rows it kept. A save that lands is visible after a
+//! reload only because those reads answer the rows the write stored, which is what these
+//! stubs model.
 
 import { expect, test } from '@playwright/test'
 
 import { CORS, account, hydrated, signedIn, stubApi } from '../fixtures.mjs'
 
 const VERIFY = '**/api/v1/accounts/verify_credentials'
+const ACCOUNT = /\/api\/v1\/accounts\/[^/]+$/
 const CREDENTIALS = '**/api/v1/accounts/update_credentials'
 
 /** The rows the stub instance holds, in wire shape. */
@@ -18,7 +21,14 @@ function row(name, value, verifiedAt = null) {
 }
 
 /**
- * Serves the credential read from `rows`, and the credential write by storing its body.
+ * Serves the account read and the credential read from `rows`, and the credential write by
+ * storing its body.
+ *
+ * The profile screen reads the rows off the account document it loads for the page, not off
+ * a separate metadata call, so the account read is the one that has to carry them; the
+ * credential read is what seeds the editor. `ACCOUNT` is registered first because Playwright
+ * consults handlers newest-first: the literal `VERIFY` route added after it matches that same
+ * URL and keeps its own answer, rather than being shadowed by the id pattern.
  *
  * The write arrives as JSON, not as a form: the rows are a nested list, which the form
  * encoding of this endpoint cannot spell, so the client sends the whole update as JSON.
@@ -27,6 +37,9 @@ function row(name, value, verifiedAt = null) {
  */
 async function credentialStub(page, rows) {
   const stored = { rows: [...rows], writes: [] }
+  await page.route(ACCOUNT, (route) =>
+    route.fulfill({ headers: CORS, json: { ...account, fields: stored.rows } }),
+  )
   await page.route(VERIFY, (route) =>
     route.fulfill({ headers: CORS, json: { ...account, fields: stored.rows } }),
   )
@@ -60,15 +73,20 @@ test('two rows are added, saved, and still on the profile after a reload', async
   await page.getByRole('button', { name: 'Save profile' }).click()
   await expect(page.getByText('Saved.')).toBeVisible()
 
-  // The body the bridge sent, not a form: name and value per row, in row order.
+  // The body the bridge sent, not a form: name and value per row, in row order. The SDK
+  // sends the list under both names — `fields`, which nodus reads, and `fields_attributes`,
+  // which upstream Mastodon reads — so both are pinned, and to the same rows in the same
+  // order: a body where the two disagree would set a different table on each server.
+  const sent = [
+    { name: 'Blog', value: 'https://example.social/@ada' },
+    { name: 'Project', value: 'nodus' },
+  ]
   expect(stub.writes).toEqual([
     {
       display_name: account.display_name,
       note: account.note,
-      fields: [
-        { name: 'Blog', value: 'https://example.social/@ada' },
-        { name: 'Project', value: 'nodus' },
-      ],
+      fields: sent,
+      fields_attributes: sent,
     },
   ])
 
