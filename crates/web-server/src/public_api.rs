@@ -111,31 +111,48 @@ fn answers_for(row: &Value, host: &str) -> bool {
     }
 }
 
-/// The response an anonymous read may take from this origin's stored row, if any.
+/// The kind of read a stored row may answer, which decides who it answers for.
 ///
-/// A signed-in reader keeps today's relay: their home instance holds the copy it pulled and
-/// is the one trusted for them. An anonymous reader has no home instance to ask, so the row
-/// this origin stores answers — but only when it belongs to the host the address named.
-fn from_origin(token: Option<&str>, row: Option<Value>, host: &str) -> Option<Response> {
-    if token.is_some() {
+/// The two differ because their addresses mean different things. A post permalink carries
+/// the id this origin minted for its stored copy, so no relay can turn that id into an
+/// answer — for a signed-out reader or a signed-in one. A profile address carries the
+/// instance's own reference, which a signed-in reader's home instance can still resolve.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Read {
+    /// A post, addressed by the id this origin minted for its copy of it.
+    Post,
+    /// A profile, addressed the way the instance that holds it numbers accounts.
+    Profile,
+}
+
+/// The response a read may take from this origin's stored row, if any.
+///
+/// A post is answered for every reader. The id in `/status/{host}/{id}` is the one this
+/// origin minted for the row it copied (`rows.rs`, `status_path(Some(&host), &inner.id)`),
+/// so the peer never had it: relaying it asks an instance for a post that instance never
+/// held. That is wrong in production, not just where a private peer is refused. A token
+/// cannot rescue the relay either, because the reader's home instance resolves the peer's
+/// own numbering, not this origin's. So a signed-in reader is served the stored row, and a
+/// reader who happens to have the post in their home instance sees this origin's public
+/// copy of it.
+///
+/// A profile is answered for a signed-out reader only. A signed-in reader's home instance
+/// resolves the profile by url and answers with their relationship to it, so the relay is
+/// the better answer there and stays (`8fbabee`).
+///
+/// Either way the row must name the host the address named (`answers_for`); the reader's
+/// session is not the check that keeps a local row from answering under a peer's name.
+fn from_origin(
+    read: Read,
+    token: Option<&str>,
+    row: Option<Value>,
+    host: &str,
+) -> Option<Response> {
+    if read == Read::Profile && token.is_some() {
         return None;
     }
     let row = row.filter(|row| answers_for(row, host))?;
     Some(Json(row).into_response())
-}
-
-/// This origin's own copy of `path`, served under the name the address gave.
-async fn origin_copy(
-    headers: &HeaderMap,
-    token: Option<&str>,
-    path: &str,
-    host: &str,
-) -> Option<Response> {
-    if token.is_some() {
-        return None;
-    }
-    let row = local_json(headers, path, host).await?;
-    from_origin(token, Some(row), host)
 }
 
 fn hydrate_base() -> Option<String> {
@@ -464,17 +481,15 @@ pub async fn status(
     if !valid_target(&host, &id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let (target, id, token) = status_target(&app, &headers, &host, &id).await;
-    if let Some(response) = origin_copy(
-        &headers,
-        token.as_deref(),
-        &format!("/api/v1/statuses/{id}"),
-        &host,
-    )
-    .await
-    {
+    // The store is asked before either remote read: the id is this origin's, so the peer
+    // cannot answer for it and the relay is only reached for an id this origin never
+    // stored (a fresh link to the peer's own numbering), where it is the right answer.
+    let token = session_of(&app, &headers).map(|session| session.token);
+    let stored = local_json(&headers, &format!("/api/v1/statuses/{id}"), &host).await;
+    if let Some(response) = from_origin(Read::Post, token.as_deref(), stored, &host) {
         return response;
     }
+    let (target, id, token) = status_target(&app, &headers, &host, &id).await;
     relay(
         format!("https://{target}/api/v1/statuses/{id}"),
         token.as_deref(),
@@ -517,14 +532,8 @@ pub async fn account(
         return StatusCode::NOT_FOUND.into_response();
     };
     let (target, id, token) = account_target(&app, &headers, &host, &resolved).await;
-    if let Some(response) = origin_copy(
-        &headers,
-        token.as_deref(),
-        &format!("/api/v1/accounts/{id}"),
-        &host,
-    )
-    .await
-    {
+    let stored = local_json(&headers, &format!("/api/v1/accounts/{id}"), &host).await;
+    if let Some(response) = from_origin(Read::Profile, token.as_deref(), stored, &host) {
         return response;
     }
     relay(
@@ -634,7 +643,7 @@ pub async fn following(
 
 #[cfg(test)]
 mod tests {
-    use super::{answers_for, from_origin, host_of, host_valid};
+    use super::{Read, answers_for, from_origin, host_of, host_valid};
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use serde_json::json;
@@ -651,8 +660,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_matching_host_row_is_answered_from_this_origin() {
-        let response = from_origin(None, Some(copied_post("mastodon.test")), "mastodon.test")
-            .expect("a row that names the requested host answers from here");
+        let response = from_origin(
+            Read::Post,
+            None,
+            Some(copied_post("mastodon.test")),
+            "mastodon.test",
+        )
+        .expect("a row that names the requested host answers from here");
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024)
             .await
@@ -663,11 +677,55 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_signed_in_reader_is_answered_a_stored_peer_post_from_this_origin() {
+        let response = from_origin(
+            Read::Post,
+            Some("token"),
+            Some(copied_post("mastodon.test")),
+            "mastodon.test",
+        )
+        .expect("the session must not send the reader to a peer that never had the id");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap_or_default();
+        assert!(String::from_utf8_lossy(&body).contains("hello"));
+    }
+
+    #[test]
+    fn a_signed_in_read_of_an_id_this_origin_does_not_hold_still_relays() {
+        // The peer's own numbering: nothing here answers, so the handler must fall
+        // through to the relay and its honest 502/404.
+        assert!(from_origin(Read::Post, Some("token"), None, "mastodon.test").is_none());
+    }
+
+    #[test]
+    fn a_stored_row_that_names_another_instance_is_refused_for_a_signed_in_reader() {
+        assert!(
+            from_origin(
+                Read::Post,
+                Some("token"),
+                Some(copied_post("nodus.test")),
+                "mastodon.test"
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn a_row_that_lives_here_is_refused_under_another_instance() {
         // The live case: ada's local post read through a permalink naming the peer.
         assert!(!answers_for(&copied_post("nodus.test"), "mastodon.test"));
-        assert!(from_origin(None, Some(copied_post("nodus.test")), "mastodon.test").is_none());
+        assert!(
+            from_origin(
+                Read::Post,
+                None,
+                Some(copied_post("nodus.test")),
+                "mastodon.test"
+            )
+            .is_none()
+        );
         // The port a deployment may carry is not part of the name.
         assert!(answers_for(&copied_post("nodus.test"), "nodus.test"));
         assert!(answers_for(
@@ -689,12 +747,14 @@ mod tests {
             "url": "https://mastodon.test/@ada",
             "display_name": "Ada"
         });
-        let response = from_origin(None, Some(profile.clone()), "mastodon.test")
+        let response = from_origin(Read::Profile, None, Some(profile.clone()), "mastodon.test")
             .expect("an anonymous reader is served the stored profile");
         assert_eq!(response.status(), StatusCode::OK);
         // A signed-in reader keeps the relay to their home instance.
-        assert!(from_origin(Some("token"), Some(profile), "mastodon.test").is_none());
-        assert!(from_origin(None, None, "mastodon.test").is_none());
+        assert!(
+            from_origin(Read::Profile, Some("token"), Some(profile), "mastodon.test").is_none()
+        );
+        assert!(from_origin(Read::Profile, None, None, "mastodon.test").is_none());
     }
 
     #[test]
