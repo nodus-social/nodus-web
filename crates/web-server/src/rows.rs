@@ -85,6 +85,13 @@ fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {
             interactive: true,
             body: None,
             extra: None,
+            // A reaction tally is a second read of the note by id, and the instance's answer
+            // to whether it serves reactions at all: neither is in the status this paint
+            // was handed, and a static row has nothing to press, so the row is absent.
+            reactions: None,
+            on_react: None,
+            on_unreact: None,
+            reactions_note: None,
         })
         .to_html()
     })
