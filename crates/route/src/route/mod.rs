@@ -614,12 +614,21 @@ pub fn RouteView(
         Route::Account(id) => match id.split_once('/') {
             Some((host, id)) if !host.is_empty() && !id.is_empty() => {
                 let signed_in = runtime.session_host();
-                if signed_in.is_some() {
+                // A number is this instance's own numbering, not a handle: a link that
+                // names this instance and an id was minted here, and looking it up by name
+                // asks for `@1@host`, which no account answers to. That lookup is what sent
+                // the reader's own profile to the visitor's page, which draws neither the
+                // verbs nor the metadata rows.
+                if signed_in
+                    .as_ref()
+                    .is_some_and(|mine| mine.eq_ignore_ascii_case(host))
+                    && looks_like_id(id)
+                {
+                    view! { <AccountScreen runtime id=id.to_owned() card/> }.into_any()
+                } else if signed_in.is_some() {
                     // The address names an instance and a handle, so a reader resolves it
                     // through their own instance: that keeps follows, blocks and mutes in
-                    // play, and lands on the local row every other screen links to. It also
-                    // covers the old id-shaped link, which resolves as a name and falls
-                    // through to the public view when it does not.
+                    // play, and lands on the local row every other screen links to.
                     view! {
                         <crate::route::screens::profile::ProfileScreen
                             runtime
