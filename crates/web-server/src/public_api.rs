@@ -20,6 +20,66 @@ fn local_host() -> Option<String> {
     std::env::var("NODUS_INSTANCE_HOST").ok()
 }
 
+/// The host name a value such as `https://nodus.test` or `nodus.test:18443` names.
+fn host_of(value: &str) -> &str {
+    let authority = value.split_once("://").map_or(value, |(_, rest)| rest);
+    let authority = authority.split('/').next().unwrap_or(authority);
+    authority
+        .rsplit_once(':')
+        .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+        .map_or(authority, |(host, _)| host)
+}
+
+/// The host name this shell answers on.
+///
+/// A deployment sets `NODUS_INSTANCE_HOST` (or at least `NODUS_BASE_URL`); the lab and the
+/// dev loop set neither for the web role, so the browser's `Host` header names it instead.
+/// Only the name is used: callers go back out over https, where Caddy terminates.
+fn local_host_name(headers: &HeaderMap) -> Option<String> {
+    if let Ok(host) = std::env::var("NODUS_INSTANCE_HOST")
+        && !host.is_empty()
+    {
+        return Some(host);
+    }
+    if let Ok(base) = std::env::var("NODUS_BASE_URL")
+        && !host_of(&base).is_empty()
+    {
+        return Some(host_of(&base).to_owned());
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(host_of)
+        .filter(|host| !host.is_empty())
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+/// A read of this origin's own copy of a post or profile that lives on another instance.
+///
+/// The shell links a remote post by the id this origin stores under the peer's host name,
+/// so asking the peer for that id would 404 even when the peer is reachable. The origin
+/// already has the row `public_page` serves; `None` means it does not hold this id (the
+/// peer's own numbering, an unknown post), and the caller relays to the peer instead of
+/// inventing a second lookup.
+async fn local_read(headers: &HeaderMap, path: &str, remote_host: &str) -> Option<Response> {
+    let local = local_host_name(headers)?;
+    if local == remote_host || !host_valid(&local) {
+        return None;
+    }
+    let client = external_client().ok()?;
+    let response = client
+        .get(format!("https://{local}{path}"))
+        .send()
+        .await
+        .ok()?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return None;
+    }
+    let status = response.status();
+    let body = response.text().await.ok()?;
+    Some((status, [(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
 fn hydrate_base() -> Option<String> {
     std::env::var("NODUS_HYDRATE_URL").ok()
 }
@@ -347,6 +407,11 @@ pub async fn status(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
+    if token.is_none()
+        && let Some(response) = local_read(&headers, &format!("/api/v1/statuses/{id}"), &host).await
+    {
+        return response;
+    }
     relay(
         format!("https://{target}/api/v1/statuses/{id}"),
         token.as_deref(),
@@ -363,6 +428,12 @@ pub async fn context(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let (target, id, token) = status_target(&app, &headers, &host, &id).await;
+    if token.is_none()
+        && let Some(response) =
+            local_read(&headers, &format!("/api/v1/statuses/{id}/context"), &host).await
+    {
+        return response;
+    }
     relay(
         format!("https://{target}/api/v1/statuses/{id}/context"),
         token.as_deref(),
@@ -413,6 +484,19 @@ pub async fn account_statuses(
         .as_ref()
         .map(|max| format!("?max_id={max}"))
         .unwrap_or_default();
+    if token.is_none()
+        && let Some(response) = local_read(
+            &headers,
+            &format!(
+                "/api/v1/accounts/{id}/statuses?limit=20{}",
+                suffix.replace('?', "&")
+            ),
+            &host,
+        )
+        .await
+    {
+        return response;
+    }
     if let Some(value) = json(
         &format!(
             "https://{target}/api/v1/accounts/{id}/statuses?limit=20{}",
@@ -477,7 +561,17 @@ pub async fn following(
 
 #[cfg(test)]
 mod tests {
-    use super::host_valid;
+    use super::{host_of, host_valid};
+
+    #[test]
+    fn host_of_reads_a_name_through_a_scheme_path_or_port() {
+        assert_eq!(host_of("https://nodus.test"), "nodus.test");
+        assert_eq!(host_of("nodus.test:18443"), "nodus.test");
+        assert_eq!(host_of("https://nodus.test/status/1"), "nodus.test");
+        assert_eq!(host_of("nodus.test"), "nodus.test");
+        // A colon that is not a port (an IPv6 literal) is left alone.
+        assert_eq!(host_of("[::1]"), "[::1]");
+    }
 
     #[test]
     fn host_valid_accepts_public_domains_and_ports() {
