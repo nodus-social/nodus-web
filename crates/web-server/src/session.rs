@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::protocol::Protocol;
 use nodus_ui::session_style::SessionStyle;
 use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,22 @@ pub struct Session {
     pub token: String,
     pub account_id: String,
     pub acct: String,
+    /// The dialect the token was proven in, decided once at sign-in.
+    ///
+    /// Persisted so a later render knows which verbs this server has: a Misskey session can
+    /// be signed in and read in the browser, but this process reads through Mastodon's
+    /// client API, and painting an error as content would be the lie that hides it.
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// What the account calls itself and what it looks like, read once at sign-in.
+    ///
+    /// Cached for the same reason as [`Session::style`]: the rail is drawn before any wasm
+    /// runs, and a `verify_credentials` call on every page would be paid by every reader to
+    /// learn something that changes about as often as a display name does.
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub avatar: String,
     /// Whether this account answered the moderation queue when it signed in.
     ///
     /// Probed once, at sign-in, rather than on every render: the rail has to know before
@@ -52,6 +69,9 @@ pub struct SessionView<'a> {
     pub host: &'a str,
     pub account_id: &'a str,
     pub acct: &'a str,
+    /// Which dialect this session was proven in, so the browser can leave out verbs the
+    /// server does not have instead of offering them and failing.
+    pub protocol: &'a str,
 }
 
 impl Session {
@@ -61,6 +81,7 @@ impl Session {
             host: &self.host,
             account_id: &self.account_id,
             acct: &self.acct,
+            protocol: self.protocol.as_str(),
         }
     }
 }

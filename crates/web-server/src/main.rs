@@ -17,6 +17,7 @@ mod content;
 mod document;
 mod mastodon;
 mod pages;
+mod protocol;
 mod public_api;
 mod rows;
 mod runtime;
@@ -369,21 +370,42 @@ async fn sign_in(State(app): State<Arc<App>>, Json(body): Json<Credentials>) -> 
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
         }
     };
-    match client.whoami().await {
-        Ok(account) => {
+    // Which dialect this host speaks decides how a token is proven: the compatibility
+    // endpoints do not exist on Misskey, so assuming them locked its readers out entirely.
+    // Detection reads the documents a server already publishes, so an unrecognised host
+    // keeps the Mastodon proof it always had.
+    let http = match validate::shared_public_http_client() {
+        Ok(http) => http,
+        Err(error) => {
+            let message = error.to_string();
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
+        }
+    };
+    let protocol = protocol::detect_with(&http, client.base())
+        .await
+        .unwrap_or_default();
+    match protocol::verify_with(&http, client.base(), &body.token, protocol).await {
+        Ok(verified) => {
+            // Both probes below are reads of this same session and a plain Mastodon-shaped
+            // host refuses the moderation one, which is exactly the answer for a reader who
+            // does not moderate.
             let admin = client.is_staff().await;
             let style = client.client_metadata_style().await.ok();
             let id = app.sessions.insert(Session {
                 host: client.host().to_owned(),
                 token: body.token,
-                account_id: account.id.clone(),
-                acct: account.acct.clone(),
+                account_id: verified.account_id.clone(),
+                acct: verified.acct.clone(),
+                protocol: verified.protocol,
+                display_name: verified.display_name,
+                avatar: verified.avatar,
                 admin: Some(admin),
                 style,
             });
             let mut response = Json(json!({
-                "acct": account.acct,
-                "account_id": account.id,
+                "acct": verified.acct,
+                "account_id": verified.account_id,
+                "protocol": verified.protocol.as_str(),
             }))
             .into_response();
             if let Ok(value) = cookie_for(&id).parse() {
@@ -817,6 +839,9 @@ mod tests {
             token: "staff-token".to_owned(),
             account_id: "1".to_owned(),
             acct: "mod@example.com".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: "Mod".to_owned(),
+            avatar: String::new(),
             admin: Some(true),
             style: Some(SessionStyle::default()),
         });
@@ -825,6 +850,9 @@ mod tests {
             token: "user-token".to_owned(),
             account_id: "2".to_owned(),
             acct: "user@example.com".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: "User".to_owned(),
+            avatar: String::new(),
             admin: Some(false),
             style: Some(SessionStyle::default()),
         });
@@ -1151,6 +1179,9 @@ mod tests {
             token: "super-secret-bearer-token".to_owned(),
             account_id: "42".to_owned(),
             acct: "alice@mastodon.social".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: "Alice".to_owned(),
+            avatar: String::new(),
             admin: Some(false),
             style: Some(SessionStyle::default()),
         });
@@ -1192,6 +1223,9 @@ mod tests {
             token: "tok-a".to_owned(),
             account_id: "1".to_owned(),
             acct: "alice@alpha.example".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: String::new(),
+            avatar: String::new(),
             admin: Some(false),
             style: Some(SessionStyle::default()),
         });
@@ -1211,6 +1245,9 @@ mod tests {
             token: "tok-b".to_owned(),
             account_id: "2".to_owned(),
             acct: "bob@alpha.example".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: String::new(),
+            avatar: String::new(),
             admin: Some(false),
             style: Some(bob_style),
         });
@@ -1219,6 +1256,9 @@ mod tests {
             token: "tok-c".to_owned(),
             account_id: "1".to_owned(),
             acct: "carol@beta.example".to_owned(),
+            protocol: protocol::Protocol::Mastodon,
+            display_name: String::new(),
+            avatar: String::new(),
             admin: Some(false),
             style: Some(SessionStyle::default()),
         });

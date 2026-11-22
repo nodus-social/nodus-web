@@ -25,6 +25,8 @@ use serde::Deserialize;
 pub struct Client {
     instance: HttpInstance,
     host: String,
+    /// The validated origin, without a trailing slash: probe and verify URLs are built on it.
+    base: String,
 }
 
 impl Client {
@@ -39,6 +41,7 @@ impl Client {
         Ok(Self {
             instance: HttpInstance::with_client(&instance, token.to_owned(), http),
             host: normalized,
+            base: instance.base.as_str().trim_end_matches('/').to_owned(),
         })
     }
 
@@ -47,20 +50,17 @@ impl Client {
         &self.host
     }
 
-    /// Prove the token and learn which account it belongs to.
+    /// The validated origin this client talks to, for the calls `HttpInstance` does not make.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     /// Whether this token may moderate. One request, at sign-in.
     ///
     /// The pending queue is the cheapest endpoint that is staff-only: a moderator gets a
     /// list, anyone else a `403` with a JSON body (Mastodon does not answer `404` here).
     pub async fn is_staff(&self) -> bool {
         self.instance.pending_accounts(1).await.is_ok()
-    }
-
-    pub async fn whoami(&self) -> Result<Account, String> {
-        self.instance
-            .verify_credentials()
-            .await
-            .map_err(|error| error.to_string())
     }
 
     /// The first page of the home timeline, newest first.
@@ -252,6 +252,7 @@ impl Client {
                 token.to_owned(),
                 reqwest::Client::new(),
             ),
+            base: instance.base.as_str().trim_end_matches('/').to_owned(),
             host,
         }
     }

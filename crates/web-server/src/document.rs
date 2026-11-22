@@ -649,6 +649,7 @@ mod tests {
                 following_count: 0,
                 statuses_count: 0,
                 last_status_at: None,
+                fields: Vec::new(),
                 discoverable: None,
                 indexable: None,
                 noindex: None,
@@ -707,6 +708,33 @@ mod tests {
 
     fn has_staff_links(html: &str) -> bool {
         html.contains("href=\"/moderation\"") || html.contains("href=\"/admin\"")
+    }
+
+    #[test]
+    fn a_painted_page_references_nothing_but_this_origin() {
+        // The server paints with the bundle this host serves; a document that named another
+        // origin would either fail to boot or boot against someone else's app. The one
+        // absolute URL the page may carry is the favicon's inline `data:` SVG, and status
+        // bodies are absent here so their (legitimately remote) images cannot mask a leak.
+        let html = home(&test_assets(), "me@example.org", false, &[], None);
+        let (head, rest) = html.split_once("<body").expect("body");
+        for (part, name) in [(head, "head"), (rest, "body")] {
+            for attribute in ["src=", "href="] {
+                assert!(
+                    !part.contains(&format!("{attribute}\"http")),
+                    "{name} references another origin: {part}"
+                );
+                assert!(
+                    !part.contains(&format!("{attribute}\"//")),
+                    "{name} references a protocol-relative origin: {part}"
+                );
+            }
+        }
+        assert!(html.contains("from '/nodus-web.js'"), "{html}");
+        assert!(
+            html.contains("module_or_path: '/nodus-web_bg.wasm'"),
+            "{html}"
+        );
     }
 
     #[test]
