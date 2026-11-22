@@ -13,6 +13,7 @@
 //! - `NODUS_SESSIONS` — the JSON file sessions survive a restart in (default
 //!   `/var/lib/nodus/sessions.json`; set it to `-` for memory only).
 
+mod capabilities;
 mod content;
 mod document;
 mod mastodon;
@@ -76,6 +77,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
     let Some(session) = session_of(&app, &headers) else {
         return Html(document::landing(&app.bundle())).into_response();
     };
+    capabilities::resolve(&session).await;
     let staff = resolve_staff(&app, &session).await;
     let style = resolve_style(&app, &session).await;
     // The reader the chrome draws: the session's own account, which sign-in already read.
@@ -751,7 +753,9 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
     };
     // The rail draws the moderation doors for a moderator, and it is drawn before any
     // wasm runs, so the answer has to come from the session that was established at
-    // sign-in (`Session::admin`).
+    // sign-in (`Session::admin`). The capability answer is what decides whether those
+    // doors are painted at all: a Mastodon host does not serve them.
+    capabilities::resolve(&session).await;
     let staff = resolve_staff(&app, &session).await;
     let style = resolve_style(&app, &session).await;
     let assets = app.bundle();
@@ -794,6 +798,7 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let Some(session) = session_of(&app, &headers) else {
         return Html(document::landing(&app.bundle())).into_response();
     };
+    capabilities::resolve(&session).await;
     let staff = resolve_staff(&app, &session).await;
     let style = resolve_style(&app, &session).await;
     let reader = document::Reader::from(&session);
@@ -866,13 +871,34 @@ mod tests {
     use super::*;
 
     fn test_app(host: &str) -> (Arc<App>, String, String) {
+        test_app_as(host, protocol::Protocol::Nodus, true)
+    }
+
+    /// A signed-in pair for `host`; `seed` gives the Nodus staff account a published answer
+    /// without making the test's closed host answer `/api/v1/meta`.
+    fn test_app_as(
+        host: &str,
+        dialect: protocol::Protocol,
+        seed: bool,
+    ) -> (Arc<App>, String, String) {
         let sessions = Arc::new(Sessions::load(None));
+        let staff_acct = format!("mod@{host}");
+        let user_acct = format!("user@{host}");
+        if seed {
+            crate::capabilities::remember_for_test(
+                host,
+                nodus_ui::capabilities::Capabilities::from_parts(
+                    "0.1.0",
+                    &["admin".to_owned(), "moderation".to_owned()],
+                ),
+            );
+        }
         let staff_id = sessions.insert(Session {
             host: host.to_owned(),
             token: "staff-token".to_owned(),
             account_id: "1".to_owned(),
-            acct: "mod@example.com".to_owned(),
-            protocol: protocol::Protocol::Mastodon,
+            acct: staff_acct,
+            protocol: dialect,
             display_name: "Mod".to_owned(),
             avatar: String::new(),
             admin: Some(true),
@@ -882,8 +908,8 @@ mod tests {
             host: host.to_owned(),
             token: "user-token".to_owned(),
             account_id: "2".to_owned(),
-            acct: "user@example.com".to_owned(),
-            protocol: protocol::Protocol::Mastodon,
+            acct: user_acct,
+            protocol: dialect,
             display_name: "User".to_owned(),
             avatar: String::new(),
             admin: Some(false),
@@ -989,6 +1015,90 @@ mod tests {
             .await
             .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn staff_nodus_document_draws_the_administration_door() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let (app, staff_id, _) = test_app(&host);
+
+        let response = shell(
+            State(app),
+            cookie_headers(&staff_id),
+            "/settings/account".parse().unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("href=\"/admin\""), "{html}");
+    }
+
+    #[tokio::test]
+    async fn mastodon_staff_document_does_not_draw_nodus_doors() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let (app, staff_id, _) = test_app_as(&host, protocol::Protocol::Mastodon, false);
+
+        let html = body_text(
+            shell(
+                State(app),
+                cookie_headers(&staff_id),
+                "/settings/account".parse().unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert!(!html.contains("href=\"/admin\""), "{html}");
+        assert!(!html.contains("href=\"/moderation\""), "{html}");
+    }
+
+    #[tokio::test]
+    async fn anonymous_page_still_paints_its_public_chrome() {
+        let (app, _, _) = test_app("example.com");
+        let assets = app.bundle();
+        let response = shell(State(app), HeaderMap::new(), "/sign-in".parse().unwrap()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("Sign in · Nodus"), "{html}");
+        assert!(html.contains("/nodus-web.js"), "{html}");
+        assert!(!html.contains("href=\"/admin\""), "{html}");
+
+        // A public profile is painted with no session at all; the permissive `None` must
+        // keep the chrome it always drew rather than make the page look empty.
+        let profile = document::page_of_public(
+            &assets,
+            "/@user@example.com",
+            "User",
+            "<p>public</p>",
+            false,
+        );
+        assert!(profile.contains("public"), "{profile}");
+        assert!(profile.contains("/nodus-web.js"), "{profile}");
+        assert!(!profile.contains("href=\"/admin\""), "{profile}");
+    }
+
+    #[tokio::test]
+    async fn meta_failure_paints_permissively_instead_of_an_error_page() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        // Nodus, but no seeded answer: the one meta read cannot reach this closed host, so
+        // the render must keep the doors it always drew rather than turn into an error page.
+        let (app, staff_id, _) = test_app_as(&host, protocol::Protocol::Nodus, false);
+
+        let response = shell(
+            State(app),
+            cookie_headers(&staff_id),
+            "/settings/account".parse().unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("href=\"/admin\""), "{html}");
+        assert!(!html.contains("Timeline unavailable"), "{html}");
     }
 
     #[tokio::test]

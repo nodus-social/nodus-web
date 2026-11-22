@@ -200,37 +200,67 @@ impl From<&crate::session::Session> for Reader {
     }
 }
 
-/// The two doors a moderator has, drawn from the same list the client draws.
+/// Whether a staff door should be painted for `surface`.
+///
+/// `None` is permissive because the render has no account to ask about or the one answer
+/// failed; `Some` must be a Nodus extension answer that serves the surface. The client's
+/// staff rail applies the same extension check before its role check, because Mastodon's
+/// baseline says its admin route exists even though these Nodus screens do not.
+fn staff_door_served(
+    at: Option<&nodus_ui::capabilities::Capabilities>,
+    surface: nodus_ui::capabilities::Surface,
+) -> bool {
+    use nodus_ui::capabilities::admits;
+
+    at.is_none_or(|at| at.knows_extensions() && admits(Some(at), surface))
+}
+
+/// The two doors a moderator has, filtered by the same capability answer the browser uses.
+///
+/// The frame is drawn from the server's capability value in context, so this reads rather
+/// than assumes.
 fn staff_doors(path: &str) -> leptos::prelude::AnyView {
-    imperative::rail_rows(path)
+    use leptos::prelude::Get;
+    use nodus_ui::capabilities::{Surface, serves};
+
+    let at = serves().map(|answer| answer.get());
+    imperative::rail_rows(
+        path,
+        staff_door_served(at.as_ref(), Surface::Moderation),
+        staff_door_served(at.as_ref(), Surface::Admin),
+    )
 }
 
 /// Markup for the extra rail rows, kept beside the frame so both come from one place.
 mod imperative {
     use leptos::prelude::*;
 
-    /// The moderation and administration rows.
+    /// The moderation and administration rows, each only when its surface is served.
     #[must_use]
-    pub fn rail_rows(path: &str) -> AnyView {
+    pub fn rail_rows(path: &str, moderation: bool, administration: bool) -> AnyView {
         let path = path.to_owned();
         view! {
-            <nodus_ui::RailEntry
-                label="Moderation"
-                href="/moderation"
-                hint="The queue, the accounts and what the server allows"
-                icon=nodus_ui::icons::Icon::Shield
-                active=Signal::derive({
-                    let path = path.clone();
-                    move || nodus_ui::within("/moderation", &path)
-                })
-            />
-            <nodus_ui::RailEntry
-                label="Administration"
-                href="/admin"
-                hint="What this instance publishes and allows"
-                icon=nodus_ui::icons::Icon::Globe
-                active=Signal::derive(move || nodus_ui::within("/admin", &path))
-            />
+            {moderation.then(|| view! {
+                <nodus_ui::RailEntry
+                    label="Moderation"
+                    href="/moderation"
+                    hint="The queue, the accounts and what the server allows"
+                    icon=nodus_ui::icons::Icon::Shield
+                    active=Signal::derive({
+                        let path = path.clone();
+                        move || nodus_ui::within("/moderation", &path)
+                    })
+                />
+            })}
+            {administration.then(|| view! {
+                <nodus_ui::RailEntry
+                    label="Administration"
+                    href="/admin"
+                    hint="What this instance publishes and allows"
+                    icon=nodus_ui::icons::Icon::Globe
+                    active=Signal::derive(move || nodus_ui::within("/admin", &path))
+                />
+            })}
         }
         .into_any()
     }
@@ -249,6 +279,7 @@ fn chrome_with_style(
     reader: Option<&Reader>,
 ) -> String {
     use leptos::prelude::{IntoAny, Owner, Signal};
+    use nodus_ui::capabilities::Surface;
 
     // The frame, the rail and the icons come from `nodus-view`, the same components the
     // browser mounts. That is the whole point: two templates drift, one tree cannot.
@@ -256,7 +287,20 @@ fn chrome_with_style(
     let door_path = path.clone();
     let inner = inner.to_owned();
     let style_prop = style.cloned().map(Signal::stored);
+    // The capability answer for this reader, looked up from the value `resolve` cached before
+    // the paint. `None` is not "nothing is served": it means this page has no account to ask
+    // about (public chrome) or the one read failed. Both paint permissively, which is the
+    // behaviour the doors had before the server knew any better.
+    let at = reader.and_then(|reader| crate::capabilities::answer_for(&reader.host));
+    let show_staff = signed_in
+        && staff
+        && (staff_door_served(at.as_ref(), Surface::Moderation)
+            || staff_door_served(at.as_ref(), Surface::Admin));
+    let provided = at;
     Owner::new().with(|| {
+        if let Some(at) = provided {
+            nodus_ui::capabilities::provide_serves(Signal::stored(at));
+        }
         let body = inner.clone();
         nodus_ui::Frame(nodus_ui::FrameProps {
             signed_in: Signal::derive(move || signed_in),
@@ -286,7 +330,7 @@ fn chrome_with_style(
             // always has, and the client replaces it once it knows whether the instance
             // serves notifications at all.
             notices: None,
-            extra: (signed_in && staff).then(move || {
+            extra: show_staff.then(move || {
                 std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
             }),
         })

@@ -22,15 +22,18 @@
 //!
 //! ## A paint that does not know the answer yet
 //!
-//! [`admits`] still draws on `None`, because a missing answer is not a refusal yet. The
-//! browser always has an answer. The server render does not, and it is the paint that could
-//! have one: `web`'s document layer has already proved the token's dialect
-//! (`session.protocol`), so `Capabilities::misskey()` or `Capabilities::mastodon()` — the
-//! same baseline the browser uses, from no request — is available to it before it renders.
-//! Supplying it is a `provide_serves` at that paint, and that paint is in `crates/web-server`,
-//! outside this change: until it calls one, a Misskey session's server render still draws a
-//! bookmarks tab that the browser then filters out of the rail on hydration. The accepting
-//! side already exists here, so the missing half is one call, not a redesign.
+//! [`admits`] draws on `None`, because a missing answer is not a refusal. The server render
+//! used to be the paint that always passed `None`; it now supplies the answer from the same
+//! facts the browser has. The dialect was proved at sign-in (`Session::protocol`), so a
+//! Mastodon or Misskey session gets the SDK's baseline with no request, and a Nodus session
+//! gets the list published at `/api/v1/meta` (read once per host, then cached in the server
+//! process). That value goes in through [`provide_serves`] at the document layer, so the
+//! frame, the rail and this gate decide identically before and after hydration.
+//!
+//! `None` therefore means one of two honest things, never "this instance serves nothing":
+//! nobody is signed in, so there is no account to ask about; or the one read failed for this
+//! render and the page is painted permissively rather than replaced with an error. A known
+//! answer is `Some`, and a surface missing from it is a known absence.
 
 use leptos::prelude::*;
 
@@ -42,13 +45,13 @@ pub use surface::Surface;
 
 /// Whether a paint that may not know the answer yet should draw a door.
 ///
-/// `None` is "nobody has asked": before `/api/v1/meta` answers in the browser, and on a
-/// server render, which is handed no capability list. Drawing the door there is still the
-/// honest choice — hiding a surface the server does serve makes it unreachable for as long as
-/// a probe takes — and a route that turns out to be absent explains itself instead of
-/// failing. It is also still a narrower concession than it was: every surface now has a row,
-/// so `None` is the only answer that is not decided. See this module's documentation for why
-/// the server render is not yet given the baseline it could have.
+/// `None` is "no capability answer is possible for this paint": an anonymous page with no
+/// account to ask about, or a signed-in render whose one meta read failed. Drawing the door
+/// there is still the honest choice — hiding a surface the server does serve makes it
+/// unreachable for as long as a probe takes, and an anonymous public profile must keep the
+/// chrome it always drew. It is also the narrower concession it has always been: every
+/// surface has a row, so a known answer (`Some`) that omits one is a refusal, and `None` is
+/// the only answer that is not decided. See this module's documentation.
 #[must_use]
 pub fn admits(at: Option<&Capabilities>, surface: Surface) -> bool {
     at.is_none_or(|at| surface.served(at))
@@ -59,9 +62,9 @@ pub type Serves = Option<Signal<Capabilities>>;
 
 /// Put the negotiated answer in scope for the screens below.
 ///
-/// A context rather than a prop because the frame is built by both artifacts, and only one
-/// of them has an SDK to ask: a prop would have to be threaded through every screen and
-/// every server call site for a value the server cannot know.
+/// A context rather than a prop because the frame is built by both artifacts: a prop would
+/// have to be threaded through every screen and every server call site for a value that is
+/// one fact about the session, and the two paints would then be free to pass different ones.
 pub fn provide_serves(at: impl Into<Signal<Capabilities>>) {
     provide_context(at.into());
 }
