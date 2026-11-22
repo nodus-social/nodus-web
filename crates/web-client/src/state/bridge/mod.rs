@@ -36,6 +36,7 @@ use crate::state::oauth;
 
 pub mod accounts;
 pub mod actions;
+pub mod capabilities;
 pub mod misskey;
 pub mod provider;
 

@@ -6,6 +6,7 @@
 //! `nodus-pages`; routing and the runtime live in `nodus-route`.
 
 pub mod blurhash;
+pub mod capabilities;
 pub mod components;
 pub mod html;
 pub mod mfm;
@@ -13,6 +14,8 @@ pub mod script;
 pub mod session_style;
 
 pub use session_style::*;
+
+pub use capabilities::{Capabilities, Feature, Surface, UnsupportedSurface};
 
 pub use components::anchor::{Anchor, Relative};
 pub use components::chrome;

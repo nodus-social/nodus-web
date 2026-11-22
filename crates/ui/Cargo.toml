@@ -6,6 +6,9 @@ edition = "2024"
 
 [dependencies]
 nodus-client-core = { path = "../../../sdk/crates/client-core", version = "0.1.0", default-features = false }
+# The same capability value the SDK negotiates: the gate here must read one answer, not a
+# second list that can disagree with it.
+nodus-protocol = { path = "../../../sdk/crates/nodus", version = "0.1.0" }
 leptos = { version = "0.8", default-features = false }
 icondata = { version = "0.5", default-features = false, features = ["lucide"] }
 blurhash = "0.2.3"

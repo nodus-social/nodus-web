@@ -229,7 +229,7 @@ pub fn PublicAccountScreen(
                     <crate::Screen>
                         <Show when=move || error.get().is_some()>
                             <crate::Note class="text-error text-xs">
-                                {move || error.get().unwrap_or_default()}
+                                {move || nodus_ui::capabilities::explain(error.get())}
                             </crate::Note>
                         </Show>
                         <crate::chrome::Skeleton count=4/>

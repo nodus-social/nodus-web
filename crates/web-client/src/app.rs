@@ -65,18 +65,25 @@ pub(crate) fn App() -> impl IntoView {
     // The recommendation, styling and staff surfaces are ours; a Mastodon account has no
     // server behind them. The route arms below and the rail read the same answer.
     let extensions = crate::state::bridge::supports_extensions();
-    // Each surface the instance's `/api/v1/meta` features name, as its own signal: a name
-    // the answer omits is a surface this instance does not serve.
-    let feed_accounts = crate::state::bridge::feature("feed_accounts");
-    let admin_on = crate::state::bridge::feature("admin");
-    let moderation_on = crate::state::bridge::feature("moderation");
+    // The negotiated answer, put in scope for the shared screens: the rail, the screens and
+    // their explanations all read this one value instead of a per-call argument, so the
+    // browser and the server paint from the same rule (the server simply has none to read).
+    let serves = crate::state::bridge::capabilities::serves();
+    nodus_ui::capabilities::provide_serves(serves);
+    // Each surface this build draws, answered by the SDK rather than by the raw list: a
+    // Mastodon or Misskey server publishes no `features` at all, and its baseline is what
+    // says it serves administration, moderation and the drive.
+    use nodus_ui::capabilities::Surface;
+    let feed_accounts = crate::state::bridge::capabilities::served(Surface::Feed);
+    let admin_on = crate::state::bridge::capabilities::served(Surface::Admin);
+    let moderation_on = crate::state::bridge::capabilities::served(Surface::Moderation);
     // `/api/v1/meta` does publish a `drive` feature (`drive`, and beside it `drive_share` and
     // `drive_attach`), so the door follows that name and falls back to the grant the session
     // already carries — an older instance, or one whose answer has not arrived yet, still has
     // the user's scopes to go on. The stored session is `read write follow` (see
     // `session::scopes`), so `read` is the wider grant a drive-readable token carries; a token
     // without `read:drive` still gets the server's 403, which the screen shows rather than hides.
-    let drive_feature = crate::state::bridge::feature("drive");
+    let drive_feature = crate::state::bridge::capabilities::served(Surface::Drive);
     let drive_on =
         Memo::new(move |_| drive_feature.get() || crate::state::bridge::drive::may_read());
 
@@ -534,8 +541,11 @@ fn StaffRail() -> impl IntoView {
         Some(crate::state::bridge::admin::Staff::Yes { role, .. }) => Some(role),
         _ => None,
     });
-    let moderation = crate::state::bridge::feature("moderation");
-    let admin = crate::state::bridge::feature("admin");
+    // Both doors are drawn from the same point of truth as the routes behind them:
+    // the server has to serve the surface, and this account has to hold the role.
+    let moderation =
+        crate::state::bridge::capabilities::served(nodus_ui::capabilities::Surface::Moderation);
+    let admin = crate::state::bridge::capabilities::served(nodus_ui::capabilities::Surface::Admin);
 
     view! {
         <Show when=move || extensions.get() && moderation.get() && role.get().is_some()>

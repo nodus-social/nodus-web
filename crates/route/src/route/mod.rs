@@ -540,6 +540,16 @@ pub fn RouteView(
     #[prop(optional_no_strip)] header: Option<ChildrenFn>,
     #[prop(optional_no_strip)] banner: Option<ChildrenFn>,
 ) -> impl IntoView {
+    // A surface this instance does not serve explains itself here, before a screen starts
+    // reading something that 404s. `None` (no probe yet, or a stateless paint that carried no
+    // list) draws the screen as it always did: the answer is missing, not negative.
+    let at = nodus_ui::capabilities::serves();
+    let answer = at.as_ref().map(|at| at.get_untracked());
+    if let Some(surface) = surface_of(&route) {
+        if !nodus_ui::capabilities::admits(answer.as_ref(), surface) {
+            return view! { <nodus_ui::UnsupportedSurface surface=surface/> }.into_any();
+        }
+    }
     if let Some(body) = runtime.body(&route) {
         return body().into_any();
     }
@@ -748,6 +758,31 @@ pub fn RouteView(
             }
             .into_any()
         }
+    }
+}
+
+/// The surface a route cannot be drawn without, when it cannot.
+///
+/// A route outside this list is one every server answers — a timeline, a profile, a thread,
+/// the composer — so it is never gated. Gating one of those would hide a page that works.
+fn surface_of(route: &Route) -> Option<nodus_ui::capabilities::Surface> {
+    use nodus_ui::capabilities::Surface;
+    match route {
+        Route::Feed => Some(Surface::Feed),
+        Route::Admin(_) => Some(Surface::Admin),
+        Route::Moderation(_) => Some(Surface::Moderation),
+        Route::Drive => Some(Surface::Drive),
+        Route::Lists | Route::List(_) => Some(Surface::Lists),
+        Route::Saved(shelf) => match shelf.as_str() {
+            "bookmarks" => Some(Surface::Bookmarks),
+            _ => Some(Surface::Favourites),
+        },
+        Route::Scheduled => Some(Surface::Scheduled),
+        Route::Notifications => Some(Surface::Notifications),
+        Route::Search => Some(Surface::Search),
+        Route::Directory => Some(Surface::Directory),
+        Route::Messages => Some(Surface::Conversations),
+        _ => None,
     }
 }
 

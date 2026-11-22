@@ -153,7 +153,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
             </Show>
             <Show when=move || error.get().is_some()>
                 <crate::Note class="text-error text-xs">
-                    {move || error.get().unwrap_or_default()}
+                    {move || nodus_ui::capabilities::explain(error.get())}
                 </crate::Note>
             </Show>
         }

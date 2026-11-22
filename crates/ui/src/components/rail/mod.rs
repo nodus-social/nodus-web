@@ -641,9 +641,27 @@ fn NavItems(
     #[prop(optional_no_strip)] editor: Option<StyleEditor>,
     dragging: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    // One choke point for every navigation list: the left rails, the right rail and the
+    // submenu all draw through here, so a destination the server does not serve is dropped
+    // once rather than in each list. An editor still sees it while arranging, because the
+    // entry exists in the layout and hiding it there would make it unrecoverable.
+    let at = crate::capabilities::serves();
+    let shown = Signal::derive(move || {
+        let answer = at.map(|at| at.get());
+        let editing = editor.is_some_and(StyleEditor::is_active);
+        items
+            .get()
+            .into_iter()
+            .filter(|item| {
+                editing
+                    || crate::capabilities::Surface::of_path(&item.path)
+                        .is_none_or(|surface| crate::capabilities::admits(answer.as_ref(), surface))
+            })
+            .collect::<Vec<NavItemConfig>>()
+    });
     view! {
         <For
-            each=move || items.get()
+            each=move || shown.get()
             key=|item| item.id.clone()
             children=move |item| nav_item_row(item, active, editor, dragging)
         />

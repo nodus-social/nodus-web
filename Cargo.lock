@@ -2230,6 +2230,7 @@ dependencies = [
 name = "nodus-protocol"
 version = "0.1.0"
 dependencies = [
+ "nodus-client-core",
  "nodus-shared",
  "serde",
  "serde_json",
@@ -2307,6 +2308,7 @@ dependencies = [
  "leptos",
  "lol_html",
  "nodus-client-core",
+ "nodus-protocol",
  "serde",
  "serde_json",
  "wasm-bindgen",

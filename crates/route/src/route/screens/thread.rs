@@ -146,7 +146,7 @@ pub fn ThreadScreen(
                     <crate::Screen>
                         <Show when=move || error.get().is_some()>
                             <crate::Note class="text-error text-xs">
-                                {move || error.get().unwrap_or_default()}
+                                {move || nodus_ui::capabilities::explain(error.get())}
                             </crate::Note>
                         </Show>
                     </crate::Screen>
@@ -222,7 +222,7 @@ fn ReplyComposer(
         />
         <Show when=move || error.get().is_some()>
             <crate::Note class="text-error text-xs">
-                {move || error.get().unwrap_or_default()}
+                {move || nodus_ui::capabilities::explain(error.get())}
             </crate::Note>
         </Show>
     }
