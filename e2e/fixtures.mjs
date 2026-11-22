@@ -141,6 +141,29 @@ export const FEATURES = [
   'preferences',
   'streaming',
   'tags',
+  // The pages inside the two staff areas. Each is its own row, so an instance that serves
+  // `admin` but omits `admin_scanners` keeps the area and drops that one screen; the strip
+  // and the page's own body both read these, never the area name.
+  'admin_overview',
+  'admin_announcements',
+  'admin_audit',
+  'admin_domains',
+  'admin_email',
+  'admin_escalation',
+  'admin_federation',
+  'admin_protocol',
+  'admin_replies',
+  'admin_rules',
+  'admin_scanners',
+  'admin_settings',
+  'admin_topology',
+  'moderation_accounts',
+  'moderation_appeals',
+  'moderation_federation',
+  'moderation_flags',
+  'moderation_media',
+  'moderation_registrations',
+  'moderation_reports',
 ]
 
 /**

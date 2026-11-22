@@ -369,8 +369,10 @@ test('an administrator is offered both doors and the whole console', async ({ pa
   expect(await sections(page)).toEqual(ADMINISTRATION)
 })
 
-test('an instance whose features omit scanners paints no scanners panel', async ({ page }) => {
-  const features = FEATURES.filter((name) => name !== 'scanners')
+test('an instance whose features omit admin_scanners explains that page and keeps the rest', async ({
+  page,
+}) => {
+  const features = FEATURES.filter((name) => name !== 'admin_scanners')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
@@ -378,10 +380,11 @@ test('an instance whose features omit scanners paints no scanners panel', async 
   await page.goto('/admin/scanners')
   await hydrated(page)
 
-  // The tab is not drawn, and the address says why rather than showing a panel that can
-  // never fill: the capability list, not the status code, decides what exists.
+  // The scanner page is its own capability, so omitting it leaves the area alone: the tab
+  // is not drawn and the address says why rather than showing a panel that can never fill,
+  // while every page the instance does serve still has its tab.
   await expect(page.getByRole('tab', { name: 'Scanners' })).toHaveCount(0)
-  await expect(page.getByText(/does not serve the scanners panel/)).toBeVisible()
+  await expect(page.getByText(/does not serve the scanners view/)).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Allowed domains' })).toBeVisible()
 })
 
@@ -680,10 +683,10 @@ test('a grant without admin:write can read quarantined media but not clear it', 
   await expect(page.getByText(/does not include admin:write/)).toBeVisible()
 })
 
-test('an instance whose features omit media_quarantine paints no media panel', async ({
+test('an instance whose features omit moderation_media paints no media page', async ({
   page,
 }) => {
-  const features = FEATURES.filter((name) => name !== 'media_quarantine')
+  const features = FEATURES.filter((name) => name !== 'moderation_media')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
@@ -691,8 +694,10 @@ test('an instance whose features omit media_quarantine paints no media panel', a
   await page.goto('/moderation/media')
   await hydrated(page)
 
+  // The media section is its own capability, so omitting it leaves the queue's other
+  // sections alone: no tab, the address explains the omission, and the rest still draws.
   await expect(page.getByRole('tab', { name: 'Media' })).toHaveCount(0)
-  await expect(page.getByText(/does not quarantine media/)).toBeVisible()
+  await expect(page.getByText(/does not serve the quarantined-media view/)).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Appeals' })).toBeVisible()
 })
 

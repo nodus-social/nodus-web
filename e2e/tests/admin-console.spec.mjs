@@ -952,8 +952,8 @@ test('the instance rules are added, edited, moved and deleted, in the order they
   await expect(page.getByText('Credit the artist.')).toHaveCount(0)
 })
 
-test('an instance whose features omit instance_rules serves no rules panel', async ({ page }) => {
-  const features = FEATURES.filter((name) => name !== 'instance_rules')
+test('an instance whose features omit admin_rules serves no instance-rules page', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'admin_rules')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
@@ -962,7 +962,7 @@ test('an instance whose features omit instance_rules serves no rules panel', asy
   await hydrated(page)
 
   await expect(page.getByRole('tab', { name: 'Instance rules' })).toHaveCount(0)
-  await expect(page.getByText(/does not serve the instance rules panel/)).toBeVisible()
+  await expect(page.getByText(/does not serve the instance-rules view/)).toBeVisible()
 })
 
 test('the escalation ladder reads rung by rung, and says its order out loud', async ({ page }) => {
@@ -1043,8 +1043,8 @@ test('a refused ladder is shown the instance sentence verbatim, beside the rung 
   await expect(rungs.nth(0).getByTestId('escalation-strikes')).toHaveValue('4')
 })
 
-test('an instance whose features omit escalation serves no escalation panel', async ({ page }) => {
-  const features = FEATURES.filter((name) => name !== 'escalation')
+test('an instance whose features omit admin_escalation serves no escalation page', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'admin_escalation')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
@@ -1053,7 +1053,7 @@ test('an instance whose features omit escalation serves no escalation panel', as
   await hydrated(page)
 
   await expect(page.getByRole('tab', { name: 'Escalation' })).toHaveCount(0)
-  await expect(page.getByText(/does not serve the escalation panel/)).toBeVisible()
+  await expect(page.getByText(/does not serve the escalation view/)).toBeVisible()
 })
 
 test('an account row says its strikes and what the next one costs', async ({ page }) => {
@@ -1293,8 +1293,8 @@ test('lifting a pause asks a second time, and says what resumes', async ({ page 
   await expect(page.getByTestId('pause-notice')).toContainText('The pause on quiet.example is lifted')
 })
 
-test('an instance without federation_delivery offers no delivery panel', async ({ page }) => {
-  const features = FEATURES.filter((name) => name !== 'federation_delivery')
+test('an instance without admin_federation offers no deliveries page', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'admin_federation')
   await stubApi(page, { features })
   await adminApi(page)
   await signedIn(page)
@@ -1303,7 +1303,7 @@ test('an instance without federation_delivery offers no delivery panel', async (
   await hydrated(page)
 
   await expect(page.getByRole('tab', { name: 'Deliveries' })).toHaveCount(0)
-  await expect(page.getByText(/does not serve the delivery panel/)).toBeVisible()
+  await expect(page.getByText(/does not serve the federation-deliveries view/)).toBeVisible()
 })
 
 test('an exported settings document is counted per section before it is saved', async ({ page }) => {

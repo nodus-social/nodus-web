@@ -142,19 +142,20 @@ pub fn Admin(section: String) -> impl IntoView {
     // not a screen in it, and the operator's rule is to omit the screen, never the room.
     let at = capabilities::serves();
     // Scanners and mail-domain blocks answer only an administrator. That is a role question,
-    // not a capability one, so it sits beside the row rather than inside it.
-    let page_served = move |page: Surface| {
-        let administrator = administrator.get();
-        let served = page.served(&at.get());
-        match page {
-            Surface::AdminScanners | Surface::AdminEmail => served && administrator,
-            _ => served,
-        }
+    // not a capability one, so it sits beside the row rather than inside it: an instance that
+    // serves the page still serves it to a moderator, who reads the panel's own
+    // administrators-only note instead of being told the instance does not serve it at all.
+    let page_served = move |page: Surface| page.served(&at.get());
+    let page_in_role = move |page: Surface| {
+        !matches!(page, Surface::AdminScanners | Surface::AdminEmail) || administrator.get()
     };
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
-            .filter(|section| Surface::admin_page(section.slug()).is_none_or(page_served))
+            .filter(|section| {
+                Surface::admin_page(section.slug())
+                    .is_none_or(|page| page_served(page) && page_in_role(page))
+            })
             .map(|section| section.slug().to_owned())
             .collect::<Vec<String>>()
     });
