@@ -131,6 +131,42 @@ pub struct Island<'a> {
     pub which: &'a str,
     pub statuses: &'a [Status],
     pub cursor: Option<&'a str>,
+    /// What this host serves, once per document, so the first client render gates on the
+    /// same answer the server painted with instead of waiting for a probe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Value>,
+}
+
+/// The capability answer as the island carries it, when this host has one.
+///
+/// The serialized answer keeps `provider` and `contract` beside `features`; only the
+/// `features` array is replaced by the names the host published, in its own order. A
+/// typed set iterates in declaration order, which is not the endpoint's order, and the
+/// client compares this list to the endpoint's answer.
+fn capabilities_island(host: &str) -> Option<serde_json::Value> {
+    let at = crate::capabilities::answer_for(host)?;
+    let mut answer = serde_json::to_value(&at).ok()?;
+    if let Some(names) = crate::capabilities::published_names_for(host) {
+        answer["features"] = serde_json::json!(names);
+    }
+    Some(answer)
+}
+
+/// Adds the capability answer to an island built by `pages` as a plain JSON value.
+///
+/// A page with no answer (anonymous, or a failed read) keeps the island it had: unknown is
+/// not a refusal, and the client still has its probe.
+fn with_capabilities(json: String, host: &str) -> String {
+    let Some(capabilities) = capabilities_island(host) else {
+        return json;
+    };
+    let Ok(mut island) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return json;
+    };
+    if let Some(object) = island.as_object_mut() {
+        object.insert("capabilities".to_owned(), capabilities);
+    }
+    serde_json::to_string(&island).unwrap_or(json)
 }
 
 /// The signed-in reader, as a painted page needs them.
@@ -454,6 +490,7 @@ pub fn feed_with_style(
         which,
         statuses: &statuses,
         cursor,
+        capabilities: capabilities_island(&reader.host),
     })
     .unwrap_or_else(|_| format!("{{\"which\":\"{which}\",\"statuses\":[],\"cursor\":null}}"));
     let body = Owner::new().with(|| {
@@ -566,6 +603,9 @@ pub fn page_of_with_style(
     island: Option<String>,
     style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
+    // The island is the document's one copy of the capability answer: the screens gate on
+    // it and the client adopts it, so the first render needs no probe.
+    let island = island.map(|json| with_capabilities(json, &reader.host));
     page_with_style(
         assets,
         &format!("{title} · {}", reader.acct),
@@ -775,6 +815,49 @@ mod tests {
             stylesheet: None,
             stylesheet_css: None,
         }
+    }
+
+    #[test]
+    fn the_island_carries_the_capability_list_under_capabilities() {
+        // The browser gates its surfaces on the same list the server painted with, so the
+        // first render needs no probe. The key is the contract: `capabilities`, holding the
+        // serialized answer with `features` as the published names.
+        let host = "capability-island.test";
+        crate::capabilities::remember_for_test(
+            host,
+            nodus_ui::capabilities::Capabilities::from_parts(
+                "0.1.0",
+                &[
+                    "admin".to_owned(),
+                    "moderation".to_owned(),
+                    "drive".to_owned(),
+                    "feed_accounts".to_owned(),
+                ],
+            ),
+        );
+        let html = home(&test_assets(), &format!("me@{host}"), false, &[], None);
+        let (_, after_open) = html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("island script present");
+        let (island_json, _) = after_open.split_once("</script>").expect("closing script");
+        let island: serde_json::Value =
+            serde_json::from_str(island_json).expect("island is valid JSON");
+        let carried = island["capabilities"]["features"]
+            .as_array()
+            .expect("the island names the capabilities under `capabilities.features`");
+        let names: Vec<&str> = carried.iter().filter_map(|name| name.as_str()).collect();
+        for name in ["admin", "moderation", "drive", "feed_accounts"] {
+            assert!(
+                names.contains(&name),
+                "island is missing {name}: {island_json}"
+            );
+        }
+        // The client parses this exact value into its typed answer; if that stops working
+        // the island is decorative and the browser falls back to a probe.
+        let adopted: nodus_ui::capabilities::Capabilities =
+            serde_json::from_value(island["capabilities"].clone())
+                .expect("the client can adopt the island's answer");
+        assert!(adopted.supports(nodus_ui::capabilities::Feature::Admin));
     }
 
     #[test]

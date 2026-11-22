@@ -598,7 +598,11 @@ fn build_live(instance: &Instance, token: &str) -> Result<Live, String> {
     wasm_bindgen_futures::spawn_local({
         let sdk = Rc::clone(&sdk);
         async move {
-            sdk.load_capabilities().await;
+            // A painted page carries the answer in its island; only a document without
+            // one (a static deploy, a client-side route) has to ask.
+            if crate::state::bridge::capabilities::seeded().is_none() {
+                sdk.load_capabilities().await;
+            }
             probe_extensions().await;
         }
     });

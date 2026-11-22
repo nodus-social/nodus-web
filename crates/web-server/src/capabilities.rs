@@ -45,6 +45,10 @@ const META_TIMEOUT: Duration = Duration::from_secs(4);
 struct Cached {
     /// `None` records a failed read. The timestamp is when that answer was checked.
     at: Option<Capabilities>,
+    /// The names the host published, in the order it published them. `None` when this
+    /// answer came from a baseline or a test seed: a typed set cannot spell the order a
+    /// document used, and the browser compares its list to the endpoint's.
+    names: Option<Vec<String>>,
     checked: Instant,
 }
 
@@ -76,14 +80,17 @@ pub(crate) async fn resolve(session: &Session) -> Option<Capabilities> {
     if let Some(cached) = cached(&host) {
         return cached;
     }
-    let at = match session.protocol {
-        Protocol::Mastodon => Some(Capabilities::mastodon()),
-        Protocol::Misskey => Some(Capabilities::misskey()),
-        Protocol::Nodus => read_meta(session).await,
+    let (at, names) = match session.protocol {
+        Protocol::Mastodon => (Some(Capabilities::mastodon()), None),
+        Protocol::Misskey => (Some(Capabilities::misskey()), None),
+        Protocol::Nodus => match read_meta(session).await {
+            Some((at, names)) => (Some(at), Some(names)),
+            None => (None, None),
+        },
     };
     if let Some(at) = at.as_ref() {
-        remember(&host, at.clone());
-        remember_account(&session.acct, at.clone());
+        remember(&host, at.clone(), names.clone());
+        remember_account(&session.acct, at.clone(), names);
     }
     at
 }
@@ -96,6 +103,25 @@ pub(crate) fn answer_for(host: &str) -> Option<Capabilities> {
     cached(&key(host)).flatten()
 }
 
+/// The names this host published, in its own order.
+///
+/// The document's island carries this beside the typed answer so the browser's first
+/// render gates on the endpoint's list, name for name. [`Capabilities`] is a set, and
+/// iterating it would answer in declaration order instead.
+pub(crate) fn published_names_for(host: &str) -> Option<Vec<String>> {
+    let at = answer_for(host)?;
+    let names = answers()
+        .by_host
+        .get(&key(host))
+        .and_then(|cached| cached.names.clone());
+    Some(names.unwrap_or_else(|| {
+        at.features
+            .iter()
+            .map(|feature| feature.as_str().to_owned())
+            .collect()
+    }))
+}
+
 fn cached(host: &str) -> Option<Option<Capabilities>> {
     let mut answers = answers();
     let cached = answers.by_host.get(host)?;
@@ -106,11 +132,12 @@ fn cached(host: &str) -> Option<Option<Capabilities>> {
     None
 }
 
-fn remember(host: &str, at: Capabilities) {
+fn remember(host: &str, at: Capabilities, names: Option<Vec<String>>) {
     answers().by_host.insert(
         host.to_owned(),
         Cached {
             at: Some(at),
+            names,
             checked: Instant::now(),
         },
     );
@@ -122,11 +149,11 @@ fn remember(host: &str, at: Capabilities) {
 /// pages, so its host is the handle's instance rather than the session's normalized host.
 /// For a local account those are the same; for a remote one they are not, and both spellings
 /// should find the answer the session already has.
-fn remember_account(acct: &str, at: Capabilities) {
+fn remember_account(acct: &str, at: Capabilities, names: Option<Vec<String>>) {
     if let Some((_, host)) = acct.rsplit_once('@') {
         let host = key(host);
         if !host.is_empty() {
-            remember(&host, at);
+            remember(&host, at, names);
         }
     }
 }
@@ -144,12 +171,13 @@ fn failed(host: &str, reason: &str) {
         host.to_owned(),
         Cached {
             at: None,
+            names: None,
             checked: Instant::now(),
         },
     );
 }
 
-async fn read_meta(session: &Session) -> Option<Capabilities> {
+async fn read_meta(session: &Session) -> Option<(Capabilities, Vec<String>)> {
     let host = key(&session.host);
     let client = match crate::mastodon::Client::new(&session.host, "") {
         Ok(client) => client,
@@ -188,8 +216,19 @@ async fn read_meta(session: &Session) -> Option<Capabilities> {
             return None;
         }
     };
+    let names = document
+        .get("features")
+        .and_then(serde_json::Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
     match Capabilities::from_meta(&document) {
-        Ok(at) => Some(at),
+        Ok(at) => Some((at, names)),
         Err(error) => {
             failed(&host, &error.to_string());
             None
@@ -199,7 +238,7 @@ async fn read_meta(session: &Session) -> Option<Capabilities> {
 
 #[cfg(test)]
 pub(crate) fn remember_for_test(host: &str, at: Capabilities) {
-    remember(&key(host), at);
+    remember(&key(host), at, None);
 }
 
 #[cfg(test)]
