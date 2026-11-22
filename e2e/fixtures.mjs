@@ -108,21 +108,63 @@ export const FEATURES = [
   'topology',
   'protocol',
   'remote_blocks',
-  'block_lists',
-  'remote_accounts',
   'polls',
-  'media_quarantine',
-  'moderation_rules',
-  'instance_rules',
-  'escalation',
-  'warnings',
+  'batch',
   'appeals',
-  'account_deletion',
+  'instance_rules',
+  'moderation_rules',
+  'media_quarantine',
+  'block_lists',
+  'moderation_stats',
+  'remote_accounts',
+  'warnings',
+  'escalation',
   'federation_delivery',
   'domain_pauses',
-  'report_forwarding',
   'settings_transfer',
+  'report_forwarding',
+  'account_deletion',
+  'drive',
+  'drive_share',
+  'drive_attach',
+  'favourites',
+  'bookmarks',
+  'conversations',
+  'lists',
+  'filters',
+  'scheduled_statuses',
+  'notifications',
+  'announcements',
+  'search',
+  'directory',
+  'markers',
+  'preferences',
+  'streaming',
+  'tags',
 ]
+
+/**
+ * The staff fields the instance puts on the caller's own credentials document.
+ *
+ * The gate reads the role from `verify_credentials`, not from a report the browser happened
+ * to read, so this is the one answer that decides which arm it paints. A Nodus instance
+ * sends both spellings — `role` for Mastodon compatibility, `staff_role` as its own — and it
+ * is the latter that says the panels still want a separate grant; a plain account gets
+ * neither field. `none` is that plain account, which no grant can turn into staff.
+ */
+export function staffDocument(role) {
+  if (role === 'none') return { role: null, staff_role: null }
+  return {
+    role: {
+      id: role === 'admin' ? '1' : '2',
+      name: role === 'admin' ? 'Admin' : 'Moderator',
+      color: '',
+      permissions: '1',
+      highlighted: true,
+    },
+    staff_role: role,
+  }
+}
 
 /** The scopes a role carries, as the two role answers send them. */
 export function scopesOf(role) {
@@ -184,7 +226,15 @@ export function emptyFeed() {
 
 export async function stubApi(
   page,
-  { statuses = [status()], status: single, notifications = [], features = FEATURES, role = 'admin' } = {},
+  {
+    statuses = [status()],
+    status: single,
+    notifications = [],
+    features = FEATURES,
+    // The staff role the caller's own credentials document names: `admin`, `moderator`, or
+    // `none` for a plain account. It is what the staff gate reads to pick its arm.
+    role = 'admin',
+  } = {},
 ) {
   // A request that leaves the stub reaches the fixture hostname's real DNS, and the miss
   // arrives as `transport error: … Failed to fetch` instead of naming the route nobody
@@ -220,12 +270,16 @@ export async function stubApi(
   await page.route('**/api/v1/meta', (route) =>
     route.fulfill({ headers: CORS, json: { api: '1', contract: '0.1.0', min_contract: '0.1.0', features } }),
   )
+  // The caller's own document, staff fields included: it is what the gate reads to choose
+  // between the grant prompt, the not-staff card and a working door. `account` stays the
+  // plain account every other read returns, because a role belongs only on this answer.
   await page.route('**/api/v1/accounts/verify_credentials', (route) =>
-    route.fulfill({ headers: CORS, json: account }),
+    route.fulfill({ headers: CORS, json: { ...account, ...staffDocument(role) } }),
   )
-  // The account page, and anything that resolves an id from a mention. Registered after
-  // `verify_credentials` so that newer, literal route keeps its own answer.
-  await page.route(/\/api\/v1\/accounts\/[^/]+$/, (route) =>
+  // The account page, and anything that resolves an id from a mention. The own document is
+  // excluded because it is a route of the same shape and answers about the caller, staff
+  // role included; a bare `[^/]+` here would shadow it for every account read.
+  await page.route(/\/api\/v1\/accounts\/(?!verify_credentials$)[^/]+$/, (route) =>
     route.fulfill({ headers: CORS, json: account }),
   )
   await page.route('**/api/v2/instance', (route) =>
@@ -299,11 +353,6 @@ export async function stubApi(
   await page.route('**/api/v1/sync/token**', (route) => route.fulfill({ status: 204, headers: CORS }))
   await page.route('**/api/v1/blocks**', (route) => route.fulfill({ headers: CORS, json: [] }))
   await page.route('**/api/v1/mutes**', (route) => route.fulfill({ headers: CORS, json: [] }))
-  // Who this account is to the instance. The console asks this before it offers a grant,
-  // so a signed-in account with no staff role is told so rather than handed a button.
-  await page.route('**/api/v1/nodus/account/role', (route) =>
-    route.fulfill({ headers: CORS, json: { role, scopes: scopesOf(role) } }),
-  )
   // Registered last: Playwright consults handlers newest-first, so this sees the preflight
   // before any method-specific handler and defers everything else to them (and finally to
   // the catch-all registered first, which answers).
