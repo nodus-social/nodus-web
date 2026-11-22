@@ -234,9 +234,7 @@ async fn document(http: &reqwest::Client, url: &str) -> Option<serde_json::Value
     response.json().await.ok()
 }
 
-/// The host a base URL names, for a Misskey account that did not report its own.
-///
-/// The port is kept when there is one: an instance on `:3000` names its accounts
+/// The host a base URL names. The port is kept: an instance on `:3000` names its accounts
 /// `user@host:3000`, and dropping it would print a handle that does not resolve.
 fn host_of(base: &str) -> Option<String> {
     let url = url::Url::parse(base).ok()?;
@@ -247,8 +245,6 @@ fn host_of(base: &str) -> Option<String> {
     })
 }
 
-// The tests live beside the crate rather than inside it: they stand up stub instances, and
-// that is more lines than the module they prove.
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;

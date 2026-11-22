@@ -45,12 +45,23 @@ impl StaticRuntime {
         })
     }
 
-    /// A runtime that can paint exactly this page.
+    /// A runtime that can paint this page *as this reader*: the screens ask the runtime
+    /// who is signed in, and the browser answers from its store. One page painted twice
+    /// must not answer that question differently, so the server answers from the session.
     #[must_use]
-    pub fn page(statuses: Vec<Status>, cursor: Option<String>) -> Arc<dyn Runtime> {
+    pub fn page_for(
+        reader: &crate::document::Reader,
+        statuses: Vec<Status>,
+        cursor: Option<String>,
+    ) -> Arc<dyn Runtime> {
         Arc::new(Self {
             statuses,
             cursor,
+            session: Some(SessionView {
+                host: reader.host.clone(),
+                account_id: reader.account_id.clone(),
+                acct: reader.acct.clone(),
+            }),
             ..Self::default()
         })
     }

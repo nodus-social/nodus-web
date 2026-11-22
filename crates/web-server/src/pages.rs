@@ -69,7 +69,7 @@ fn render_route(
     });
     document::page_of_with_style(
         assets,
-        acct,
+        &document::Reader::of_handle(acct),
         staff,
         path,
         title,
@@ -128,7 +128,7 @@ pub(crate) fn render_thread_with_style(
     });
     document::page_of_with_style(
         assets,
-        acct,
+        &document::Reader::of_handle(acct),
         staff,
         &path,
         "Thread",
@@ -216,7 +216,7 @@ pub(crate) async fn read_page_with_style(
                 });
                 document::page_of_with_style(
                     assets,
-                    acct,
+                    &document::Reader::of_handle(acct),
                     staff,
                     path,
                     screen.title,
@@ -348,7 +348,7 @@ pub fn render_account_with_style(
     });
     document::page_of_with_style(
         assets,
-        acct,
+        &document::Reader::of_handle(acct),
         staff,
         &path,
         &title,
@@ -632,7 +632,7 @@ pub(crate) async fn read_search(
     .to_string();
     Some(document::page_of_with_style(
         assets,
-        acct,
+        &document::Reader::of_handle(acct),
         staff,
         path,
         "Search",
@@ -773,7 +773,7 @@ pub fn render_unclaimed_with_style(
     });
     document::page_of_with_style(
         assets,
-        acct,
+        &document::Reader::of_handle(acct),
         staff,
         path,
         title.as_str(),

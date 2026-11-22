@@ -133,6 +133,73 @@ pub struct Island<'a> {
     pub cursor: Option<&'a str>,
 }
 
+/// The signed-in reader, as a painted page needs them.
+///
+/// The server holds no SDK account for the reader: what it has is the session it proved at
+/// sign-in, with the display name and avatar read in that same request. This is that,
+/// shaped for the rail card the browser builds from its own account — plain data, so the
+/// shared rail component draws both paints.
+#[derive(Debug, Clone, Default)]
+pub struct Reader {
+    pub host: String,
+    pub account_id: String,
+    pub acct: String,
+    pub display_name: String,
+    pub avatar: String,
+}
+
+impl Reader {
+    /// A reader known only by handle, for screens whose address names the account.
+    #[must_use]
+    pub fn of_handle(acct: &str) -> Self {
+        let host = acct.rsplit_once('@').map_or("", |(_, host)| host);
+        Self {
+            host: host.to_owned(),
+            account_id: String::new(),
+            acct: acct.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    /// The rail's picture of this reader, with the browser's own rules: a blank display
+    /// name prints the handle, and the card links to the permanent address another
+    /// instance can resolve (`handles::profile_path_for`), not to this host's numbering.
+    #[must_use]
+    pub fn card(&self) -> nodus_ui::components::rail::ProfileCardData {
+        use nodus_web::shared::handles::{host_of_acct, name_of_acct, profile_path_for};
+
+        // A session's `acct` is already fully qualified (`name@host`); the browser's account
+        // reports a bare local name. Splitting it here keeps the painted handle identical to
+        // the one the client draws instead of doubling the host.
+        let host = host_of_acct(&self.acct).unwrap_or(&self.host);
+        let name = name_of_acct(&self.acct);
+        nodus_ui::components::rail::ProfileCardData {
+            display_name: if self.display_name.trim().is_empty() {
+                self.acct.clone()
+            } else {
+                self.display_name.clone()
+            },
+            handle: format!("@{name}@{host}"),
+            avatar_url: self.avatar.clone(),
+            // The rail outlives a session switch, so it names the account the way another
+            // instance understands it — the browser's own rule.
+            href: profile_path_for(&self.acct, Some(&self.host)),
+        }
+    }
+}
+
+impl From<&crate::session::Session> for Reader {
+    fn from(session: &crate::session::Session) -> Self {
+        Self {
+            host: session.host.clone(),
+            account_id: session.account_id.clone(),
+            acct: session.acct.clone(),
+            display_name: session.display_name.clone(),
+            avatar: session.avatar.clone(),
+        }
+    }
+}
+
 /// The two doors a moderator has, drawn from the same list the client draws.
 fn staff_doors(path: &str) -> leptos::prelude::AnyView {
     imperative::rail_rows(path)
@@ -169,12 +236,17 @@ mod imperative {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the frame is drawn from session facts, route, style and reader"
+)]
 fn chrome_with_style(
     signed_in: bool,
     staff: bool,
     path: &str,
     inner: &str,
     style: Option<&nodus_ui::session_style::SessionStyle>,
+    reader: Option<&Reader>,
 ) -> String {
     use leptos::prelude::{IntoAny, Owner, Signal};
 
@@ -197,9 +269,9 @@ fn chrome_with_style(
             }),
             on_home: None,
             style: style_prop,
-            // The browser fills the rail card in from the session it holds; a server render
-            // has the cookie but not the account it names.
-            profile: None,
+            // The same card the browser draws, from the session's own account rather than
+            // from a store the server does not have.
+            profile: reader.map(|reader| Signal::stored(Some(reader.card()))),
             // The editor belongs to the browser: a server render has no draft to arrange and
             // no way to save it, so the painted page carries no handles.
             editor: None,
@@ -223,7 +295,7 @@ fn chrome_with_style(
 }
 
 fn chrome(signed_in: bool, staff: bool, path: &str, inner: &str) -> String {
-    chrome_with_style(signed_in, staff, path, inner, None)
+    chrome_with_style(signed_in, staff, path, inner, None, None)
 }
 
 /// The composer and the timeline tabs, drawn by the crate the client draws with.
@@ -254,20 +326,27 @@ pub fn home(
     statuses: &[Status],
     cursor: Option<&str>,
 ) -> String {
-    home_with_style(assets, acct, staff, statuses, cursor, None)
+    home_with_style(
+        assets,
+        &Reader::of_handle(acct),
+        staff,
+        statuses,
+        cursor,
+        None,
+    )
 }
 
 /// The signed-in home page, painted with the active account's `SessionStyle`.
 pub fn home_with_style(
     assets: &Assets,
-    acct: &str,
+    reader: &Reader,
     staff: bool,
     statuses: &[Status],
     cursor: Option<&str>,
     style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
     feed_with_style(
-        assets, acct, staff, "home", "Home", "/home", statuses, cursor, style,
+        assets, reader, staff, "home", "Home", "/home", statuses, cursor, style,
     )
 }
 
@@ -291,7 +370,15 @@ pub fn feed(
     cursor: Option<&str>,
 ) -> String {
     feed_with_style(
-        assets, acct, staff, which, title, path, statuses, cursor, None,
+        assets,
+        &Reader::of_handle(acct),
+        staff,
+        which,
+        title,
+        path,
+        statuses,
+        cursor,
+        None,
     )
 }
 
@@ -302,7 +389,7 @@ pub fn feed(
 )]
 pub fn feed_with_style(
     assets: &Assets,
-    acct: &str,
+    reader: &Reader,
     staff: bool,
     which: &str,
     title: &str,
@@ -342,7 +429,11 @@ pub fn feed_with_style(
             std::sync::Arc::new(move || leptos::html::div().inner_html(heading.clone()).into_any())
         };
         nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
-            runtime: crate::runtime::StaticRuntime::page(statuses, cursor.map(str::to_owned)),
+            runtime: crate::runtime::StaticRuntime::page_for(
+                reader,
+                statuses,
+                cursor.map(str::to_owned),
+            ),
             route,
             card,
             header: Some(header),
@@ -352,8 +443,8 @@ pub fn feed_with_style(
     });
     page_with_style(
         assets,
-        &format!("{title} · {acct}"),
-        &chrome_with_style(true, staff, path, &body, style),
+        &format!("{title} · {}", reader.acct),
+        &chrome_with_style(true, staff, path, &body, style, Some(reader)),
         Some(&island),
         style,
         false,
@@ -404,7 +495,16 @@ pub fn page_of(
     inner: &str,
     island: Option<String>,
 ) -> String {
-    page_of_with_style(assets, acct, staff, path, title, inner, island, None)
+    page_of_with_style(
+        assets,
+        &Reader::of_handle(acct),
+        staff,
+        path,
+        title,
+        inner,
+        island,
+        None,
+    )
 }
 
 /// Paints a page component tree alongside the active account's `SessionStyle`.
@@ -414,7 +514,7 @@ pub fn page_of(
 )]
 pub fn page_of_with_style(
     assets: &Assets,
-    acct: &str,
+    reader: &Reader,
     staff: bool,
     path: &str,
     title: &str,
@@ -424,8 +524,8 @@ pub fn page_of_with_style(
 ) -> String {
     page_with_style(
         assets,
-        &format!("{title} · {acct}"),
-        &chrome_with_style(true, staff, path, inner, style),
+        &format!("{title} · {}", reader.acct),
+        &chrome_with_style(true, staff, path, inner, style, Some(reader)),
         island.as_deref(),
         style,
         false,
@@ -470,19 +570,25 @@ pub fn landing(assets: &Assets) -> String {
 /// Painting the chrome is still worth it — the reader sees the application, not a blank
 /// document, while two megabytes of wasm arrive.
 pub fn shell(assets: &Assets, acct: Option<&str>, staff: bool, path: &str) -> String {
-    shell_with_style(assets, acct, staff, path, None)
+    shell_with_style(
+        assets,
+        acct.map(Reader::of_handle).as_ref(),
+        staff,
+        path,
+        None,
+    )
 }
 
 pub fn shell_with_style(
     assets: &Assets,
-    acct: Option<&str>,
+    reader: Option<&Reader>,
     staff: bool,
     path: &str,
     style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
     use leptos::prelude::*;
 
-    if acct.is_none() {
+    let Some(reader) = reader else {
         // The client's gate, painted: a signed-out reader gets the form the client mounts,
         // with every verb absent until wasm arrives.
         let inner = Owner::new().with(|| {
@@ -509,18 +615,19 @@ pub fn shell_with_style(
             None,
             false,
         );
-    }
+    };
 
-    crate::pages::render_unclaimed_with_style(assets, acct.unwrap_or_default(), staff, path, style)
+    crate::pages::render_unclaimed_with_style(assets, &reader.acct, staff, path, style)
 }
 
 #[cfg(test)]
 pub fn error(assets: &Assets, staff: bool, message: &str) -> String {
-    error_with_style(assets, staff, message, None)
+    error_with_style(assets, None, staff, message, None)
 }
 
 pub fn error_with_style(
     assets: &Assets,
+    reader: Option<&Reader>,
     staff: bool,
     message: &str,
     style: Option<&nodus_ui::session_style::SessionStyle>,
@@ -534,7 +641,7 @@ pub fn error_with_style(
     page_with_style(
         assets,
         "Timeline unavailable",
-        &chrome_with_style(true, staff, "/home", &inner, style),
+        &chrome_with_style(true, staff, "/home", &inner, style, reader),
         None,
         style,
         false,
@@ -704,6 +811,111 @@ mod tests {
             html.contains("href=\"https://example.com/:wave:\""),
             "{html}"
         );
+    }
+
+    fn status_by(acct: &str, display_name: &str, content: &str) -> Status {
+        Status {
+            id: "1".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: content.to_owned(),
+            visibility: Visibility::Public,
+            account: Account {
+                id: "9".to_owned(),
+                acct: acct.to_owned(),
+                display_name: display_name.to_owned(),
+                note: String::new(),
+                avatar: "https://cdn.test/ada.png".to_owned(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 0,
+                following_count: 0,
+                statuses_count: 0,
+                last_status_at: None,
+                fields: Vec::new(),
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+            },
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: Vec::new(),
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        }
+    }
+
+    #[test]
+    fn signed_in_home_paints_the_readers_timeline_and_card() {
+        // One paint, the reader's own: the status the server read through the session's
+        // server is in the body, and the chrome is drawn from the same session rather than
+        // left blank until wasm fills it.
+        let reader = Reader {
+            host: "misskey.test".to_owned(),
+            account_id: "9".to_owned(),
+            acct: "ada@misskey.test".to_owned(),
+            display_name: "Ada".to_owned(),
+            avatar: "https://cdn.test/ada.png".to_owned(),
+        };
+        let statuses = [status_by(
+            "ada@misskey.test",
+            "Ada",
+            "<p>first from my own server</p>",
+        )];
+        let html = home_with_style(&test_assets(), &reader, false, &statuses, None, None);
+
+        assert!(html.contains("first from my own server"), "{html}");
+
+        // Everything before `<main` is chrome: the rail card must already be there, drawn
+        // from the session, rather than left empty for wasm to fill in.
+        let (rail, _) = html.split_once("<main").expect("main");
+        assert!(
+            rail.contains("Ada"),
+            "display name missing from rail: {rail}"
+        );
+        assert!(
+            rail.contains("@ada@misskey.test"),
+            "session handle missing from rail: {rail}"
+        );
+        assert!(
+            rail.contains("https://cdn.test/ada.png"),
+            "the session's avatar is not in the rail: {rail}"
+        );
+        assert!(
+            html.contains("/accounts/misskey.test/ada"),
+            "the rail card must link to the account: {html}"
+        );
+        assert!(
+            html.contains("@ada@misskey.test"),
+            "the rail handle is printed once, qualified: {html}"
+        );
+        assert!(
+            !html.contains("@ada@misskey.test@"),
+            "the painted handle doubles the host: {html}"
+        );
+        assert!(
+            html.contains("https://cdn.test/ada.png"),
+            "the session's avatar is not painted: {html}"
+        );
+        // The island carries the reader, so a screen that asks the runtime who is signed
+        // in gets the same answer the browser's store would give.
+        assert!(html.contains("\"acct\":\"ada@misskey.test\""), "{html}");
     }
 
     fn has_staff_links(html: &str) -> bool {

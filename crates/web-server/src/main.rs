@@ -78,11 +78,14 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
     };
     let staff = resolve_staff(&app, &session).await;
     let style = resolve_style(&app, &session).await;
+    // The reader the chrome draws: the session's own account, which sign-in already read.
+    let reader = document::Reader::from(&session);
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
         Err(message) => {
             return Html(document::error_with_style(
                 &app.bundle(),
+                Some(&reader),
                 staff,
                 &message,
                 Some(&style),
@@ -98,7 +101,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
     match client.feed(local, PAGE).await {
         Ok((statuses, cursor)) => Html(document::feed_with_style(
             &app.bundle(),
-            &session.acct,
+            &reader,
             staff,
             which,
             title,
@@ -110,6 +113,7 @@ async fn public_feed(State(app): State<Arc<App>>, headers: HeaderMap, local: boo
         .into_response(),
         Err(message) => Html(document::error_with_style(
             &app.bundle(),
+            Some(&reader),
             staff,
             &message,
             Some(&style),
@@ -773,7 +777,7 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
         Some(html) => Html(html).into_response(),
         None => Html(document::shell_with_style(
             &assets,
-            Some(&session.acct),
+            Some(&document::Reader::from(&session)),
             staff,
             path,
             Some(&style),
@@ -792,11 +796,27 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     };
     let staff = resolve_staff(&app, &session).await;
     let style = resolve_style(&app, &session).await;
+    let reader = document::Reader::from(&session);
+    // This process reads through Mastodon's client API. A Misskey session was proven against
+    // `/api/*`, which has no `timeline/home`: painting an error as content would hide that,
+    // and refusing the page would lock the reader out of their own home, so the chrome is
+    // painted from the session and the client fills the timeline from the same server.
+    if !session.protocol.reads_mastodon_api() {
+        return Html(document::shell_with_style(
+            &app.bundle(),
+            Some(&reader),
+            staff,
+            "/home",
+            Some(&style),
+        ))
+        .into_response();
+    }
     let client = match Client::new(&session.host, &session.token) {
         Ok(client) => client,
         Err(message) => {
             return Html(document::error_with_style(
                 &app.bundle(),
+                Some(&reader),
                 staff,
                 &message,
                 Some(&style),
@@ -804,10 +824,22 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
             .into_response();
         }
     };
-    match client.home(PAGE).await {
+    paint_home(&app, &reader, staff, style, client.home(PAGE).await)
+}
+
+/// The paint half of [`home`], split out so a test can prove it paints what the read
+/// returned without a network instance to read from.
+fn paint_home(
+    app: &App,
+    reader: &document::Reader,
+    staff: bool,
+    style: nodus_ui::session_style::SessionStyle,
+    read: Result<(Vec<nodus_client_core::model::Status>, Option<String>), String>,
+) -> Response {
+    match read {
         Ok((statuses, cursor)) => Html(document::home_with_style(
             &app.bundle(),
-            &session.acct,
+            reader,
             staff,
             &statuses,
             cursor.as_deref(),
@@ -816,6 +848,7 @@ async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         .into_response(),
         Err(message) => Html(document::error_with_style(
             &app.bundle(),
+            Some(reader),
             staff,
             &message,
             Some(&style),
@@ -876,6 +909,79 @@ mod tests {
             format!("{COOKIE}={session_id}").parse().unwrap(),
         );
         headers
+    }
+
+    /// A status as `verify_credentials`' sibling read would hand it to the paint.
+    fn status_with(content: &str) -> nodus_client_core::model::Status {
+        use nodus_client_core::model::{Account, Status, Visibility};
+
+        Status {
+            id: "1".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: content.to_owned(),
+            visibility: Visibility::Public,
+            account: Account {
+                id: "2".to_owned(),
+                acct: "user@example.com".to_owned(),
+                display_name: "User".to_owned(),
+                note: String::new(),
+                avatar: String::new(),
+                header: String::new(),
+                bot: false,
+                locked: false,
+                followers_count: 0,
+                following_count: 0,
+                statuses_count: 0,
+                last_status_at: None,
+                fields: Vec::new(),
+                discoverable: None,
+                indexable: None,
+                noindex: None,
+            },
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: Vec::new(),
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_in_home_paints_the_status_the_api_returned() {
+        // The handler's own paint: whatever the read returned for this account is in the
+        // HTML, and the chrome names the session's account rather than waiting for wasm.
+        let (app, _, user_id) = test_app("example.com");
+        let session = app.sessions.get(&user_id).expect("session inserted above");
+        let response = paint_home(
+            &app,
+            &document::Reader::from(&session),
+            false,
+            SessionStyle::default(),
+            Ok((
+                vec![status_with("<p>rows read through the session</p>")],
+                None,
+            )),
+        );
+        let body = body_text(response).await;
+        assert!(body.contains("rows read through the session"), "{body}");
+        assert!(body.contains("@user@example.com"), "{body}");
+        assert!(body.contains("User"), "{body}");
     }
 
     async fn body_text(response: Response) -> String {
