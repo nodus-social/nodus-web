@@ -61,12 +61,18 @@ pub fn admits(at: Option<&Capabilities>, surface: Surface) -> bool {
 ///
 /// A staff door is narrower than an ordinary one: the instance must speak this protocol's
 /// extensions (a staff screen is an extension), it must serve the surface, and the account
-/// must hold a role. The rail draws the heading and the door under it from this one answer,
-/// so a door that is not served cannot leave a heading behind, and this function says nothing
+/// must be eligible — positive evidence of a staff role, which is not the same as already
+/// holding a grant. The rail draws the heading and the door under it from this one answer, so
+/// a door that is not served cannot leave a heading behind, and this function says nothing
 /// about any other door: the three-part gate lives here, not in the card that draws it.
+///
+/// Eligibility rather than a grant, because the door is an advertisement: a staff account
+/// that has not granted yet is exactly who the grant button is for. The page behind the door
+/// asks the stricter question, so an eligible account that opens it reads the gate's own arm
+/// instead of an empty console.
 #[must_use]
-pub const fn staff_door(extensions: bool, served: bool, role: bool) -> bool {
-    extensions && served && role
+pub const fn staff_door(extensions: bool, served: bool, eligible: bool) -> bool {
+    extensions && served && eligible
 }
 
 /// What the paints hand the shared screens: one value, or nothing known yet.
@@ -121,6 +127,17 @@ pub fn UnsupportedSurface(surface: Surface) -> impl IntoView {
             </crate::Note>
         </crate::Screen>
     }
+}
+
+/// A page inside an area this instance does serve, which it does not serve itself.
+///
+/// The area's door stays — the operator's rule is to omit the screen, not the room — and the
+/// address the reader followed still has to say what happened, in the same shape
+/// [`UnsupportedSurface`] gives a whole area. One function for both staff areas, so an
+/// administrator and a moderator read the same sentence about the same missing page.
+#[component]
+pub fn UnservedPage(surface: Surface) -> impl IntoView {
+    view! { <crate::Note class="text-sm opacity-70">{surface.absent()}</crate::Note> }
 }
 
 #[cfg(test)]

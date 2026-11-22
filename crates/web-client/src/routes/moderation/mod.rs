@@ -13,12 +13,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use nodus_pages::pages::moderation::{ModerationPage, Section};
-use nodus_ui::Note;
+use nodus_ui::capabilities::{Surface, UnservedPage};
 use nodus_ui::chrome::StaffStanding;
 
 use crate::router::{self, Route};
 use crate::state::alive::Alive;
-use crate::state::bridge::{admin, feature};
+use crate::state::bridge::{admin, capabilities};
 
 use self::accounts::AccountList;
 use self::appeals::Appeals;
@@ -121,28 +121,26 @@ pub fn Moderation(section: String) -> impl IntoView {
         )
     });
 
-    // Scans are a scanner feature: an instance that does not advertise `scanners` has no
-    // flags to show, so the tab is not drawn and the address says why.
-    let scanners = feature("scanners");
-    // Appeals are their own capability: an instance may take reports without an appeal
-    // queue, and the tab follows the name.
-    let appeals = feature("appeals");
-    // Quarantined media is a capability of its own: an instance whose sets never touch an
-    // attachment publishes no `media_quarantine`, and there is no queue to open.
-    let quarantine = feature("media_quarantine");
-    // The rules engine is its own capability: an instance that does not advertise
-    // `moderation_rules` holds no patterns to show, and the address says why.
-    let rules = feature("moderation_rules");
+    // Every section is gated on its own published row, the same way the administration
+    // pages are: the area's coarse `moderation` bit says this instrument has a moderation
+    // area at all, and each section's row says whether that area holds this queue. A server
+    // may serve the room and not a queue in it, and the operator's rule is to omit the
+    // queue, never the room.
+    let at = capabilities::serves();
+    // The scan queue is served only to an administrator. That is a role question, not a
+    // capability one, so it sits beside the row rather than inside it.
+    let page_served = move |section: Surface| {
+        let administrator = administrator.get();
+        let served = section.served(&at.get());
+        match section {
+            Surface::ModerationFlags => served && administrator,
+            _ => served,
+        }
+    };
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
-            .filter(|section| match section {
-                Section::Scans => scanners.get() && administrator.get(),
-                Section::Appeals => appeals.get(),
-                Section::Media => quarantine.get(),
-                Section::Rules => rules.get(),
-                _ => true,
-            })
+            .filter(|section| Surface::moderation_section(section.slug()).is_none_or(page_served))
             .map(|section| section.slug().to_owned())
             .collect::<Vec<String>>()
     });
@@ -159,47 +157,30 @@ pub fn Moderation(section: String) -> impl IntoView {
             on_navigate=Callback::new(|slug: String| router::navigate(Route::Moderation(slug)))
         >
             {move || match section.get_value() {
+                Section::Reports if !page_served(Surface::ModerationReports) => unserved(Surface::ModerationReports),
                 Section::Reports => view! { <ReportQueue/> }.into_any(),
-                Section::Appeals if !appeals.get() => view! {
-                    <Note class="text-sm opacity-70">
-                        "This instance does not serve the appeals panel: its /api/v1/meta answer does not name appeals among its features."
-                    </Note>
-                }
-                .into_any(),
+                Section::Appeals if !page_served(Surface::ModerationAppeals) => unserved(Surface::ModerationAppeals),
                 Section::Appeals => view! { <Appeals/> }.into_any(),
-                Section::Scans if !scanners.get() => view! {
-                    <Note class="text-sm opacity-70">
-                        "This instance does not serve the scans panel: its /api/v1/meta answer does not name scanners among its features."
-                    </Note>
-                }
-                .into_any(),
-                Section::Scans if !administrator.get() => view! {
-                    <Note class="text-sm opacity-70">
-                        "The scans panel is served only to an administrator: the instance answers its scanner routes with the admin role, not the moderator's."
-                    </Note>
-                }
-                .into_any(),
+                Section::Scans if !page_served(Surface::ModerationFlags) => unserved(Surface::ModerationFlags),
                 Section::Scans => view! { <Scans/> }.into_any(),
-                Section::Media if !quarantine.get() => view! {
-                    <Note class="text-sm opacity-70">
-                        "This instance does not quarantine media: its /api/v1/meta answer does not name media_quarantine among its features."
-                    </Note>
-                }
-                .into_any(),
+                Section::Media if !page_served(Surface::ModerationMedia) => unserved(Surface::ModerationMedia),
                 Section::Media => view! { <QuarantinedMediaList/> }.into_any(),
+                Section::Accounts if !page_served(Surface::ModerationAccounts) => unserved(Surface::ModerationAccounts),
                 Section::Accounts => view! { <AccountList/> }.into_any(),
+                Section::Registrations if !page_served(Surface::ModerationRegistrations) => unserved(Surface::ModerationRegistrations),
                 Section::Registrations => view! { <Registrations/> }.into_any(),
+                Section::Federation if !page_served(Surface::ModerationFederation) => unserved(Surface::ModerationFederation),
                 Section::Federation => view! { <Federation/> }.into_any(),
-                Section::Rules if !rules.get() => view! {
-                    <Note class="text-sm opacity-70">
-                        "This instance does not serve the rules panel: its /api/v1/meta answer does not name moderation_rules among its features."
-                    </Note>
-                }
-                .into_any(),
+                Section::Rules if !page_served(Surface::ModerationRules) => unserved(Surface::ModerationRules),
                 Section::Rules => view! { <Rules/> }.into_any(),
             }}
         </ModerationPage>
     }
+}
+
+/// A section this instance's area holds open but does not serve itself.
+fn unserved(section: Surface) -> AnyView {
+    view! { <UnservedPage surface=section/> }.into_any()
 }
 
 /// The bridge's verdict, in the gate's words.

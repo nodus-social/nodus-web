@@ -4,8 +4,21 @@
 //! every gate in the crate reads it through [`Surface::served`]. It lives beside the gate
 //! rather than in it so the mapping can grow a surface without the gate changing, and the
 //! prose a reader sees when a door is missing stays next to the row that decides it.
+//!
+//! Two kinds of row live here. The first fifteen are the areas a rail draws a door for. The
+//! rest are the pages inside the two staff areas: an instrument that serves `admin` may still
+//! not serve one of its screens, and the operator's rule is to omit that screen rather than
+//! the whole area. A page row is what lets one door stay while one tab goes.
 
 use super::{Capabilities, Feature};
+
+mod admin;
+mod moderation;
+mod rows;
+
+// The slug tables live in the child modules; the lookups they feed are inherent methods on
+// `Surface` (`admin_page`, `moderation_section`), so a strip in another crate names a page by
+// the address it already has and no second import is needed.
 
 /// One surface a page can draw, named by the capability that decides whether it exists.
 ///
@@ -44,105 +57,82 @@ pub enum Surface {
     Markers,
     /// Direct conversations.
     Conversations,
+    /// `/admin/announcements`.
+    AdminAnnouncements,
+    /// `/admin/audit`.
+    AdminAudit,
+    /// `/admin/domains`.
+    AdminDomains,
+    /// `/admin/email`.
+    AdminEmail,
+    /// `/admin/escalation`.
+    AdminEscalation,
+    /// `/admin/federation`.
+    AdminFederation,
+    /// `/admin/overview`.
+    AdminOverview,
+    /// `/admin/protocol`.
+    AdminProtocol,
+    /// `/admin/replies`.
+    AdminReplies,
+    /// `/admin/rules`.
+    AdminRules,
+    /// `/admin/scanners`.
+    AdminScanners,
+    /// `/admin/settings-transfer`.
+    AdminSettings,
+    /// `/admin/system`.
+    AdminTopology,
+    /// `/moderation/accounts`.
+    ModerationAccounts,
+    /// `/moderation/appeals`.
+    ModerationAppeals,
+    /// `/moderation/federation`.
+    ModerationFederation,
+    /// `/moderation/flags`.
+    ModerationFlags,
+    /// `/moderation/media`.
+    ModerationMedia,
+    /// `/moderation/registrations`.
+    ModerationRegistrations,
+    /// `/moderation/reports`.
+    ModerationReports,
+    /// `/moderation/rules`.
+    ModerationRules,
 }
 
 impl Surface {
     /// The capability this surface is gated on.
     ///
-    /// Total, and deliberately so: the enum names all 42 names a Nodus server publishes, so
-    /// every surface a page can draw has one row on every protocol, and there is no surface
-    /// left for a per-protocol default to guess at. A surface without a row here would be a
-    /// surface drawn blind.
+    /// Total, and deliberately so: every row names one of the published capabilities, so
+    /// every surface a page can draw is decided by a server's answer on every protocol, and
+    /// there is no surface left for a per-protocol default to guess at. A surface without a
+    /// row here would be a surface drawn blind.
     #[must_use]
     pub const fn capability(self) -> Feature {
-        match self {
-            Self::Feed => Feature::FeedAccounts,
-            Self::Admin => Feature::Admin,
-            Self::Moderation => Feature::Moderation,
-            Self::Drive => Feature::Drive,
-            Self::Lists => Feature::Lists,
-            Self::Filters => Feature::Filters,
-            Self::Bookmarks => Feature::Bookmarks,
-            Self::Favourites => Feature::Favourites,
-            Self::Scheduled => Feature::ScheduledStatuses,
-            Self::Notifications => Feature::Notifications,
-            Self::Announcements => Feature::Announcements,
-            Self::Search => Feature::Search,
-            Self::Directory => Feature::Directory,
-            Self::Markers => Feature::Markers,
-            Self::Conversations => Feature::Conversations,
-        }
+        rows::row(self).0
     }
 
     /// The name a server publishes for this surface, matching the backend's `FEATURES`.
     #[must_use]
     pub const fn name(self) -> &'static str {
-        match self {
-            Self::Feed => "feed_accounts",
-            Self::Admin => "admin",
-            Self::Moderation => "moderation",
-            Self::Drive => "drive",
-            Self::Lists => "lists",
-            Self::Filters => "filters",
-            Self::Bookmarks => "bookmarks",
-            Self::Favourites => "favourites",
-            Self::Scheduled => "scheduled_statuses",
-            Self::Notifications => "notifications",
-            Self::Announcements => "announcements",
-            Self::Search => "search",
-            Self::Directory => "directory",
-            Self::Markers => "markers",
-            Self::Conversations => "conversations",
-        }
+        rows::row(self).1
     }
 
     /// What the page calls this surface.
     #[must_use]
     pub const fn title(self) -> &'static str {
-        match self {
-            Self::Feed => "Recommended posts",
-            Self::Admin => "Administration",
-            Self::Moderation => "Moderation",
-            Self::Drive => "Drive",
-            Self::Lists => "Lists",
-            Self::Filters => "Filters",
-            Self::Bookmarks => "Bookmarks",
-            Self::Favourites => "Favourites",
-            Self::Scheduled => "Scheduled posts",
-            Self::Notifications => "Notifications",
-            Self::Announcements => "Announcements",
-            Self::Search => "Search",
-            Self::Directory => "Directory",
-            Self::Markers => "Read positions",
-            Self::Conversations => "Messages",
-        }
+        rows::row(self).2
     }
 
     /// The one sentence a page says instead of the surface, in the reader's terms.
     ///
     /// It names the server, not the reader: nothing here is something the reader did wrong,
-    /// and nothing they can retry.
+    /// and nothing they can retry. It is also the sentence a page *inside* an area says when
+    /// only that page is missing, which is why it names the screen rather than the area.
     #[must_use]
     pub const fn absent(self) -> &'static str {
-        match self {
-            Self::Feed => {
-                "This instance has no recommendation engine, so there is nothing to rank here."
-            }
-            Self::Admin => "This instance does not serve its administration API to this app.",
-            Self::Moderation => "This instance does not serve a moderation API to this app.",
-            Self::Drive => "This instance has no file storage API.",
-            Self::Lists => "This instance does not serve lists.",
-            Self::Filters => "This instance does not serve filters.",
-            Self::Bookmarks => "This instance does not keep bookmarks.",
-            Self::Favourites => "This instance does not keep favourites.",
-            Self::Scheduled => "This instance does not keep scheduled posts.",
-            Self::Notifications => "This instance does not serve a notifications API.",
-            Self::Announcements => "This instance publishes no announcements.",
-            Self::Search => "This instance does not serve a search API.",
-            Self::Directory => "This instance does not suggest accounts.",
-            Self::Markers => "This instance does not keep read positions.",
-            Self::Conversations => "This instance does not serve direct conversations.",
-        }
+        rows::row(self).3
     }
 
     /// Whether `at` says the server serves this surface.
@@ -159,6 +149,9 @@ impl Surface {
     }
 
     /// The surface a navigation entry leads to, when it leads to one.
+    ///
+    /// An area, not a page: the rail draws one door per area, and a door into a section the
+    /// instrument no longer serves would be the strip's problem, not the rail's.
     ///
     /// `None` is a destination every server answers: the reader's home timeline, the
     /// composer, and settings, which is where an account is edited rather than a service.
@@ -199,32 +192,57 @@ impl Surface {
             .split_once("this server does not support ")
             .and_then(|(_, rest)| rest.split_whitespace().next())?;
         Self::all()
-            .into_iter()
+            .iter()
+            .copied()
             .find(|surface| surface.name() == name)
     }
 
     /// Every surface, for the lookups above.
     #[must_use]
-    pub const fn all() -> [Self; 15] {
-        [
-            Self::Feed,
-            Self::Admin,
-            Self::Moderation,
-            Self::Drive,
-            Self::Lists,
-            Self::Filters,
-            Self::Bookmarks,
-            Self::Favourites,
-            Self::Scheduled,
-            Self::Notifications,
-            Self::Announcements,
-            Self::Search,
-            Self::Directory,
-            Self::Markers,
-            Self::Conversations,
-        ]
+    pub const fn all() -> &'static [Self] {
+        ALL
     }
 }
+
+/// Every row, in the order the areas are listed and then the pages they hold.
+const ALL: &[Surface] = &[
+    Surface::Feed,
+    Surface::Admin,
+    Surface::Moderation,
+    Surface::Drive,
+    Surface::Lists,
+    Surface::Filters,
+    Surface::Bookmarks,
+    Surface::Favourites,
+    Surface::Scheduled,
+    Surface::Notifications,
+    Surface::Announcements,
+    Surface::Search,
+    Surface::Directory,
+    Surface::Markers,
+    Surface::Conversations,
+    Surface::AdminAnnouncements,
+    Surface::AdminAudit,
+    Surface::AdminDomains,
+    Surface::AdminEmail,
+    Surface::AdminEscalation,
+    Surface::AdminFederation,
+    Surface::AdminOverview,
+    Surface::AdminProtocol,
+    Surface::AdminReplies,
+    Surface::AdminRules,
+    Surface::AdminScanners,
+    Surface::AdminSettings,
+    Surface::AdminTopology,
+    Surface::ModerationAccounts,
+    Surface::ModerationAppeals,
+    Surface::ModerationFederation,
+    Surface::ModerationFlags,
+    Surface::ModerationMedia,
+    Surface::ModerationRegistrations,
+    Surface::ModerationReports,
+    Surface::ModerationRules,
+];
 
 #[cfg(test)]
 mod tests;

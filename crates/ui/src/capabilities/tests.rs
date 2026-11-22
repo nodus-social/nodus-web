@@ -11,24 +11,14 @@ fn nodus(features: &[&str]) -> Capabilities {
     Capabilities::from_parts("0.1.0", &names)
 }
 
+/// A server that serves everything this crate can name: every row's own spelling, which is
+/// also the check that a row cannot be added with a name `from_parts` refuses.
 fn full_nodus() -> Capabilities {
-    nodus(&[
-        "favourites",
-        "bookmarks",
-        "conversations",
-        "lists",
-        "filters",
-        "scheduled_statuses",
-        "notifications",
-        "announcements",
-        "search",
-        "directory",
-        "markers",
-        "admin",
-        "moderation",
-        "drive",
-        "feed_accounts",
-    ])
+    let names = Surface::all()
+        .iter()
+        .map(|surface| surface.name().to_owned())
+        .collect::<Vec<_>>();
+    Capabilities::from_parts("0.1.0", &names)
 }
 
 /// Every surface against the three answers, as the probes decided them:
@@ -50,17 +40,42 @@ const SURFACES: &[(Surface, bool, bool, bool)] = &[
     (Surface::Directory, true, true, true),
     (Surface::Markers, true, true, false),
     (Surface::Conversations, true, true, false),
+    // The pages inside the two staff areas. Their baselines are the SDK's probed rows: a
+    // Mastodon instance has most of these consoles and no escalation, protocol or topology
+    // one, and a Misskey instance has neither escalation nor appeals.
+    (Surface::AdminAnnouncements, true, true, true),
+    (Surface::AdminAudit, true, true, true),
+    (Surface::AdminDomains, true, true, false),
+    (Surface::AdminEmail, true, true, false),
+    (Surface::AdminEscalation, true, false, false),
+    (Surface::AdminFederation, true, false, true),
+    (Surface::AdminOverview, true, true, true),
+    (Surface::AdminProtocol, true, false, false),
+    (Surface::AdminReplies, true, true, false),
+    (Surface::AdminRules, true, true, true),
+    (Surface::AdminScanners, true, false, false),
+    (Surface::AdminSettings, true, true, true),
+    (Surface::AdminTopology, true, false, false),
+    (Surface::ModerationAccounts, true, true, true),
+    (Surface::ModerationAppeals, true, true, false),
+    (Surface::ModerationFederation, true, true, true),
+    (Surface::ModerationFlags, true, false, false),
+    (Surface::ModerationMedia, true, false, false),
+    (Surface::ModerationRegistrations, true, true, true),
+    (Surface::ModerationReports, true, true, true),
+    (Surface::ModerationRules, true, false, false),
 ];
 
 /// The three answers a gate has to hold for: our own list, and the two baselines the SDK
 /// probed. What the surfaces are worth is the point — a door the server serves is drawn, and
-/// nothing else is, on every one of the fifteen.
+/// nothing else is, on every row — the fifteen areas and the twenty-one pages inside the two
+/// staff ones.
 #[test]
-fn the_three_answers_gate_all_fifteen_surfaces() {
+fn the_three_answers_gate_every_surface() {
     assert_eq!(SURFACES.len(), Surface::all().len());
     for surface in Surface::all() {
         assert!(
-            SURFACES.iter().any(|(row, ..)| *row == surface),
+            SURFACES.iter().any(|(row, ..)| *row == *surface),
             "{surface:?} is missing from the table"
         );
     }
@@ -118,6 +133,27 @@ fn an_absent_name_hides_its_door_and_unknown_hides_nothing() {
     assert!(admits(None, Surface::Drive));
     assert!(admits(Some(&at), Surface::Lists));
     assert!(!admits(Some(&at), Surface::Drive));
+}
+
+/// A page inside an area the instance does serve, which it does not serve itself, draws one
+/// sentence naming that page — not a blank screen, and not the whole area's sentence.
+#[test]
+fn an_unserved_page_inside_a_served_area_names_itself() {
+    use leptos::prelude::*;
+    let props = UnservedPageProps {
+        surface: Surface::AdminTopology,
+    };
+    let html = Owner::new().with(|| UnservedPage(props).to_html());
+    assert!(
+        html.contains("This instance does not serve the topology view."),
+        "{html}"
+    );
+    // The sentence names the screen, not the area: the area is here, and the reader is
+    // standing in it.
+    assert!(
+        !html.contains("does not serve its administration API"),
+        "{html}"
+    );
 }
 
 /// The page a reader lands on for an absent surface says so, and still offers the way out of

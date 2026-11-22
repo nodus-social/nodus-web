@@ -181,20 +181,26 @@ pub fn may_administer() -> Signal<bool> {
     })
 }
 
-/// Whether this account holds any staff role, as a signal the rail's heading can read.
+/// Whether this account has positive evidence it could ever open a staff area.
 ///
-/// The rail asks this and the doors ask the same answer through [`may_write`] and
-/// [`may_administer`]: a heading that read a second, looser fact would be free to outlive
-/// the doors under it. `false` until the probe lands, which keeps the heading off the page
-/// while the question is in flight.
+/// A different question from [`holds_role`], and a looser one: that asks whether a grant is
+/// already in hand, this asks whether the instance named a role for the account at all. It is
+/// the one the rail's door asks, because a door is an advertisement, not a permission — a
+/// staff account that has not granted yet should see the room and the grant button, while an
+/// account whose role read was absent, refused or unsupported must see no door at all
+/// (fail closed: a door drawn on a guess is a room that answers with a refusal).
+///
+/// Only two verdicts are evidence of a role: `Yes`, which carries the role it read, and
+/// `NeedsGrant`, which is a staff role whose grant has not been made yet.
 #[must_use]
-pub fn holds_role() -> Signal<bool> {
+pub fn may_enter() -> Signal<bool> {
     let revision = standing_revision();
     Signal::derive(move || {
         revision.get();
         STANDING.with_borrow(|held| {
-            held.as_ref()
-                .is_some_and(|(_, verdict)| matches!(verdict, Staff::Yes { .. }))
+            held.as_ref().is_some_and(|(_, verdict)| {
+                matches!(verdict, Staff::Yes { .. } | Staff::NeedsGrant)
+            })
         })
     })
 }

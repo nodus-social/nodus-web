@@ -468,13 +468,18 @@ fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
     use nodus_ui::capabilities::{Surface, staff_door};
 
     let extensions = crate::state::bridge::supports_extensions();
-    let role = crate::state::bridge::admin::holds_role();
+    let eligible = crate::state::bridge::admin::may_enter();
     let moderation_served = crate::state::bridge::capabilities::served(Surface::Moderation);
     let administration_served = crate::state::bridge::capabilities::served(Surface::Admin);
-    let moderation =
-        Signal::derive(move || staff_door(extensions.get(), moderation_served.get(), role.get()));
+    let moderation = Signal::derive(move || {
+        staff_door(extensions.get(), moderation_served.get(), eligible.get())
+    });
     let administration = Signal::derive(move || {
-        staff_door(extensions.get(), administration_served.get(), role.get())
+        staff_door(
+            extensions.get(),
+            administration_served.get(),
+            eligible.get(),
+        )
     });
     Some(nodus_ui::ExtraDoors {
         present: Signal::derive(move || moderation.get() || administration.get()),
@@ -526,10 +531,10 @@ fn RailItem(label: &'static str, icon: Icon, hint: &'static str, route: Route) -
 /// The moderation doors, in a build that carries the screens.
 ///
 /// Both the instance and the account have to agree before a door is drawn. The instance
-/// says which surfaces it serves at all (`moderation`, `admin` in the `/api/v1/meta`
-/// features), and `admin::holds_role()` says what this account may do with them: a rail
-/// entry that leads to a refusal is a dead end, and painting one for a probe still in
-/// flight would promise a door nobody has opened.
+/// says which areas it serves at all (`moderation`, `admin` in the `/api/v1/meta` features),
+/// and `admin::may_enter()` says whether this account could ever enter them: a rail entry
+/// that leads to a refusal is a dead end, and painting one for a probe still in flight — or
+/// for an account with no role evidence — would promise a door nobody can open.
 ///
 /// Each door is already decided by `extra_doors`; this only paints the ones it let through,
 /// so the heading and its rows cannot disagree.

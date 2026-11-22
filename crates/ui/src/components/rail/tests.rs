@@ -31,17 +31,19 @@ fn door(label: &'static str, href: &'static str) -> AnyView {
 ///
 /// The heading's answer and the rows are computed through the same `staff_door` calls, as
 /// both paints do: an absent capability must leave neither a door nor the "Staff" heading
-/// that would have named it.
-fn staff_doors(extensions: bool, served: [bool; 2], role: bool) -> ExtraDoors {
+/// that would have named it. The third fact is eligibility — positive evidence of a staff
+/// role — and not a grant, which the pages behind the door ask for themselves.
+fn staff_doors(extensions: bool, served: [bool; 2], eligible: bool) -> ExtraDoors {
     let [moderation, administration] = served;
     ExtraDoors {
         present: Signal::derive(move || {
-            staff_door(extensions, moderation, role) || staff_door(extensions, administration, role)
+            staff_door(extensions, moderation, eligible)
+                || staff_door(extensions, administration, eligible)
         }),
         rows: Arc::new(move || {
-            let moderation =
-                staff_door(extensions, moderation, role).then(|| door("Moderation", "/moderation"));
-            let administration = staff_door(extensions, administration, role)
+            let moderation = staff_door(extensions, moderation, eligible)
+                .then(|| door("Moderation", "/moderation"));
+            let administration = staff_door(extensions, administration, eligible)
                 .then(|| door("Administration", "/admin"));
             view! { {moderation} {administration} }.into_any()
         }),
@@ -87,6 +89,44 @@ fn one_staff_door_keeps_the_heading_with_one_door() {
     assert!(html.contains("Staff"), "{html}");
     assert!(html.contains("Moderation"), "{html}");
     assert!(!html.contains("Administration"), "{html}");
+}
+
+/// The door's truth table, one row per answer the account's role read can give. The rail is
+/// an advertisement, so every arm that is not positive evidence of a staff role draws no
+/// door: a room that answers with a refusal is worse than no door at all.
+///
+/// The grant is deliberately absent from this table. An eligible account that has not granted
+/// yet sees the door — that is who the grant button is for — and the page behind it reads the
+/// grant itself, so the two facts stay separate.
+#[test]
+fn the_door_is_drawn_only_on_positive_role_evidence() {
+    // (what the read answered, extensions, area served, a door is drawn)
+    let table = [
+        ("eligible, no grant yet", true, true, true),
+        ("eligible, grant in hand", true, true, true),
+        ("no role on the account", true, true, false),
+        ("role read refused", true, true, false),
+        ("role read unsupported", true, true, false),
+        ("instance serves no area", true, false, false),
+        ("instance speaks no extensions", false, true, false),
+    ];
+    for (answer, extensions, served, drawn) in table {
+        let html = rendered(staff_doors(
+            extensions,
+            [served, served],
+            // The eligibility signal is `false` for every arm but the first two; this is the
+            // single bit the rail reads, and the arms above name the reads that produce it.
+            matches!(answer, "eligible, no grant yet" | "eligible, grant in hand"),
+        ));
+        assert_eq!(html.contains("Staff"), drawn, "{answer}: {html}");
+        assert_eq!(html.contains("/admin"), drawn, "{answer}: {html}");
+        // And never an empty heading: the heading is painted from the same answer the rows are.
+        assert_eq!(
+            html.contains("Staff"),
+            html.contains("/moderation"),
+            "{answer}"
+        );
+    }
 }
 
 /// A layout whose Library card holds only doors an instance may refuse, so a paint that

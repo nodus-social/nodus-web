@@ -1107,6 +1107,28 @@ mod tests {
     }
 
     #[test]
+    fn an_eligible_instance_draws_no_door_for_an_account_without_a_role() {
+        // The other half of the same rule, on the paint that cannot ask a browser: the
+        // instance serving both areas is one fact, and this account's role is another. The
+        // flag the caller resolved is negative evidence — no staff role on the account —
+        // so the door is not drawn and the heading does not survive it. Fail closed: a door
+        // on a guess is a room that answers with a refusal.
+        let assets = test_assets();
+        let host = "role-absent.test";
+        crate::capabilities::remember_for_test(
+            host,
+            nodus_ui::capabilities::Capabilities::from_parts(
+                "0.1.0",
+                &["admin".to_owned(), "moderation".to_owned()],
+            ),
+        );
+        let html = home(&assets, &format!("reader@{host}"), false, &[], None);
+        assert!(!html.contains("Staff"), "{html}");
+        assert!(!html.contains("data-nav-rail-doors"), "{html}");
+        assert!(!has_staff_links(&html), "{html}");
+    }
+
+    #[test]
     fn staff_links_follow_explicit_flag_only() {
         let assets = test_assets();
 

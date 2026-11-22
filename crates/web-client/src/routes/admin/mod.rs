@@ -20,12 +20,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use nodus_pages::pages::admin::{AdminPage, Section};
-use nodus_ui::Note;
+use nodus_ui::capabilities::{Surface, UnservedPage};
 use nodus_ui::chrome::StaffStanding;
 
 use crate::router::{self, Route};
 use crate::state::alive::Alive;
-use crate::state::bridge::{admin, feature};
+use crate::state::bridge::{admin, capabilities};
 
 use self::announcements::Announcements;
 use self::audit::Audit;
@@ -136,41 +136,25 @@ pub fn Admin(section: String) -> impl IntoView {
         )
     });
 
-    // The instance decides which sections exist: a `features` name it does not publish is a
-    // panel it does not serve, so the tab is not drawn and the section says why if the
-    // address names it anyway. Everything else is this instance's own console.
-    // Escalation has its own name: the ladder is a capability an instance may serve without
-    // the rest of `moderation`, and the section is gated on that name.
-    let escalation = feature("escalation");
-    // Delivery has its own name: an instance that speaks federation without serving the
-    // queue would otherwise offer a panel whose request 404s.
-    let delivery = feature("federation_delivery");
-    let scanners = feature("scanners");
-    let topology = feature("topology");
-    let protocol = feature("protocol");
-    // Warning presets are their own capability; the replies panel is what reads them.
-    let warnings = feature("warnings");
-    // The instance's published rules are their own capability, and are not the moderation
-    // patterns: an instance may serve one without the other.
-    let instance_rules = feature("instance_rules");
-    // Transfer is a Nodus extension: an instance that does not publish the name does not
-    // serve the two endpoints, so the section is neither drawn nor offered.
-    let transfer = feature("settings_transfer");
+    // Every page is gated on its own published row. The area's coarse `admin` bit says this
+    // instrument has an administration area at all; each page's row says which screens that
+    // area actually holds. The two are kept apart because a server may serve the room and
+    // not a screen in it, and the operator's rule is to omit the screen, never the room.
+    let at = capabilities::serves();
+    // Scanners and mail-domain blocks answer only an administrator. That is a role question,
+    // not a capability one, so it sits beside the row rather than inside it.
+    let page_served = move |page: Surface| {
+        let administrator = administrator.get();
+        let served = page.served(&at.get());
+        match page {
+            Surface::AdminScanners | Surface::AdminEmail => served && administrator,
+            _ => served,
+        }
+    };
     let shown = Signal::derive(move || {
         Section::ALL
             .iter()
-            .filter(|section| match section {
-                Section::Scanners => scanners.get() && administrator.get(),
-                Section::Email => administrator.get(),
-                Section::Replies => warnings.get(),
-                Section::Escalation => escalation.get(),
-                Section::Federation => delivery.get(),
-                Section::Topology => topology.get(),
-                Section::Protocol => protocol.get(),
-                Section::SettingsTransfer => transfer.get(),
-                Section::Rules => instance_rules.get(),
-                _ => true,
-            })
+            .filter(|section| Surface::admin_page(section.slug()).is_none_or(page_served))
             .map(|section| section.slug().to_owned())
             .collect::<Vec<String>>()
     });
@@ -186,36 +170,39 @@ pub fn Admin(section: String) -> impl IntoView {
             on_retry=Some(retry)
             on_navigate=Some(Callback::new(|slug: String| router::navigate(Route::Admin(slug))))
         >
-            {move || {
-                match section.get_value() {
-                    Section::Overview => view! { <Overview/> }.into_any(),
-                    Section::Scanners if !scanners.get() => missing("scanners"),
-                    Section::Scanners => {
-                        view! { <Scanners administrator=Some(administrator)/> }.into_any()
-                    }
-                    Section::Domains => view! { <Domains/> }.into_any(),
-                    Section::Email => {
-                        view! { <EmailDomains administrator=Some(administrator)/> }.into_any()
-                    }
-                    Section::Replies if !warnings.get() => missing("warning presets"),
-                    Section::Replies => view! { <Replies/> }.into_any(),
-                    Section::Escalation if !escalation.get() => missing_escalation(),
-                    Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
-                    Section::Federation if !delivery.get() => missing("delivery"),
-                    Section::Federation => view! { <federation::Deliveries/> }.into_any(),
-                    Section::Announcements => {
-                        view! { <Announcements administrator=Some(administrator)/> }.into_any()
-                    }
-                    Section::Rules if !instance_rules.get() => missing("instance rules"),
-                    Section::Rules => view! { <Rules/> }.into_any(),
-                    Section::Audit => view! { <Audit/> }.into_any(),
-                    Section::Topology if !topology.get() => missing("topology"),
-                    Section::Topology => view! { <topology::System/> }.into_any(),
-                    Section::Protocol if !protocol.get() => missing("protocol"),
-                    Section::Protocol => view! { <Protocol/> }.into_any(),
-                    Section::SettingsTransfer if !transfer.get() => missing("settings transfer"),
-                    Section::SettingsTransfer => view! { <SettingsTransfer/> }.into_any(),
+            {move || match section.get_value() {
+                Section::Overview if !page_served(Surface::AdminOverview) => unserved(Surface::AdminOverview),
+                Section::Overview => view! { <Overview/> }.into_any(),
+                Section::Scanners if !page_served(Surface::AdminScanners) => unserved(Surface::AdminScanners),
+                Section::Scanners => {
+                    view! { <Scanners administrator=Some(administrator)/> }.into_any()
                 }
+                Section::Domains if !page_served(Surface::AdminDomains) => unserved(Surface::AdminDomains),
+                Section::Domains => view! { <Domains/> }.into_any(),
+                Section::Email if !page_served(Surface::AdminEmail) => unserved(Surface::AdminEmail),
+                Section::Email => {
+                    view! { <EmailDomains administrator=Some(administrator)/> }.into_any()
+                }
+                Section::Replies if !page_served(Surface::AdminReplies) => unserved(Surface::AdminReplies),
+                Section::Replies => view! { <Replies/> }.into_any(),
+                Section::Escalation if !page_served(Surface::AdminEscalation) => unserved(Surface::AdminEscalation),
+                Section::Escalation => view! { <escalation::Escalation/> }.into_any(),
+                Section::Federation if !page_served(Surface::AdminFederation) => unserved(Surface::AdminFederation),
+                Section::Federation => view! { <federation::Deliveries/> }.into_any(),
+                Section::Announcements if !page_served(Surface::AdminAnnouncements) => unserved(Surface::AdminAnnouncements),
+                Section::Announcements => {
+                    view! { <Announcements administrator=Some(administrator)/> }.into_any()
+                }
+                Section::Rules if !page_served(Surface::AdminRules) => unserved(Surface::AdminRules),
+                Section::Rules => view! { <Rules/> }.into_any(),
+                Section::Audit if !page_served(Surface::AdminAudit) => unserved(Surface::AdminAudit),
+                Section::Audit => view! { <Audit/> }.into_any(),
+                Section::Topology if !page_served(Surface::AdminTopology) => unserved(Surface::AdminTopology),
+                Section::Topology => view! { <topology::System/> }.into_any(),
+                Section::Protocol if !page_served(Surface::AdminProtocol) => unserved(Surface::AdminProtocol),
+                Section::Protocol => view! { <Protocol/> }.into_any(),
+                Section::SettingsTransfer if !page_served(Surface::AdminSettings) => unserved(Surface::AdminSettings),
+                Section::SettingsTransfer => view! { <SettingsTransfer/> }.into_any(),
             }}
         </AdminPage>
     }
@@ -230,27 +217,9 @@ async fn read_document_file(file: web_sys::File) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "That file is not UTF-8 text.".to_owned())
 }
 
-/// A section the instance's `/api/v1/meta` answer does not advertise.
-fn missing(name: &'static str) -> AnyView {
-    view! {
-        <Note class="text-sm opacity-70">
-            {format!(
-                "This instance does not serve the {name} panel: its /api/v1/meta answer does not name it among its features."
-            )}
-        </Note>
-    }
-    .into_any()
-}
-
-/// The escalation panel, on an instance whose `/api/v1/meta` answer does not name
-/// `escalation` — the capability the ladder hangs on.
-fn missing_escalation() -> AnyView {
-    view! {
-        <Note class="text-sm opacity-70">
-            "This instance does not serve the escalation panel: its /api/v1/meta answer does not name `escalation`, which is the capability the policy is written through."
-        </Note>
-    }
-    .into_any()
+/// A page this instance's area holds open but does not serve itself.
+fn unserved(page: Surface) -> AnyView {
+    view! { <UnservedPage surface=page/> }.into_any()
 }
 
 /// The bridge's verdict, in the gate's words.
