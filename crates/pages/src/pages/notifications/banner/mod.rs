@@ -57,7 +57,7 @@ pub fn RequestBanner(
                                         <a class="avatar" href=href.clone()>
                                             <div class="w-8 rounded-full bg-base-300">
                                                 <img
-                                                    src=account.avatar.clone()
+                                                    src=nodus_ui::picture::avatar(&account.avatar)
                                                     alt=""
                                                     referrerpolicy="no-referrer"
                                                 />

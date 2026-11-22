@@ -29,7 +29,7 @@ pub fn Identity(
                             width="40"
                             height="40"
                             decoding="async"
-                            src=avatar_url
+                            src=nodus_ui::picture::avatar(&avatar_url)
                             alt=""
                             referrerpolicy="no-referrer"
                         />

@@ -143,7 +143,7 @@ fn ReadOnly(status: Status, age_of: Callback<String, String>) -> impl IntoView {
     } else {
         format!("@{}", account.acct)
     };
-    let avatar = account.avatar.clone();
+    let avatar = nodus_ui::picture::avatar(&account.avatar);
     let alt = account.acct.clone();
 
     view! {

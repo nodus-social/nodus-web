@@ -55,7 +55,7 @@ pub fn Results(
                             <div class="avatar">
                                 <div class="w-10 rounded-full bg-base-300">
                                     <img
-                                        src=account.avatar.clone()
+                                        src=nodus_ui::picture::avatar(&account.avatar)
                                         alt=""
                                         referrerpolicy="no-referrer"
                                     />

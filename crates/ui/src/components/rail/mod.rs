@@ -956,7 +956,7 @@ pub fn ProfileCard(#[prop(into)] profile: Signal<Option<ProfileCardData>>) -> im
                                 >
                                     <img
                                         class="size-9 shrink-0 rounded-full object-cover"
-                                        src=card.avatar_url.clone()
+                                        src=crate::picture::avatar(&card.avatar_url)
                                         alt=""
                                         loading="lazy"
                                     />

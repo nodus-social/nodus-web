@@ -180,7 +180,7 @@ pub fn SidebarModule(
                     each=move || rows.get()
                     key=|item| (item.href.clone(), item.label.clone())
                     children=move |item| {
-                        let picture = item.avatar_url.clone();
+                        let picture = item.avatar_url.as_deref().map(crate::picture::avatar);
                         let label = item.label.clone();
                         let meta = item.meta.clone();
                         let has_meta = !item.meta.is_empty();

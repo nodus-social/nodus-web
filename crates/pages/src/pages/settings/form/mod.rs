@@ -103,7 +103,7 @@ pub fn ProfileImages(
                 <img
                     class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-200 object-cover"
                     alt="Profile picture"
-                    src=move || avatar.get()
+                    src=move || nodus_ui::picture::avatar(&avatar.get())
                 />
             </Show>
         }
@@ -118,7 +118,7 @@ pub fn ProfileImages(
                     <img
                         class="h-32 w-full rounded-box border border-base-300 bg-base-200 object-cover"
                         alt="Banner"
-                        src=move || header.get()
+                        src=move || nodus_ui::picture::banner(&header.get())
                     />
                     <div class="absolute -bottom-8 left-4">{avatar_image()}</div>
                 </div>

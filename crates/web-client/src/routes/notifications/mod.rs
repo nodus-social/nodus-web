@@ -225,7 +225,7 @@ fn NoticeRow(
     let account = notice.account.clone();
     let who = display_name(&account.display_name, &account.acct);
     let profile = format!("/accounts/{}", account.id);
-    let avatar = account.avatar.clone();
+    let avatar = nodus_ui::picture::avatar(&account.avatar);
     let age = relative_age(&notice.created_at, clock::now_ms() as f64);
     let created_at = notice.created_at.clone();
     let verb = phrase(&notice, group.others);

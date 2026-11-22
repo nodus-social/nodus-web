@@ -10,6 +10,7 @@ pub mod capabilities;
 pub mod components;
 pub mod html;
 pub mod mfm;
+pub mod picture;
 pub mod script;
 pub mod session_style;
 

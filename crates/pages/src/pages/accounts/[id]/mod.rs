@@ -88,9 +88,9 @@ pub fn ProfilePage(
     // empty one.
     let bio = nodus_ui::html::body(&account.note);
     let has_bio = !bio.is_empty();
-    let header = account.header.clone();
+    let header = nodus_ui::picture::banner(&account.header);
     let has_header = !header.is_empty();
-    let avatar = account.avatar.clone();
+    let avatar = nodus_ui::picture::avatar(&account.avatar);
     let has_avatar = !avatar.is_empty();
     let picture = StoredValue::new(avatar.clone());
     // The id is read by three handlers, so it lives in a stored value: a `String` captured

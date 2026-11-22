@@ -37,7 +37,7 @@ pub fn StatusHeader(
     on_navigate: Option<Callback<String>>,
 ) -> impl IntoView {
     let name = display_name(&status.account.display_name, &status.account.acct);
-    let avatar = status.account.avatar.clone();
+    let avatar = crate::picture::avatar(&status.account.avatar);
     let handle = status.account.acct.clone();
     // The paths also live in stored values, because four click handlers read them: a
     // `String` captured by value would make the first handler `FnOnce`, and a stored value

@@ -43,7 +43,7 @@ pub fn AccountRow(
     let name = display_name(&account.display_name, &account.acct);
     let acct = account.acct.clone();
     let handle = format!("@{acct}");
-    let avatar = account.avatar.clone();
+    let avatar = crate::picture::avatar(&account.avatar);
     let has_avatar = !avatar.is_empty();
     let id = account.id.clone();
     let href = format!("/accounts/{id}");

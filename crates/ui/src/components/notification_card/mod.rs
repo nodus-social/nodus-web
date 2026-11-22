@@ -25,7 +25,7 @@ pub fn NotificationCard(
     let said = describe_notification(notification.kind);
     let profile = format!("/accounts/{}", who.id);
     let created_at = notification.created_at.clone();
-    let avatar = who.avatar.clone();
+    let avatar = crate::picture::avatar(&who.avatar);
     let body = StoredValue::new(body);
     let extra = StoredValue::new(extra);
 

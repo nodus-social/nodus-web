@@ -35,6 +35,8 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlHeadElement",
     "HtmlElement",
+    # The motion preference the pictures follow is a media query, read where a browser is.
+    "MediaQueryList",
     "Response",
     "Window",
 ] }
