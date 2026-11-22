@@ -157,7 +157,7 @@ impl Surface {
             // Nodus publishes the list, so a name it omits is not served. A name this build
             // cannot spell is still in `unknown`, and the server meant it.
             Provider::Nodus => match self.capability() {
-                Some(feature) => at.features.contains(&feature),
+                Some(feature) => at.features.contains(feature),
                 None => at.unknown.iter().any(|name| name == self.name()),
             },
             // Mastodon and Misskey publish nothing. Their `Feature` rows are the SDK's, so
