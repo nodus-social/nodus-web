@@ -181,6 +181,41 @@ pub fn may_administer() -> Signal<bool> {
     })
 }
 
+/// Whether this account holds any staff role, as a signal the rail's heading can read.
+///
+/// The rail asks this and the doors ask the same answer through [`may_write`] and
+/// [`may_administer`]: a heading that read a second, looser fact would be free to outlive
+/// the doors under it. `false` until the probe lands, which keeps the heading off the page
+/// while the question is in flight.
+#[must_use]
+pub fn holds_role() -> Signal<bool> {
+    let revision = standing_revision();
+    Signal::derive(move || {
+        revision.get();
+        STANDING.with_borrow(|held| {
+            held.as_ref()
+                .is_some_and(|(_, verdict)| matches!(verdict, Staff::Yes { .. }))
+        })
+    })
+}
+
+/// Asks who this account is, so the staff card can learn whether it should exist at all.
+///
+/// The card is hidden until one of its doors survives the gate, and a hidden component
+/// cannot run the probe that would open one. The question is therefore asked from the
+/// shell, which every screen paints, rather than from the heading it decides.
+#[cfg(feature = "admin")]
+pub fn ensure_standing() {
+    let extensions = super::supports_extensions();
+    leptos::prelude::Effect::new(move |_| {
+        if extensions.get() {
+            leptos::task::spawn_local(async {
+                let _ = standing().await;
+            });
+        }
+    });
+}
+
 /// Bumped whenever the cached verdict changes, so a signal derived from it repaints.
 fn standing_revision() -> RwSignal<u64> {
     thread_local! {

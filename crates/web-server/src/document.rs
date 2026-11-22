@@ -251,20 +251,12 @@ fn staff_door_served(
     at.is_none_or(|at| at.knows_extensions() && admits(Some(at), surface))
 }
 
-/// The two doors a moderator has, filtered by the same capability answer the browser uses.
+/// The two doors a moderator has, each already filtered by the capability answer.
 ///
-/// The frame is drawn from the server's capability value in context, so this reads rather
-/// than assumes.
-fn staff_doors(path: &str) -> leptos::prelude::AnyView {
-    use leptos::prelude::Get;
-    use nodus_ui::capabilities::{Surface, serves};
-
-    let at = serves().map(|answer| answer.get());
-    imperative::rail_rows(
-        path,
-        staff_door_served(at.as_ref(), Surface::Moderation),
-        staff_door_served(at.as_ref(), Surface::Admin),
-    )
+/// The booleans are the same ones that decided whether the card is drawn at all, so the
+/// heading and the rows below it cannot disagree about which doors survived the gate.
+fn staff_doors(path: &str, moderation: bool, administration: bool) -> leptos::prelude::AnyView {
+    imperative::rail_rows(path, moderation, administration)
 }
 
 /// Markup for the extra rail rows, kept beside the frame so both come from one place.
@@ -328,10 +320,12 @@ fn chrome_with_style(
     // about (public chrome) or the one read failed. Both paint permissively, which is the
     // behaviour the doors had before the server knew any better.
     let at = reader.and_then(|reader| crate::capabilities::answer_for(&reader.host));
-    let show_staff = signed_in
-        && staff
-        && (staff_door_served(at.as_ref(), Surface::Moderation)
-            || staff_door_served(at.as_ref(), Surface::Admin));
+    let staff = signed_in && staff;
+    let moderation_door = staff && staff_door_served(at.as_ref(), Surface::Moderation);
+    let administration_door = staff && staff_door_served(at.as_ref(), Surface::Admin);
+    // A staff card with no doors under it is not a section: it is an empty heading, so the
+    // same two booleans that pick the rows decide whether the card is drawn.
+    let staff_doors_shown = moderation_door || administration_door;
     let provided = at;
     Owner::new().with(|| {
         if let Some(at) = provided {
@@ -366,8 +360,11 @@ fn chrome_with_style(
             // always has, and the client replaces it once it knows whether the instance
             // serves notifications at all.
             notices: None,
-            extra: show_staff.then(move || {
-                std::sync::Arc::new(move || staff_doors(&door_path)) as nodus_ui::ExtraDoors
+            extra: staff_doors_shown.then(move || nodus_ui::ExtraDoors {
+                present: Signal::stored(staff_doors_shown),
+                rows: std::sync::Arc::new(move || {
+                    staff_doors(&door_path, moderation_door, administration_door)
+                }),
             }),
         })
         .to_html()
@@ -1074,6 +1071,39 @@ mod tests {
             html.contains("module_or_path: '/nodus-web_bg.wasm'"),
             "{html}"
         );
+    }
+
+    #[test]
+    fn the_painted_staff_heading_follows_the_doors_it_names() {
+        // The server paint had the same defect the browser did: the staff card was drawn
+        // whenever the session held a role, even when the instance served neither staff
+        // surface, so the document carried a "Staff" heading with no doors under it. The
+        // heading now comes from the same two doors that pick the rows.
+        let assets = test_assets();
+
+        let absent_host = "no-staff-surfaces.test";
+        crate::capabilities::remember_for_test(
+            absent_host,
+            nodus_ui::capabilities::Capabilities::from_parts("0.1.0", &["drive".to_owned()]),
+        );
+        let absent = home(&assets, &format!("mod@{absent_host}"), true, &[], None);
+        assert!(!absent.contains("Staff"), "{absent}");
+        assert!(!absent.contains("data-nav-rail-doors"), "{absent}");
+        assert!(!has_staff_links(&absent), "{absent}");
+
+        let both_host = "staff-surfaces.test";
+        crate::capabilities::remember_for_test(
+            both_host,
+            nodus_ui::capabilities::Capabilities::from_parts(
+                "0.1.0",
+                &["admin".to_owned(), "moderation".to_owned()],
+            ),
+        );
+        let both = home(&assets, &format!("mod@{both_host}"), true, &[], None);
+        assert!(both.contains("Staff"), "{both}");
+        assert!(both.contains("data-nav-rail-doors"), "{both}");
+        assert!(both.contains("href=\"/moderation\""), "{both}");
+        assert!(both.contains("href=\"/admin\""), "{both}");
     }
 
     #[test]

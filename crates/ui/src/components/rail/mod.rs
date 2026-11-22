@@ -61,9 +61,33 @@ pub fn within(href: &str, path: &str) -> bool {
     path.starts_with(&format!("{href}/"))
 }
 
-/// Doors only some readers have, as a function so the same value can be drawn by both
-/// paints: the server closes over server markup, the browser closes over live components.
-pub type ExtraDoors = Arc<dyn Fn() -> AnyView + Send + Sync>;
+/// Doors only some readers have, plus whether any of them survived the gate.
+///
+/// The rows and the answer travel together because the rail paints a heading and a card
+/// around them. A caller handed only the rows could not tell "no doors" from "not built
+/// yet", and would draw the bare heading this type exists to prevent: the answer is
+/// computed by whoever applied the door gates, and drawn by whoever draws the card.
+pub struct ExtraDoors {
+    /// Whether at least one door passed the extension, capability and role checks.
+    pub present: Signal<bool>,
+    /// The doors themselves, as the paint's own markup.
+    pub rows: Arc<dyn Fn() -> AnyView + Send + Sync>,
+}
+
+impl Clone for ExtraDoors {
+    fn clone(&self) -> Self {
+        Self {
+            present: self.present,
+            rows: Arc::clone(&self.rows),
+        }
+    }
+}
+
+impl std::fmt::Debug for ExtraDoors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraDoors").finish_non_exhaustive()
+    }
+}
 
 /// The signed-in reader, as the rail card stands for them.
 ///
@@ -647,17 +671,11 @@ fn NavItems(
     // entry exists in the layout and hiding it there would make it unrecoverable.
     let at = crate::capabilities::serves();
     let shown = Signal::derive(move || {
-        let answer = at.map(|at| at.get());
-        let editing = editor.is_some_and(StyleEditor::is_active);
-        items
-            .get()
-            .into_iter()
-            .filter(|item| {
-                editing
-                    || crate::capabilities::Surface::of_path(&item.path)
-                        .is_none_or(|surface| crate::capabilities::admits(answer.as_ref(), surface))
-            })
-            .collect::<Vec<NavItemConfig>>()
+        served_entries(
+            items.get(),
+            at.map(|at| at.get()),
+            editor.is_some_and(StyleEditor::is_active),
+        )
     });
     view! {
         <For
@@ -668,46 +686,85 @@ fn NavItems(
     }
 }
 
+/// The entries of a list that this paint may draw, in their layout order.
+///
+/// A card's heading and the rows beneath it ask this one function, so an empty category and
+/// a category whose every door the instance refused look the same: nothing to draw. An
+/// editor still sees refused entries, because the entry is in the layout and the reader is
+/// arranging what is there rather than what answers today.
+#[must_use]
+fn served_entries(
+    items: Vec<NavItemConfig>,
+    at: Option<crate::capabilities::Capabilities>,
+    editing: bool,
+) -> Vec<NavItemConfig> {
+    if editing {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| {
+            crate::capabilities::Surface::of_path(&item.path)
+                .is_none_or(|surface| crate::capabilities::admits(at.as_ref(), surface))
+        })
+        .collect()
+}
+
+/// Whether a section earns its heading: it has something under it, or its reader is
+/// arranging the layout and needs the empty slot to fill.
+///
+/// Every group the rail draws asks this one question, so a group whose doors were all
+/// filtered out by the capability gate loses its heading and the padding around it. A
+/// heading with no doors under it reads as a section that failed to load, which is the
+/// opposite of a door that was correctly not served.
+fn section_is_drawn(has_rows: bool, editing: bool) -> bool {
+    has_rows || editing
+}
+
 /// The staff doors as one card, so either rail can hold them.
 ///
 /// A door is furniture like a card is: a moderator who wants the moderation queue beside
 /// the reading column should not have to keep it on the left because the app said so.
+///
+/// The card is drawn only when a door survived the gate, for the same reason a nav card is:
+/// the heading names the doors under it, and there are none to name.
 fn door_card(
     doors: Option<ExtraDoors>,
     editor: Option<StyleEditor>,
     dragging: RwSignal<Option<String>>,
 ) -> AnyView {
     let _ = dragging;
-    doors.map_or_else(
-        || ().into_any(),
-        |doors| {
-            let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
-            view! {
-                <div class="rounded-box bg-base-100 p-1 shadow-sm" data-nav-rail-doors="">
-                    <p class="flex items-center gap-1 px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-60">
-                        <Show when=move || editing.get()>
-                            <span
-                                class="cursor-grab select-none"
-                                draggable="true"
-                                data-staff-drag=""
-                                title="Drag the staff doors to the other rail"
-                                on:dragstart=move |_| {
-                                    if let Some(edit) = editor {
-                                        edit.drag_staff();
-                                    }
+    let Some(doors) = doors else {
+        return ().into_any();
+    };
+    let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
+    let present = doors.present;
+    view! {
+        <Show when=move || section_is_drawn(present.get(), editing.get())>
+            <div class="rounded-box bg-base-100 p-1 shadow-sm" data-nav-rail-doors="">
+                <p class="flex items-center gap-1 px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-60">
+                    <Show when=move || editing.get()>
+                        <span
+                            class="cursor-grab select-none"
+                            draggable="true"
+                            data-staff-drag=""
+                            title="Drag the staff doors to the other rail"
+                            on:dragstart=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag_staff();
                                 }
-                            >
-                                "\u{28FF}"
-                            </span>
-                        </Show>
-                        "Staff"
-                    </p>
-                    <ul class="menu w-full flex-col gap-1 p-0">{doors()}</ul>
-                </div>
-            }
-            .into_any()
-        },
-    )
+                            }
+                        >
+                            "\u{28FF}"
+                        </span>
+                    </Show>
+                    "Staff"
+                </p>
+                <ul class="menu w-full flex-col gap-1 p-0">{(doors.rows)()}</ul>
+            </div>
+        </Show>
+    }
+    .into_any()
 }
 
 /// One category card of the rail's navigation.
@@ -726,7 +783,15 @@ fn NavRailCard(
     dragging: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
-    let shown = Signal::derive(move || !items.get().is_empty() || editing.get());
+    // The heading asks what will actually be drawn under it, not what the layout holds: a
+    // category whose every door was refused is empty and earns no heading.
+    let at = crate::capabilities::serves();
+    let shown = Signal::derive(move || {
+        section_is_drawn(
+            !served_entries(items.get(), at.map(|at| at.get()), editing.get()).is_empty(),
+            editing.get(),
+        )
+    });
     // Signals, not strings, in every handler: they are `Copy`, so the closures below can be
     // called more than once, which is what `Show` and `For` require of them.
     let id = {
@@ -1299,3 +1364,6 @@ pub fn RailEntry(
         </li>
     }
 }
+
+#[cfg(test)]
+mod tests;

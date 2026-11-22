@@ -57,6 +57,18 @@ pub fn admits(at: Option<&Capabilities>, surface: Surface) -> bool {
     at.is_none_or(|at| surface.served(at))
 }
 
+/// Whether a staff door is served to this reader, from the three facts both paints know.
+///
+/// A staff door is narrower than an ordinary one: the instance must speak this protocol's
+/// extensions (a staff screen is an extension), it must serve the surface, and the account
+/// must hold a role. The rail draws the heading and the door under it from this one answer,
+/// so a door that is not served cannot leave a heading behind, and this function says nothing
+/// about any other door: the three-part gate lives here, not in the card that draws it.
+#[must_use]
+pub const fn staff_door(extensions: bool, served: bool, role: bool) -> bool {
+    extensions && served && role
+}
+
 /// What the paints hand the shared screens: one value, or nothing known yet.
 pub type Serves = Option<Signal<Capabilities>>;
 

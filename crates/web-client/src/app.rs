@@ -14,8 +14,6 @@ use crate::state::bridge::{init, revision, with_sdk};
 use nodus_web::shared::screens::Screen;
 
 use leptos::prelude::*;
-#[cfg(feature = "admin")]
-use leptos::task::spawn_local;
 use nodus_ui::components::CardRenderer;
 #[cfg(feature = "admin")]
 use nodus_ui::icons::Icon;
@@ -65,6 +63,11 @@ pub(crate) fn App() -> impl IntoView {
     // The recommendation, styling and staff surfaces are ours; a Mastodon account has no
     // server behind them. The route arms below and the rail read the same answer.
     let extensions = crate::state::bridge::supports_extensions();
+    // The staff card is not painted until a door survives its gate, and a component that is
+    // not painted cannot run the probe that would open one. Asking here, in the shell that
+    // every screen paints, is what keeps the question from depending on its own answer.
+    #[cfg(feature = "admin")]
+    crate::state::bridge::admin::ensure_standing();
     // The negotiated answer, put in scope for the shared screens: the rail, the screens and
     // their explanations all read this one value instead of a per-call argument, so the
     // browser and the server paint from the same rule (the server simply has none to read).
@@ -451,13 +454,32 @@ fn unavailable(title: &'static str, note: &'static str) -> AnyView {
 }
 
 /// The doors only a moderator build draws, as the shared frame wants them.
+///
+/// The three facts a staff door needs — this protocol's extensions, the instance's answer
+/// for the surface, and a role this account holds — are read here rather than inside the
+/// card, so the frame knows whether to draw the heading from the same answer that picks
+/// the rows. A card handed only its rows could not tell "no doors" from "not asked yet".
 #[cfg(feature = "admin")]
 #[expect(
     clippy::unnecessary_wraps,
     reason = "the lean build returns nothing, and one call site serves both"
 )]
 fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
-    Some(std::sync::Arc::new(|| staff_rail_items().into_any()))
+    use nodus_ui::capabilities::{Surface, staff_door};
+
+    let extensions = crate::state::bridge::supports_extensions();
+    let role = crate::state::bridge::admin::holds_role();
+    let moderation_served = crate::state::bridge::capabilities::served(Surface::Moderation);
+    let administration_served = crate::state::bridge::capabilities::served(Surface::Admin);
+    let moderation =
+        Signal::derive(move || staff_door(extensions.get(), moderation_served.get(), role.get()));
+    let administration = Signal::derive(move || {
+        staff_door(extensions.get(), administration_served.get(), role.get())
+    });
+    Some(nodus_ui::ExtraDoors {
+        present: Signal::derive(move || moderation.get() || administration.get()),
+        rows: std::sync::Arc::new(move || staff_rail_items(moderation, administration).into_any()),
+    })
 }
 
 /// The lean build has no moderation screens, so the rail has no extra doors.
@@ -505,50 +527,23 @@ fn RailItem(label: &'static str, icon: Icon, hint: &'static str, route: Route) -
 ///
 /// Both the instance and the account have to agree before a door is drawn. The instance
 /// says which surfaces it serves at all (`moderation`, `admin` in the `/api/v1/meta`
-/// features), and `admin::standing()` says what this account may do with them: a rail entry
-/// that leads to a refusal is a dead end, and painting one for a probe still in flight would
-/// promise a door nobody has opened.
+/// features), and `admin::holds_role()` says what this account may do with them: a rail
+/// entry that leads to a refusal is a dead end, and painting one for a probe still in
+/// flight would promise a door nobody has opened.
 ///
-/// The check re-runs when the session, the grant or the instance's extension answer changes,
-/// because any of them can arrive after the first paint.
+/// Each door is already decided by `extra_doors`; this only paints the ones it let through,
+/// so the heading and its rows cannot disagree.
 #[cfg(feature = "admin")]
-fn staff_rail_items() -> impl IntoView {
-    view! { <StaffRail/> }
+fn staff_rail_items(moderation: Signal<bool>, administration: Signal<bool>) -> impl IntoView {
+    view! { <StaffRail moderation=moderation administration=administration/> }
 }
 
-/// The probe behind the moderation doors.
+/// The staff doors themselves, one per signal the shell gated.
 #[cfg(feature = "admin")]
 #[component]
-fn StaffRail() -> impl IntoView {
-    let standing = RwSignal::new(None);
-    let extensions = crate::state::bridge::supports_extensions();
-    Effect::new(move |_| {
-        revision().get();
-        if !extensions.get() {
-            standing.set(None);
-            return;
-        }
-        spawn_local(async move {
-            let answer = crate::state::bridge::admin::standing().await;
-            standing.set(Some(answer));
-        });
-    });
-
-    // The role the instance named, and nothing else: `None` is every answer that is not a
-    // working staff role — still asking, no grant, not staff, refused, unanswerable — and
-    // none of them is a door.
-    let role = Signal::derive(move || match standing.get() {
-        Some(crate::state::bridge::admin::Staff::Yes { role, .. }) => Some(role),
-        _ => None,
-    });
-    // Both doors are drawn from the same point of truth as the routes behind them:
-    // the server has to serve the surface, and this account has to hold the role.
-    let moderation =
-        crate::state::bridge::capabilities::served(nodus_ui::capabilities::Surface::Moderation);
-    let admin = crate::state::bridge::capabilities::served(nodus_ui::capabilities::Surface::Admin);
-
+fn StaffRail(moderation: Signal<bool>, administration: Signal<bool>) -> impl IntoView {
     view! {
-        <Show when=move || extensions.get() && moderation.get() && role.get().is_some()>
+        <Show when=move || moderation.get()>
             <RailItem
                 label="Moderation"
                 icon=Icon::Shield
@@ -556,11 +551,7 @@ fn StaffRail() -> impl IntoView {
                 route=Route::Moderation(crate::router::MODERATION_DEFAULT.to_owned())
             />
         </Show>
-        <Show when=move || {
-            extensions.get()
-                && admin.get()
-                && role.get().is_some()
-        }>
+        <Show when=move || administration.get()>
             <RailItem
                 label="Administration"
                 icon=Icon::Globe
