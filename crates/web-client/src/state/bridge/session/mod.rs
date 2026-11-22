@@ -18,6 +18,8 @@ use super::misskey::MisskeyBridge;
 use super::{WebSdkError, feed_ui, handle, install, provider};
 
 mod record;
+/// What the signed-in account's own credentials document says about its staff role.
+pub(super) mod staff;
 
 /// Re-establishes a stored session without blocking the first paint.
 ///

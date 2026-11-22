@@ -392,9 +392,10 @@ async fn sign_in(State(app): State<Arc<App>>, Json(body): Json<Credentials>) -> 
         .unwrap_or_default();
     match protocol::verify_with(&http, client.base(), &body.token, protocol).await {
         Ok(verified) => {
-            // Both probes below are reads of this same session and a plain Mastodon-shaped
-            // host refuses the moderation one, which is exactly the answer for a reader who
-            // does not moderate.
+            // The staff bit comes from the caller's own credentials document, the same
+            // document the browser reads, so the first paint and hydration agree. The
+            // admin-scoped account list is not asked: the session token does not carry
+            // `admin:read`, so it would answer `403` for staff and plain accounts alike.
             let admin = client.is_staff().await;
             let style = client.client_metadata_style().await.ok();
             let id = app.sessions.insert(Session {
@@ -688,6 +689,10 @@ fn is_asset(path: &str) -> bool {
 }
 
 /// Resolves whether `session` belongs to a moderator, caching the answer on first check.
+///
+/// The answer comes from the account's own credentials document and is kept on the session,
+/// so a page render asks once rather than once per component. Sign-in and sign-out replace or
+/// drop the session, which is what invalidates the cached bit.
 async fn resolve_staff(app: &App, session: &Session) -> bool {
     if let Some(admin) = session.admin {
         return admin;
@@ -1018,21 +1023,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn staff_nodus_document_draws_the_administration_door() {
+    async fn nodus_staff_document_draws_the_administration_door_and_a_regular_one_does_not() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let host = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let (app, staff_id, _) = test_app(&host);
+        let (app, staff_id, user_id) = test_app(&host);
 
-        let response = shell(
-            State(app),
-            cookie_headers(&staff_id),
-            "/settings/account".parse().unwrap(),
+        let staff_html = body_text(
+            shell(
+                State(Arc::clone(&app)),
+                cookie_headers(&staff_id),
+                "/settings/account".parse().unwrap(),
+            )
+            .await,
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let html = body_text(response).await;
-        assert!(html.contains("href=\"/admin\""), "{html}");
+        assert!(staff_html.contains("href=\"/admin\""), "{staff_html}");
+
+        // The same page for an account whose own document named no role: the capability
+        // gate is satisfied, so the absent door is the staff bit's decision and nothing
+        // else's.
+        let user_html = body_text(
+            shell(
+                State(app),
+                cookie_headers(&user_id),
+                "/settings/account".parse().unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert!(!user_html.contains("href=\"/admin\""), "{user_html}");
+        assert!(!user_html.contains("href=\"/moderation\""), "{user_html}");
     }
 
     #[tokio::test]

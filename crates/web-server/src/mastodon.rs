@@ -7,9 +7,7 @@
 use std::collections::BTreeMap;
 
 use nodus_client_core::LocalId;
-use nodus_client_core::actions::{
-    Browse, RegistrationActions, ScheduleActions, Search as SearchApi,
-};
+use nodus_client_core::actions::{Browse, ScheduleActions, Search as SearchApi};
 use nodus_client_core::model::{
     Account, Context, Conversation, List, Notification, PageParams, ScheduledStatus, SearchResults,
     Status,
@@ -19,6 +17,45 @@ use nodus_client_sdk::reads::{Headless, Reads};
 use nodus_mastodon::HttpInstance;
 use nodus_ui::session_style::{STYLE_KEYS, SessionStyle};
 use serde::Deserialize;
+
+/// The staff-relevant fields of an account's own credentials document.
+///
+/// Read here rather than through the SDK's account model because that model names only the
+/// portable Mastodon fields; `role` and Nodus's own `staff_role` are dropped by it. Nodus
+/// sends `role` on every account read and `staff_role` only on the caller's own document;
+/// Mastodon sends `role` on the own document of a staff account and nothing for a plain
+/// one. Both spellings are honoured so the answer does not depend on the dialect.
+#[derive(Debug, Default, Deserialize)]
+struct Credentials {
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default)]
+    staff_role: Option<String>,
+}
+
+/// The `role` entity Mastodon puts on an account (`{id, name, color, permissions, …}`).
+#[derive(Debug, Deserialize)]
+struct Role {
+    #[serde(default)]
+    name: String,
+}
+
+impl Credentials {
+    /// Whether either spelling names a staff role.
+    ///
+    /// The Nodus spelling is checked by value because it is a closed vocabulary
+    /// (`admin`/`moderator`). Mastodon's role name is the administrator's own label, which
+    /// may be a custom word, so a role entity with a non-empty name is the signal there:
+    /// Mastodon has no other reason to put `role` on an account.
+    fn is_staff(&self) -> bool {
+        if let Some(spelling) = self.staff_role.as_deref() {
+            return matches!(spelling, "admin" | "moderator");
+        }
+        self.role
+            .as_ref()
+            .is_some_and(|role| !role.name.trim().is_empty())
+    }
+}
 
 /// A signed-in instance, ready to ask.
 #[derive(Debug, Clone)]
@@ -55,12 +92,29 @@ impl Client {
         &self.base
     }
 
-    /// Whether this token may moderate. One request, at sign-in.
+    /// Whether this token belongs to a staff account. One request, at sign-in.
     ///
-    /// The pending queue is the cheapest endpoint that is staff-only: a moderator gets a
-    /// list, anyone else a `403` with a JSON body (Mastodon does not answer `404` here).
+    /// The answer is read from the caller's **own** credentials document, which every
+    /// account may read and which now publishes the account's role. The pending queue and
+    /// the admin account list are staff-only endpoints, but they answer `403` to a token
+    /// without `admin:read` — including the SPA's own `read write follow` grant — so asking
+    /// them said "not staff" about the instance's administrators.
+    ///
+    /// A failure is not staff: an unreadable document leaves no role to draw a door from.
+    /// Misskey answers `404` here and its own `/api/i` is not read for a role, so a Misskey
+    /// session draws no staff doors today.
     pub async fn is_staff(&self) -> bool {
-        self.instance.pending_accounts(1).await.is_ok()
+        let Ok(url) = self.instance.url("/api/v1/accounts/verify_credentials") else {
+            return false;
+        };
+        match self
+            .instance
+            .fetch::<Credentials>(self.instance.get(url))
+            .await
+        {
+            Ok(credentials) => credentials.is_staff(),
+            Err(_) => false,
+        }
     }
 
     /// The first page of the home timeline, newest first.
@@ -302,6 +356,98 @@ mod tests {
         assert_eq!(style.top.slots.len(), 1);
         assert_eq!(style.top.slots[0].url, "https://cdn.example/banner.png");
         assert_eq!(style.nav.items_in(NavPlacement::Right).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn staff_answer_is_read_from_the_own_document_not_the_admin_probe() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use axum::http::StatusCode;
+
+        // The probe this replaced answered staff-only endpoints, so its stub answers an
+        // error and counts any call: a render that still asked it would either draw the
+        // wrong door or fail this assertion.
+        let probed = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&probed);
+        let app = Router::new()
+            .route(
+                "/api/v1/accounts/verify_credentials",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "id": "1",
+                        "acct": "admin",
+                        "role": { "name": "Admin" },
+                        "staff_role": "admin"
+                    }))
+                }),
+            )
+            .route(
+                "/api/v2/admin/accounts",
+                get(move || {
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = Client::for_test(&format!("http://{addr}"), "test-token");
+        assert!(client.is_staff().await);
+        assert_eq!(probed.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_mastodon_role_on_the_own_document_is_staff_and_a_plain_one_is_not() {
+        async fn answer(body: serde_json::Value) -> bool {
+            let app = Router::new().route(
+                "/api/v1/accounts/verify_credentials",
+                get(move || {
+                    let body = body.clone();
+                    async move { Json(body) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Client::for_test(&format!("http://{addr}"), "test-token")
+                .is_staff()
+                .await
+        }
+
+        // Mastodon's own credentials document names a staff role with `role`; its name is
+        // the administrator's label, so a custom one must still count.
+        assert!(
+            answer(serde_json::json!({
+                "id": "1",
+                "acct": "owner",
+                "role": {
+                    "id": "3",
+                    "name": "Owner",
+                    "color": "",
+                    "permissions": "1",
+                    "highlighted": true
+                }
+            }))
+            .await
+        );
+        assert!(
+            !answer(serde_json::json!({
+                "id": "2",
+                "acct": "user",
+                "role": null,
+                "staff_role": null
+            }))
+            .await
+        );
     }
 
     #[tokio::test]

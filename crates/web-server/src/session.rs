@@ -51,11 +51,13 @@ pub struct Session {
     pub display_name: String,
     #[serde(default)]
     pub avatar: String,
-    /// Whether this account answered the moderation queue when it signed in.
+    /// Whether this account's own credentials document named a staff role.
     ///
-    /// Probed once, at sign-in, rather than on every render: the rail has to know before
+    /// Read once, at sign-in, rather than on every render: the rail has to know before
     /// the first paint whether to draw the moderation doors, and an instance call per page
     /// would be paid by every reader. A role granted later shows up on the next sign-in.
+    /// The value is derived from `verify_credentials`, the same document the browser reads,
+    /// so a restored session and its hydrating client agree on the first paint.
     #[serde(default)]
     pub admin: Option<bool>,
     /// Per-account session styling and navigation layout, cached at sign-in or via sync.

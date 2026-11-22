@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use super::session::staff;
 use super::{admin_scope, admin_transport, instance_transport};
 use leptos::prelude::{Get, RwSignal, Signal, Update};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
@@ -39,9 +40,11 @@ pub enum Role {
 }
 
 impl Role {
-    /// Reads the wire spelling of `role` in `admin/meta` and in
-    /// `GET /api/v1/nodus/account/role`. `none` — and any name this client predates — is
-    /// not a role.
+    /// Reads the wire spelling of `role` in `admin/meta`. `none` — and any name this client
+    /// predates — is not a role.
+    ///
+    /// Only reached with an accepted admin grant, so it answers what an own credentials
+    /// document cannot: which of the two doors this grant opens.
     #[must_use]
     fn parse(name: &str) -> Option<Self> {
         match name {
@@ -246,10 +249,16 @@ const WRITE: &str = "admin:write";
 /// which keeps the answer for the session and grant it describes.
 async fn probe() -> Staff {
     // No grant: a staff role is worth a consent screen, and no role at all means a consent
-    // screen could not help, so it is not offered.
+    // screen could not help, so it is not offered. A role the instance reports on the
+    // session token itself — the Mastodon shape — needs no consent screen at all, so it is
+    // a working door with `write: false`.
     if admin_transport().is_none() {
-        return match ask_role().await {
-            Ok(Some(_role)) => Staff::NeedsGrant,
+        return match staff::own_role().await {
+            Ok(Some(own)) if own.opens_door() => Staff::Yes {
+                role: console_role(own),
+                write: false,
+            },
+            Ok(Some(_)) => Staff::NeedsGrant,
             Ok(None) => Staff::NotStaff,
             Err(problem) => Staff::Unknown(problem),
         };
@@ -264,8 +273,8 @@ async fn probe() -> Staff {
             write: answer.meta.scopes.iter().any(|scope| scope == WRITE),
         },
         // Staff but refused, or not staff at all: only the role says which.
-        Err(MetaProblem::Refused) => match ask_role().await {
-            Ok(Some(_role)) => Staff::Refused(
+        Err(MetaProblem::Refused) => match staff::own_role().await {
+            Ok(Some(_own)) => Staff::Refused(
                 "The instance refused this grant: it was revoked, or it belongs to another \
                  account."
                     .to_owned(),
@@ -309,35 +318,16 @@ enum MetaProblem {
     Failed(String),
 }
 
-/// `GET /api/v1/nodus/account/role`, which any signed-in account may ask.
-#[derive(Debug, serde::Deserialize)]
-struct RoleAnswer {
-    /// `none`, `moderator` or `admin`.
-    #[serde(default)]
-    role: String,
-}
-
-/// What the instance says this account's role is, asked with the ordinary session.
+/// The console's reading of a role the own credentials document named.
 ///
-/// The session's own token, not the grant: the point of the question is to learn whether a
-/// grant would help before asking for one, and a refused grant token answers 401 to it.
-/// `Ok(None)` is the instance's `none` — a plain account, told so in one request instead of
-/// being walked into a permission error only a database edit could fix.
-async fn ask_role() -> Result<Option<Role>, String> {
-    let transport = instance_transport().ok_or_else(|| "Not signed in.".to_owned())?;
-    let url = transport
-        .url("/api/v1/nodus/account/role")
-        .map_err(|error| error.to_string())?;
-    let bytes = transport
-        .fetch_bytes(transport.get(url))
-        .await
-        .map_err(|error| {
-            format!("The instance did not say what role this account holds: {error}")
-        })?;
-    let answer: RoleAnswer = serde_json::from_slice(&bytes).map_err(|error| {
-        format!("The instance's answer about this account's role could not be read: {error}")
-    })?;
-    Ok(Role::parse(&answer.role))
+/// The document spells the broader door only when it means it; every other staff account
+/// gets the narrower one, which is the honest reading of a role the client cannot rank.
+fn console_role(own: staff::OwnRole) -> Role {
+    if own.administrator {
+        Role::Admin
+    } else {
+        Role::Moderator
+    }
 }
 
 /// Reads `admin/meta` from `transport`, body and role together.
