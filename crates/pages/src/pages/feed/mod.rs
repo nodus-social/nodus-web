@@ -29,8 +29,8 @@ pub enum FeedTab {
 /// One feed, whatever feeds it: its composer slot, title, tabs, states and list.
 ///
 /// Home, Local, Federated and the recommendation feed all paint this same frame. The
-/// caller supplies the rows and the tab strip; the page owns the spacing, the spinner,
-/// the error alert and the empty card, so a feed cannot drift from its siblings.
+/// caller supplies the rows and the tab strip; the page owns the spacing, the error alert
+/// and the empty card, so a feed cannot drift from its siblings.
 #[component]
 #[expect(
     clippy::needless_pass_by_value,
@@ -79,12 +79,8 @@ pub fn FeedPage(
                 </div>
             </Show>
 
-            <Show when=move || loading.get() && !has_items.get()>
-                <div class="flex justify-center py-6">
-                    <span class="loading loading-spinner loading-md"></span>
-                </div>
-            </Show>
-
+            // Nothing is drawn while the first page is in flight: a spinner is not the
+            // shape of a status card, and the empty card below waits for `!loading`.
             <Show when=move || {
                 !loading.get() && !has_items.get() && error.get().is_none()
             }>

@@ -1,7 +1,7 @@
 //! The moderation area: one section at a time, behind the staff gate.
 //!
 //! The area and its sections were drawn in the client, so the server had nothing to paint
-//! for `/moderation/{section}` beyond a skeleton. The heading, the gate and the strip are one
+//! for `/moderation/{section}` beyond the chrome. The heading, the gate and the strip are one
 //! tree now; the section's body arrives as `children`, because each body reads its own list
 //! and a page may not fetch. The section enum lives here rather than in the client for the
 //! same reason the strip does: it is the strip's data, and one definition keeps the slug in

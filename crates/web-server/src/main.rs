@@ -517,7 +517,7 @@ async fn index(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
 /// Every route the client owns: the chrome, then the client takes over.
 ///
 /// Where the reader holds a session, the page is painted with the data the client would
-/// fetch anyway; every other path keeps the skeleton, which is also the fallback when a
+/// fetch anyway; every other path keeps the chrome, which is also the fallback when a
 /// read fails. `Caddy` answers assets from disk, so anything with a file extension reaching
 /// here is genuinely missing.
 /// A shared link without a cookie: read the post and its thread from its own host.
@@ -778,7 +778,7 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
             .await
         }
         Err(message) => {
-            tracing::warn!(%message, "session could not be used; painting the skeleton");
+            tracing::warn!(%message, "session could not be used; painting the chrome");
             None
         }
     };
@@ -797,7 +797,7 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
 
 /// The page for `path`, or `None` when this route has no server read.
 ///
-/// A failed read is `None` as well: the skeleton is a worse page than the data, but a better
+/// A failed read is `None` as well: the chrome is a worse page than the data, but a better
 /// one than an error page for a screen the client can still fill in itself.
 async fn home(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let Some(session) = session_of(&app, &headers) else {

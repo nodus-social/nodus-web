@@ -37,7 +37,7 @@ pub fn StatusList(
     #[prop(optional, into)]
     empty: Option<String>,
     /// Whether this list paints its own empty note. A page with a richer empty state (a
-    /// card, a spinner, an error) turns this off and paints it above the list.
+    /// card, a loading flag, an error) turns this off and paints it above the list.
     #[prop(default = true)]
     show_empty: bool,
 ) -> impl IntoView {

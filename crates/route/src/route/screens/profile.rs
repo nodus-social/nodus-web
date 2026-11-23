@@ -99,7 +99,6 @@ pub fn ProfileScreen(
                 view! {
                     <div class="flex flex-col gap-3">
                         <p class="text-sm opacity-70">"Looking this account up on your instance…"</p>
-                        <crate::chrome::Skeleton count=3/>
                     </div>
                 }
                     .into_any()

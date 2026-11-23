@@ -1,10 +1,9 @@
 //! The chrome around a screen, drawn once for both paints.
 //!
 //! These are the pieces `crates/server/src/render.rs` still builds as strings: the heading a
-//! timeline opens with, the foot that asks for the next page, and the grey cards that hold
-//! the space while a screen has nothing to show yet. Each is a single definition of the
-//! markup, so the server's first paint and the client's mount put the same boxes in the same
-//! places instead of moving the page under the reader.
+//! timeline opens with and the foot that asks for the next page. Each is a single definition
+//! of the markup, so the server's first paint and the client's mount put the same boxes in the
+//! same places instead of moving the page under the reader.
 //!
 //! Nothing here reads the router, the clock or a transport: what a component would otherwise
 //! look up arrives as a prop, and an interaction that does not exist on one of the paints
@@ -16,7 +15,6 @@ pub mod load_more;
 pub mod more_button;
 pub mod note;
 pub mod section_strip;
-pub mod skeleton;
 pub mod staff_gate;
 pub mod tab_list;
 pub mod timeline_header;
@@ -27,7 +25,6 @@ pub use load_more::LoadMore;
 pub use more_button::MoreButton;
 pub use note::Note;
 pub use section_strip::{SectionStrip, SectionTab};
-pub use skeleton::Skeleton;
 pub use staff_gate::{StaffGate, StaffStanding};
 pub use tab_list::{Tab, TabList};
 pub use timeline_header::TimelineHeader;

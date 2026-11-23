@@ -126,7 +126,6 @@ pub fn RemoteAccountScreen(
                                 })
                         }}
                     </crate::Note>
-                    <crate::chrome::Skeleton count=3/>
                 </crate::Screen>
             }
             .into_any(),

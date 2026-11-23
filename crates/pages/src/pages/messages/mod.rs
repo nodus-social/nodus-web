@@ -17,7 +17,6 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use nodus_client_core::model::Conversation;
 
-use crate::chrome::Skeleton;
 use crate::chrome::more_button::{MoreButton, MoreButtonProps};
 use crate::lists::conversation_row::{ConversationRow, ConversationRowProps};
 use crate::{PageHeader, Screen};
@@ -64,11 +63,8 @@ pub fn MessagesPage(
                 description="Direct conversations with other accounts. Opening one marks it read."
             />
 
-            // Only before the first answer: a held list renders immediately, and an empty
-            // held list is a fact, not a wait.
-            <Show when=move || loading.get() && conversations.get().is_empty()>
-                <Skeleton count=4/>
-            </Show>
+            // A read still on its way draws nothing: the row height is the content's, and
+            // the empty line waits for `!loading`, so no placeholder can overstate the wait.
 
             {move || {
                 error

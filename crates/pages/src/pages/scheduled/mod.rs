@@ -12,7 +12,6 @@
 use leptos::prelude::*;
 use nodus_client_core::model::ScheduledStatus;
 
-use crate::chrome::Skeleton;
 use crate::lists::scheduled_row::{ScheduledRow, ScheduledRowProps};
 use crate::{PageHeader, Screen};
 
@@ -60,11 +59,8 @@ pub fn ScheduledPage(
                     })
             }}
 
-            // Only before the first answer: a held queue renders immediately, and an empty
-            // queue is a fact, not a wait.
-            <Show when=move || loading.get() && items.get().is_empty()>
-                <Skeleton count=4/>
-            </Show>
+            // A queue still on its way draws nothing: its rows are the only honest size,
+            // and the empty line waits for `!loading`, so nothing flashes.
 
             <ul class="flex flex-col divide-y divide-base-300 rounded-box bg-base-100">
                 <For each=move || items.get() key=|item| item.id.clone() let:item>

@@ -12,7 +12,6 @@
 use leptos::prelude::*;
 use nodus_client_core::model::Account;
 
-use crate::chrome::Skeleton;
 use crate::chrome::more_button::{MoreButton, MoreButtonProps};
 use crate::lists::account_row::{AccountRow, AccountRowProps};
 use crate::{PageHeader, Screen};
@@ -89,11 +88,8 @@ pub fn DirectoryPage(
                     })
             }}
 
-            // Only before the first answer: a scope the caller already holds renders at once,
-            // and an empty scope is a fact, not a wait.
-            <Show when=move || loading.get() && accounts.get().is_empty()>
-                <Skeleton count=4/>
-            </Show>
+            // A scope still on its way draws nothing: a card cannot know the height of the
+            // rows it fronts, and the empty line is gated on `!loading`, so none flashes.
 
             <ul class="flex flex-col gap-1">
                 <For each=move || accounts.get() key=|account| account.id.clone() let:account>

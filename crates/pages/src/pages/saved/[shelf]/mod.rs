@@ -18,7 +18,6 @@ pub use shelf::Shelf;
 use leptos::prelude::*;
 use nodus_client_core::model::Status;
 
-use crate::chrome::Skeleton;
 use crate::chrome::more_button::{MoreButton, MoreButtonProps};
 use crate::components::CardRenderer;
 use crate::{PageHeader, Screen};
@@ -73,11 +72,8 @@ pub fn SavedPage(
                 </For>
             </div>
 
-            // The placeholder cards are the first paint only: a shelf the caller already
-            // holds renders at once, and a shelf that came back empty is a fact, not a wait.
-            <Show when=move || loading.get() && items.get().is_empty()>
-                <Skeleton count=4/>
-            </Show>
+            // A shelf still on its way draws nothing: a card cannot know the height of a
+            // status, and the empty line waits for `!loading`, so nothing flashes.
 
             <Show when=move || !loading.get() && items.get().is_empty() && error.get().is_none()>
                 <p class="text-sm opacity-60">{empty}</p>

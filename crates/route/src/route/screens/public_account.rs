@@ -232,7 +232,7 @@ pub fn PublicAccountScreen(
                                 {move || nodus_ui::capabilities::explain(error.get())}
                             </crate::Note>
                         </Show>
-                        <crate::chrome::Skeleton count=4/>
+                        <crate::Note>"Looking this account up…"</crate::Note>
                     </crate::Screen>
                 }
                 .into_any()

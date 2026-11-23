@@ -332,7 +332,7 @@ fn restore(stored: StoredSession) {
     let ui = feed_ui();
     ui.refreshing.set(true);
     wasm_bindgen_futures::spawn_local(async move {
-        // A host that never answers must not hold the whole app on its skeleton: the
+        // A host that never answers must not hold the whole app on a placeholder: the
         // account stays signed in and the screen says which instance is at fault.
         let asking = sdk.sign_in(&stored.host, scopes());
         let answered = super::patience(asking, RESTORE_PATIENCE).await;
