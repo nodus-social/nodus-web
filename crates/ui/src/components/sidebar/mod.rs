@@ -642,11 +642,26 @@ pub fn MediaTray(
 ) -> impl IntoView {
     let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
     view! {
-        <section class="flex flex-col gap-2" data-media-tray="">
+        <section
+            class="flex flex-col gap-2"
+            data-media-tray=""
+            on:dragover=move |event| {
+                if editing.get() {
+                    event.prevent_default();
+                }
+            }
+            on:drop=move |event| {
+                if let Some(edit) = editor {
+                    event.prevent_default();
+                    // A picture dragged off the page lands back on the shelf it came from.
+                    edit.drop_on_collection();
+                }
+            }
+        >
             <header class="flex flex-col gap-1">
                 <h1 class="text-lg font-semibold">"Your pictures"</h1>
                 <p class="text-sm opacity-70">
-                    "Drag a picture onto a banner or a picture slot. A click puts it in the top banner, for when a drag is not how you work."
+                    "Drag a picture onto a banner or a picture slot. A click puts it in the top banner, for when a drag is not how you work. Drop a placed picture back here to take it off the page."
                 </p>
             </header>
             <ul class="flex flex-wrap items-stretch gap-2" data-media-tray-items="">
@@ -706,6 +721,7 @@ pub fn MediaTray(
                     on:dragover=move |event| event.prevent_default()
                     on:drop=move |event| {
                         event.prevent_default();
+                        event.stop_propagation();
                         #[cfg(target_arch = "wasm32")]
                         if let Some(on_upload) = on_upload {
                             if let Some(file) = first_dropped_file(&event) {

@@ -2484,9 +2484,15 @@ mod tests {
         editor.drag_module(ModuleKind::TrendingTags);
         assert!(editor.drop_on(ModuleRail::Right));
         let style = editor.draft().get_untracked();
-        assert!(style.modules_in(ModuleRail::Right).contains(&ModuleKind::TrendingTags));
         assert!(
-            !style.modules_in(ModuleRail::Left).contains(&ModuleKind::TrendingTags),
+            style
+                .modules_in(ModuleRail::Right)
+                .contains(&ModuleKind::TrendingTags)
+        );
+        assert!(
+            !style
+                .modules_in(ModuleRail::Left)
+                .contains(&ModuleKind::TrendingTags),
             "a moved card is moved, not copied"
         );
         assert_eq!(
@@ -2504,22 +2510,20 @@ mod tests {
     fn a_collection_picture_dropped_on_a_slot_replaces_that_slot() {
         let mut style = SessionStyle::default();
         for url in ["https://cdn.example/a.png", "https://cdn.example/b.png"] {
-            assert!(
-                style
-                    .top
-                    .add_slot(ImageSlot::new(url, None, None).unwrap())
-            );
+            assert!(style.top.add_slot(ImageSlot::new(url, None, None).unwrap()));
         }
         let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
         // The browser normally resolves the drive file asynchronously; the test supplies
         // that answer directly, which is the only part of the drop that is not the shell's.
-        editor.set_library_placer(Callback::new(move |(_, target): (LibraryPicture, PictureTarget)| {
-            editor.place_library_slot(
-                target,
-                ImageSlot::new("https://cdn.example/c.png", None, Some("attached"))
-                    .expect("a safe address"),
-            );
-        }));
+        editor.set_library_placer(Callback::new(
+            move |(_, target): (LibraryPicture, PictureTarget)| {
+                editor.place_library_slot(
+                    target,
+                    ImageSlot::new("https://cdn.example/c.png", None, Some("attached"))
+                        .expect("a safe address"),
+                );
+            },
+        ));
         editor.drag_library(LibraryPicture {
             id: String::from("file-1"),
             name: String::from("c.png"),
@@ -2527,7 +2531,11 @@ mod tests {
         });
         assert!(editor.drop_picture(BannerRegionKind::Top, 1));
         let top = editor.draft().get_untracked().top;
-        assert_eq!(top.slots.len(), 2, "a collection drop replaces, never grows");
+        assert_eq!(
+            top.slots.len(),
+            2,
+            "a collection drop replaces, never grows"
+        );
         assert_eq!(top.slots[0].url, "https://cdn.example/a.png");
         assert_eq!(top.slots[1].url, "https://cdn.example/c.png");
     }
@@ -2546,7 +2554,10 @@ mod tests {
                 .draft()
                 .get_untracked()
                 .module_rail(ModuleKind::LiveFeed),
-            clicked.draft().get_untracked().module_rail(ModuleKind::LiveFeed),
+            clicked
+                .draft()
+                .get_untracked()
+                .module_rail(ModuleKind::LiveFeed),
             "the drop and the click must choose the same rail"
         );
     }
@@ -2590,6 +2601,28 @@ mod tests {
                 .iter()
                 .any(|item| item.id == id)
         );
+    }
+
+    #[test]
+    fn a_placed_picture_dropped_back_on_the_shelf_is_taken_off_the_page() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style
+                .left
+                .add_slot(ImageSlot::new("https://cdn.example/a.png", None, None).unwrap())
+        );
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor.drag_picture(BannerRegionKind::Left, 0);
+        assert!(editor.drop_on_collection());
+        assert!(editor.draft().get_untracked().left.slots.is_empty());
+        assert!(editor.take_drag().is_none());
+        // A collection picture dragged onto the shelf is already home: nothing to remove.
+        editor.drag_library(LibraryPicture {
+            id: String::from("file-1"),
+            name: String::from("c.png"),
+            thumbnail: String::from("blob:test"),
+        });
+        assert!(!editor.drop_on_collection());
     }
 
     #[test]
