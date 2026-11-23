@@ -121,6 +121,17 @@ pub fn SettingsPeople(which: Which) -> impl IntoView {
     let more = Callback::new(move |after: String| read.run(Some(after)));
 
     view! {
+        // An empty list and a list still on its way look the same to `PeoplePage`, which
+        // hides its empty line while loading. Say the read is happening here so the panel
+        // is never blank, and leave the empty line to the answer that really is empty.
+        <Show when=move || loading.get() && rows.get().is_empty()>
+            <p class="text-sm opacity-60">
+                {match which {
+                    Which::Muted => "Reading the mute list…",
+                    Which::Blocked => "Reading the block list…",
+                }}
+            </p>
+        </Show>
         <PeoplePage
             kind=which.kind()
             accounts=rows
