@@ -12,10 +12,6 @@
 use leptos::prelude::*;
 use nodus_client_core::model::{MediaAttachment, MediaKind};
 
-use super::jxl::is_jxl;
-#[cfg(target_arch = "wasm32")]
-use super::jxl::{browser_supports_jxl, decode_to_png};
-
 /// One picture, in the shape a viewer needs it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picture {
@@ -109,29 +105,9 @@ fn MediaTile(
         crate::html::safe_url(&href).then_some(href)
     };
     let (preview, _) = signal(media.preview_url.clone().unwrap_or_default());
-    let (source, set_source) = signal(media.preview_url.clone().unwrap_or_default());
+    let (source, _) = signal(media.preview_url.clone().unwrap_or_default());
     let (description, _) = signal(media.description.clone().unwrap_or_default());
     let (blurhash, _) = signal(media.blurhash.clone().unwrap_or_default());
-    let jxl = is_jxl(media.url.as_deref().unwrap_or_default());
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = (&set_source, jxl);
-    #[cfg(target_arch = "wasm32")]
-    if jxl {
-        let original = media.url.clone().unwrap_or_default();
-        let fallback = media.preview_url.clone().unwrap_or_default();
-        Effect::new(move |_| {
-            let original = original.clone();
-            let fallback = fallback.clone();
-            leptos::task::spawn_local(async move {
-                let source = if browser_supports_jxl().await {
-                    original
-                } else {
-                    decode_to_png(&original).await.unwrap_or(fallback)
-                };
-                set_source.set(source);
-            });
-        });
-    }
     // The instance reports the original's size, and the preview keeps the same ratio, so
     // declaring it reserves the row before a byte arrives. Without it every image load
     // pushed the page down by its own height, which is what "the website jumps" means.
