@@ -115,17 +115,13 @@ impl SettingsSection {
     /// them would remove working forms. A `Some` gate is the name the server must publish;
     /// see [`Self::drawn`] for what a missing name means.
     #[must_use]
-    #[expect(
-        clippy::match_same_arms,
-        reason = "two `None` arms answer different questions: a form the shell owns, and a name the backend has not published"
-    )]
     pub const fn gate(self) -> Option<Feature> {
         match self {
             Self::Account | Self::Profile | Self::Appearance | Self::Instance => None,
-            // TODO(owner: backend): `notification_settings` is not in the backend's
-            // published FEATURES list yet, so there is no name to ask for. Gated on nothing
-            // until it is; the page says what is missing rather than inventing a wire name.
-            Self::Notifications => None,
+            // The policy endpoint is published as `notification_settings`; a server that
+            // omits the name gets the page's explanation instead of controls that cannot
+            // save.
+            Self::Notifications => Some(Feature::NotificationSettings),
             Self::Preferences => Some(Feature::Preferences),
             Self::Filters => Some(Feature::Filters),
             Self::Muted => Some(Feature::Mutes),

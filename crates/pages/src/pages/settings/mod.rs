@@ -16,6 +16,7 @@ pub mod instance;
 pub mod instance_card;
 pub mod lists;
 pub mod nav;
+pub mod notifications;
 pub mod page;
 pub mod profile;
 pub mod sync;

@@ -19,6 +19,7 @@ fn every_gate() -> Capabilities {
         "blocks",
         "domain_blocks",
         "lists",
+        "notification_settings",
         "sessions",
         "two_factor",
         "exports",
@@ -44,7 +45,6 @@ fn a_section_that_asks_for_nothing_is_drawn_even_on_an_empty_answer() {
         SettingsSection::Account,
         SettingsSection::Profile,
         SettingsSection::Appearance,
-        SettingsSection::Notifications,
         SettingsSection::FeaturedTags,
         SettingsSection::Instance,
     ] {
@@ -59,7 +59,13 @@ fn a_section_that_asks_for_nothing_is_drawn_even_on_an_empty_answer() {
 /// settings page.
 #[test]
 fn a_server_that_omits_the_account_lists_hides_their_tabs() {
-    let at = answer(&["preferences", "filters", "lists", "notifications"]);
+    let at = answer(&[
+        "preferences",
+        "filters",
+        "lists",
+        "notifications",
+        "notification_settings",
+    ]);
     for section in [
         SettingsSection::Muted,
         SettingsSection::Blocked,
@@ -83,6 +89,14 @@ fn a_server_that_omits_the_account_lists_hides_their_tabs() {
     ] {
         assert!(section.drawn(Some(&at)), "{section:?}");
     }
+}
+
+/// The policy tab is a capability like the account lists: without the name the strip does
+/// not draw it, and the section's sentence explains the refusal on a direct visit.
+#[test]
+fn a_server_without_the_notification_policy_hides_the_tab() {
+    let at = answer(&["preferences", "filters", "lists"]);
+    assert!(!SettingsSection::Notifications.drawn(Some(&at)));
 }
 
 /// No answer yet is not a refusal: the server paint and the first client paint must not

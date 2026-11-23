@@ -11,6 +11,7 @@ use nodus_pages::pages::settings::account::SessionStyleCard;
 use nodus_pages::pages::settings::nav::SettingsSection;
 
 use crate::router::{self, Route};
+use crate::routes::settings::notifications::NotificationsCard;
 use crate::routes::settings::sync::SyncCard;
 use crate::state::bridge::{revision, style as bridge_style, with_sdk};
 
@@ -30,6 +31,7 @@ mod feeds;
 pub(crate) mod filters;
 pub(crate) mod instance;
 mod moderation;
+mod notifications;
 mod profile;
 pub(crate) mod sensitive;
 mod session;
@@ -110,9 +112,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Notifications>
-                <Note class="text-sm opacity-70">
-                    "This instance does not publish notification settings yet."
-                </Note>
+                <NotificationsCard/>
             </Show>
 
             <Show when=move || section == SettingsSection::Preferences>

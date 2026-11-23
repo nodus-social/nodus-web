@@ -315,6 +315,7 @@ pub mod profile;
 mod runtime;
 pub mod seed;
 pub mod session;
+pub mod settings;
 pub mod sidebar;
 pub mod stream;
 pub mod style;
