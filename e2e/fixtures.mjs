@@ -164,6 +164,18 @@ export const FEATURES = [
   'moderation_media',
   'moderation_registrations',
   'moderation_reports',
+  // The settings-only names published after the first list: each one gates a section the
+  // shell draws only when the instance serves it. Kept here so a new name does not have to
+  // be repeated in every spec that makes a server answer widely.
+  'mutes',
+  'blocks',
+  'domain_blocks',
+  'sessions',
+  'two_factor',
+  'exports',
+  'featured_tags',
+  'notification_settings',
+  'pages',
 ]
 
 /**
@@ -270,9 +282,14 @@ export async function stubApi(
   // whether the browser went anywhere. A fulfilled request has no network leg and never
   // emits `requestfailed`; only a request no route answered reaches DNS, fails there, and
   // is reported here.
+  //
+  // A navigation aborts whatever the page still had in flight, and the browser reports that
+  // as `net::ERR_ABORTED` even when the request was stubbed. That is the page leaving, not
+  // a route going missing, so it is not evidence either way.
   page.on('requestfailed', (request) => {
     const url = request.url()
     if (new URL(url).host !== HOST) return
+    if (request.failure()?.errorText === 'net::ERR_ABORTED') return
     throw new Error(
       `request escaped the stub: ${request.method()} ${url} left the browser for ${HOST} and failed ` +
         `(${request.failure()?.errorText ?? 'no failure text'}) — no route answered it`,

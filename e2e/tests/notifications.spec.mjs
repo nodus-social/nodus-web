@@ -129,7 +129,7 @@ test('favourites on one post collapse into a single row with and 2 others', asyn
   await expect(page.locator('[data-unread-dot]')).toHaveCount(0)
 })
 
-test('an instance without the notifications API offers no door to it', async ({ page }) => {
+test('an instance without the notifications API keeps the door and says why', async ({ page }) => {
   await stubApi(page, { notifications: [] })
   await page.route('**/api/v1/notifications**', (route) =>
     route.fulfill({ status: 404, body: 'not found' }),
@@ -138,10 +138,15 @@ test('an instance without the notifications API offers no door to it', async ({ 
   await page.goto('/notifications')
   await hydrated(page)
 
+  // A failed read is not a capability answer: the rail keeps the ordinary catalogue door,
+  // the screen explains why it cannot be served, and only the bell (which needs a count)
+  // stays away.
   await expect(page.getByText('This instance does not serve notifications.')).toBeVisible()
-  await expect(page.locator('nav[aria-label="Primary navigation"]')).not.toContainText(
-    'Notifications',
-  )
+  // The shell names its navigation differently at desktop and phone widths; both keep the
+  // ordinary door, so read the link from whichever navigation this viewport drew.
+  await expect(
+    page.getByRole('navigation').getByRole('link', { name: 'Notifications' }),
+  ).toBeVisible()
   await expect(page.locator('[data-notice-door]')).toHaveCount(0)
 })
 

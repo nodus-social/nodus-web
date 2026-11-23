@@ -29,7 +29,7 @@ test('the instance offers tags, and taking one features it', async ({ page }) =>
     return route.fulfill({ headers: CORS, json: [] })
   })
   await signedIn(page)
-  await page.goto('/settings/filters')
+  await page.goto('/settings/featured-tags')
   await hydrated(page)
 
   await expect(page.locator('[data-tag-suggestions]')).toBeVisible()
@@ -37,6 +37,8 @@ test('the instance offers tags, and taking one features it', async ({ page }) =>
 
   await page.locator('[data-tag-suggestion]', { hasText: '#rust' }).click()
 
+  // Known product regression, left red on purpose: `on_added` reloads the section, which
+  // remounts `AddTag` and re-reads the suggestions, undoing the local `suggestions_forget`.
   await expect(page.locator('[data-tag-suggestion]')).toHaveCount(1)
   expect(featured).toEqual([{ name: 'rust' }])
 })
@@ -50,7 +52,7 @@ test('an instance without suggestions leaves the form as it was', async ({ page 
     route.fulfill({ headers: CORS, json: [] }),
   )
   await signedIn(page)
-  await page.goto('/settings/filters')
+  await page.goto('/settings/featured-tags')
   await hydrated(page)
 
   await expect(page.locator('[data-tag-suggestions]')).toHaveCount(0)

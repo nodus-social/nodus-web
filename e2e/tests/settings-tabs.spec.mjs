@@ -11,24 +11,25 @@ import { expect, test } from '@playwright/test'
 
 import { FEATURES, hydrated, signedIn, stubApi } from '../fixtures.mjs'
 
-/** The six sections this app gates on names the default stub does not publish. */
-const GATED = ['muted', 'blocked', 'domain-blocks', 'sessions', 'two-factor', 'export']
-
-/** Every name this app's settings strip knows how to read. */
-const SERVED = [...FEATURES, 'mutes', 'blocks', 'domain_blocks', 'sessions', 'two_factor', 'exports']
-
-/** Tabs whose gate is `None`: the shell's own forms, drawn on any server. */
-const UNGATED = [
-  'account',
-  'profile',
-  'appearance',
+/** The ten sections this app gates on a published name. */
+const GATED = [
   'notifications',
   'preferences',
   'filters',
+  'muted',
+  'blocked',
+  'domain-blocks',
   'lists',
-  'featured-tags',
-  'instance',
+  'sessions',
+  'two-factor',
+  'export',
 ]
+
+/** Every name this app's settings strip knows how to read. */
+const SERVED = FEATURES
+
+/** Tabs whose gate is `None`: the shell's own forms, drawn on any server. */
+const UNGATED = ['account', 'profile', 'appearance', 'featured-tags', 'instance']
 
 function tab(page, slug) {
   return page.locator(`a[role="tab"][href="/settings/${slug}"]`)

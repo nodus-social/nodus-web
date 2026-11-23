@@ -163,11 +163,16 @@ test('settings keep the cards a Mastodon instance can fill', async ({ page }) =>
   await open(page, '/settings')
 
   await expect(page.getByRole('heading', { name: 'Session', exact: true })).toBeVisible()
-  // The styling summary is the style editor's front door, and the editor is ours alone.
+
+  // The styling summary is the style editor's front door, and the editor is ours alone. It
+  // lives on the appearance section, so that is where its absence is worth asserting.
+  await page.goto('/settings/appearance')
+  await hydrated(page)
   await expect(page.getByRole('heading', { name: 'Session style', exact: true })).toHaveCount(0)
   await expect(page.locator('[data-edit-session-style]')).toHaveCount(0)
 
-  await page.goto('/settings/nodus')
+  // Timelines and background sync are instance-wide settings, under the instance section.
+  await page.goto('/settings/instance')
   await hydrated(page)
   await expect(page.getByRole('heading', { name: 'Background sync', exact: true })).toHaveCount(0)
   const timelines = page
@@ -187,11 +192,11 @@ test('settings keep the cards a Mastodon instance can fill', async ({ page }) =>
 test('a Nodus account keeps the recommendation and styling surfaces', async ({ page }) => {
   await stubApi(page)
   await signedIn(page)
-  await open(page, '/settings')
+  await open(page, '/settings/appearance')
 
   await expect(page.getByRole('heading', { name: 'Session style', exact: true })).toBeVisible()
 
-  await page.goto('/settings/nodus')
+  await page.goto('/settings/instance')
   await hydrated(page)
   await expect(page.getByRole('heading', { name: 'Background sync', exact: true })).toBeVisible()
   const timelines = page
