@@ -226,6 +226,7 @@ fn NoticeRow(
     let who = display_name(&account.display_name, &account.acct);
     let profile = format!("/accounts/{}", account.id);
     let avatar = nodus_ui::picture::avatar(&account.avatar);
+    let still = nodus_ui::picture::avatar_still(&account.avatar);
     let age = relative_age(&notice.created_at, clock::now_ms() as f64);
     let created_at = notice.created_at.clone();
     let verb = phrase(&notice, group.others);
@@ -247,13 +248,12 @@ fn NoticeRow(
                 <div class="flex items-center gap-2">
                     <a class="avatar" href=profile_href on:click=move |_| notifications::mark_seen(&avatar_id)>
                         <div class="w-8 rounded-full bg-base-300">
-                            <img
-                                width="40"
-                                height="40"
-                                decoding="async"
+                            <nodus_ui::picture::Picture
                                 src=avatar
-                                alt=""
-                                referrerpolicy="no-referrer"
+                                still=still
+                                width=32
+                                height=32
+                                class=""
                             />
                         </div>
                     </a>

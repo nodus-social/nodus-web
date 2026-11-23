@@ -89,6 +89,7 @@ pub fn ProfilePage(
     let bio = nodus_ui::html::body(&account.note);
     let has_bio = !bio.is_empty();
     let header = nodus_ui::picture::banner(&account.header);
+    let header_still = nodus_ui::picture::banner_still(&account.header);
     let has_header = !header.is_empty();
     let avatar = nodus_ui::picture::avatar(&account.avatar);
     let has_avatar = !avatar.is_empty();
@@ -144,11 +145,26 @@ pub fn ProfilePage(
         <crate::Screen>
             <header class="card overflow-hidden border border-base-300 bg-base-100 shadow-sm">
                 {has_header.then(|| view! {
-                    <img class="h-32 w-full object-cover" src=header alt="" referrerpolicy="no-referrer" />
+                    // The banner fills the header's width, so the layout's `w-full h-32`
+                    // owns the box; there is no intrinsic width to reserve.
+                    <picture>
+                        {header_still.map(|still| view! {
+                            <source media="(prefers-reduced-motion: reduce)" srcset=still/>
+                        })}
+                        <img
+                            class="h-32 w-full object-cover"
+                            src=header
+                            alt=""
+                            loading="eager"
+                            fetchpriority="high"
+                            decoding="async"
+                            referrerpolicy="no-referrer"
+                        />
+                    </picture>
                 })}
                 <div class="card-body gap-3 p-4">
                     <div class="flex items-start gap-3">
-                        {face(has_avatar, avatar, picture, on_avatar)}
+                        {face(has_avatar, avatar, picture, on_avatar, !has_header)}
                         <div class="min-w-0 flex-1">
                             <h1 class="truncate text-lg font-semibold">{name}</h1>
                             <p class="truncate text-sm opacity-60">{handle}</p>
@@ -193,18 +209,18 @@ fn face(
     avatar: String,
     source: StoredValue<String>,
     on_avatar: Option<Callback<String>>,
+    priority: bool,
 ) -> AnyView {
+    let still = nodus_ui::picture::avatar_still(&avatar);
     let picture = has_avatar.then(|| {
         view! {
-            <img
-                class="h-16 w-16 rounded-full object-cover"
-                width="64"
-                height="64"
-                decoding="async"
-                loading="lazy"
+            <nodus_ui::picture::Picture
                 src=avatar
-                alt=""
-                referrerpolicy="no-referrer"
+                still=still
+                width=64
+                height=64
+                class="h-16 w-16 rounded-full object-cover"
+                priority=priority
             />
         }
     });
@@ -340,25 +356,7 @@ mod tests {
 
     use super::{ProfilePage, ProfilePageProps};
 
-    fn render_profile_note(note: &str) -> String {
-        let account = Account {
-            id: "1".to_owned(),
-            acct: "alice@example.org".to_owned(),
-            display_name: "Alice".to_owned(),
-            note: note.to_owned(),
-            avatar: String::new(),
-            header: String::new(),
-            bot: false,
-            locked: false,
-            followers_count: 0,
-            following_count: 0,
-            statuses_count: 0,
-            last_status_at: None,
-            discoverable: None,
-            indexable: None,
-            noindex: None,
-            fields: Vec::new(),
-        };
+    fn render_profile(account: Account) -> String {
         Owner::new().with(|| {
             let statuses = Signal::derive(Vec::new);
             ProfilePage(ProfilePageProps {
@@ -379,6 +377,68 @@ mod tests {
             })
             .to_html()
         })
+    }
+
+    fn render_profile_note(note: &str) -> String {
+        let account = Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: note.to_owned(),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+            fields: Vec::new(),
+        };
+        render_profile(account)
+    }
+
+    #[test]
+    fn the_profile_pictures_let_the_document_choose_the_still() {
+        let mut account = Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: String::new(),
+            avatar: "https://social.test/media/1/avatar".to_owned(),
+            header: "https://social.test/media/2/header".to_owned(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+            fields: Vec::new(),
+        };
+        let html = render_profile(account.clone());
+        assert_eq!(html.matches("<picture>").count(), 2, "{html}");
+        assert!(
+            html.contains("srcset=\"https://social.test/media/2/header_static\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("srcset=\"https://social.test/media/1/avatar_static\""),
+            "{html}"
+        );
+        assert!(html.contains("width=\"64\""), "{html}");
+        // The banner comes first in the document, so it is the one the browser loads eagerly.
+        let banner = html.find("header_static").expect("no banner source");
+        let avatar = html.find("avatar_static").expect("no avatar source");
+        assert!(banner < avatar, "the banner must lead: {html}");
+        account.header = String::new();
+        let html = render_profile(account);
+        assert!(html.contains("loading=\"eager\""), "{html}");
     }
 
     #[test]

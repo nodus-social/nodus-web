@@ -144,18 +144,20 @@ fn ReadOnly(status: Status, age_of: Callback<String, String>) -> impl IntoView {
         format!("@{}", account.acct)
     };
     let avatar = nodus_ui::picture::avatar(&account.avatar);
+    let still = nodus_ui::picture::avatar_still(&account.avatar);
     let alt = account.acct.clone();
 
     view! {
         <div class="card bg-base-100 shadow-sm">
             <div class="card-body gap-2 p-3">
                 <header class="flex items-center gap-2">
-                    <img
-                        class="size-8 rounded-full bg-base-300 object-cover"
+                    <nodus_ui::picture::Picture
                         src=avatar
+                        still=still
+                        width=32
+                        height=32
+                        class="size-8 rounded-full bg-base-300 object-cover"
                         alt=alt
-                        loading="lazy"
-                        referrerpolicy="no-referrer"
                     />
                     <div class="min-w-0">
                         <p class="truncate text-sm font-semibold">{name}</p>

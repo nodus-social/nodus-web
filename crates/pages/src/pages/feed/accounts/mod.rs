@@ -20,18 +20,20 @@ pub fn Identity(
     avatar_url: String,
     followers: String,
 ) -> impl IntoView {
+    // The account payload carries no pixel size, so the 40px box below is the only
+    // dimension the layout has.
+    let still = nodus_ui::picture::avatar_still(&avatar_url);
     view! {
         <div class="flex items-start justify-between gap-3">
             <div class="flex min-w-0 items-center gap-3">
                 <div class="avatar">
                     <div class="w-10 rounded-full bg-base-300">
-                        <img
-                            width="40"
-                            height="40"
-                            decoding="async"
+                        <nodus_ui::picture::Picture
                             src=nodus_ui::picture::avatar(&avatar_url)
-                            alt=""
-                            referrerpolicy="no-referrer"
+                            still=still
+                            width=40
+                            height=40
+                            class=""
                         />
                     </div>
                 </div>
@@ -384,7 +386,26 @@ fn follow_settings(event: &leptos::ev::MouseEvent, on_settings: Option<Callback<
 mod tests {
     use leptos::prelude::{Owner, RenderHtml as _};
 
-    use super::{EmptyPeople, EmptyPeopleProps};
+    use super::{EmptyPeople, EmptyPeopleProps, Identity, IdentityProps};
+
+    #[test]
+    fn identity_draws_the_avatar_through_the_picture_element() {
+        let html = Owner::new().with(|| {
+            Identity(IdentityProps {
+                display_name: "Alice".to_owned(),
+                acct: "alice@example.org".to_owned(),
+                avatar_url: "https://social.test/media/1/avatar".to_owned(),
+                followers: "0".to_owned(),
+            })
+            .to_html()
+        });
+        assert!(html.contains("<picture>"), "{html}");
+        assert!(
+            html.contains("srcset=\"https://social.test/media/1/avatar_static\""),
+            "{html}"
+        );
+        assert!(html.contains("width=\"40\""), "{html}");
+    }
 
     #[test]
     fn empty_people_links_to_nodus_settings() {

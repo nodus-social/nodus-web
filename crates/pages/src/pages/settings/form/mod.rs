@@ -94,17 +94,36 @@ pub fn ProfileImages(
             .collect_view()
     };
 
-    let avatar_image = move || {
+    let avatar_image = move |priority: bool| {
         view! {
             <Show
                 when=move || !avatar.get().is_empty()
                 fallback=|| view! { <div class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-300"></div> }
             >
-                <img
-                    class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-200 object-cover"
-                    alt="Profile picture"
-                    src=move || nodus_ui::picture::avatar(&avatar.get())
-                />
+                <picture>
+                    {move || {
+                        nodus_ui::picture::avatar_still(&avatar.get())
+                            .map(|still| {
+                                view! {
+                                    <source
+                                        media="(prefers-reduced-motion: reduce)"
+                                        srcset=still
+                                    />
+                                }
+                            })
+                    }}
+                    <img
+                        class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-200 object-cover"
+                        width="64"
+                        height="64"
+                        alt="Profile picture"
+                        loading=if priority { "eager" } else { "lazy" }
+                        fetchpriority=if priority { "high" } else { "auto" }
+                        decoding="async"
+                        referrerpolicy="no-referrer"
+                        src=move || nodus_ui::picture::avatar(&avatar.get())
+                    />
+                </picture>
             </Show>
         }
     };
@@ -115,16 +134,35 @@ pub fn ProfileImages(
             // that failed to load, which is a different message from "there is none".
             <Show when=move || !header.get().is_empty()>
                 <div class="relative">
-                    <img
-                        class="h-32 w-full rounded-box border border-base-300 bg-base-200 object-cover"
-                        alt="Banner"
-                        src=move || nodus_ui::picture::banner(&header.get())
-                    />
-                    <div class="absolute -bottom-8 left-4">{avatar_image()}</div>
+                    // The banner fills the card's width, so its height is the only
+                    // dimension the layout fixes; there is no width to reserve.
+                    <picture>
+                        {move || {
+                            nodus_ui::picture::banner_still(&header.get())
+                                .map(|still| {
+                                    view! {
+                                        <source
+                                            media="(prefers-reduced-motion: reduce)"
+                                            srcset=still
+                                        />
+                                    }
+                                })
+                        }}
+                        <img
+                            class="h-32 w-full rounded-box border border-base-300 bg-base-200 object-cover"
+                            alt="Banner"
+                            loading="eager"
+                            fetchpriority="high"
+                            decoding="async"
+                            referrerpolicy="no-referrer"
+                            src=move || nodus_ui::picture::banner(&header.get())
+                        />
+                    </picture>
+                    <div class="absolute -bottom-8 left-4">{avatar_image(false)}</div>
                 </div>
             </Show>
             <Show when=move || header.get().is_empty()>
-                <div class="flex">{avatar_image()}</div>
+                <div class="flex">{avatar_image(true)}</div>
             </Show>
             <div class="flex flex-wrap gap-2">{buttons}</div>
             <Show when=move || progress.get().is_some()>
@@ -158,3 +196,34 @@ pub use fields::{
 pub use filter::{FeaturedTagField, FilterFields};
 pub use metadata::MetadataFields;
 pub use profile::ProfileFields;
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::{Owner, RenderHtml as _, Signal};
+
+    use super::{ProfileImages, ProfileImagesProps};
+
+    #[test]
+    fn profile_pictures_let_the_document_choose_the_still() {
+        let html = Owner::new().with(|| {
+            ProfileImages(ProfileImagesProps {
+                avatar: Signal::derive(|| "https://social.test/media/1/avatar".to_owned()),
+                header: Signal::derive(|| "https://social.test/media/2/header".to_owned()),
+                busy: Signal::derive(|| false),
+                progress: Signal::derive(|| None),
+                message: Signal::derive(|| None),
+                picker: None,
+            })
+            .to_html()
+        });
+        assert_eq!(html.matches("<picture>").count(), 2, "{html}");
+        assert!(
+            html.contains("srcset=\"https://social.test/media/1/avatar_static\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("srcset=\"https://social.test/media/2/header_static\""),
+            "{html}"
+        );
+    }
+}

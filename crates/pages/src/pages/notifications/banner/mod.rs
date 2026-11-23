@@ -52,14 +52,19 @@ pub fn RequestBanner(
                                 let href =
                                     nodus_web::shared::handles::profile_path_for(&account.acct, None);
                                 let open_id = account.id.clone();
+                                // The account payload carries no pixel size; the 32px box
+                                // below is the layout's own dimension.
+                                let still = nodus_ui::picture::avatar_still(&account.avatar);
                                 view! {
                                     <li class="flex items-center gap-2">
                                         <a class="avatar" href=href.clone()>
                                             <div class="w-8 rounded-full bg-base-300">
-                                                <img
+                                                <nodus_ui::picture::Picture
                                                     src=nodus_ui::picture::avatar(&account.avatar)
-                                                    alt=""
-                                                    referrerpolicy="no-referrer"
+                                                    still=still
+                                                    width=32
+                                                    height=32
+                                                    class=""
                                                 />
                                             </div>
                                         </a>

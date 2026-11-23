@@ -54,10 +54,12 @@ pub fn Results(
                         >
                             <div class="avatar">
                                 <div class="w-10 rounded-full bg-base-300">
-                                    <img
+                                    <nodus_ui::picture::Picture
                                         src=nodus_ui::picture::avatar(&account.avatar)
-                                        alt=""
-                                        referrerpolicy="no-referrer"
+                                        still=nodus_ui::picture::avatar_still(&account.avatar)
+                                        width=40
+                                        height=40
+                                        class=""
                                     />
                                 </div>
                             </div>
