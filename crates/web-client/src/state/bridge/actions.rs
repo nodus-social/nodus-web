@@ -16,8 +16,8 @@ use nodus_client_core::actions::{
 };
 use nodus_client_core::model::{
     Account, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft, HistoryEntry,
-    Language, List, LocalId, MediaAttachment, Poll, PollDraft, Preferences, ProfileUpdate,
-    Relationship, SearchResults, Status, Tag,
+    Language, List, LocalId, MediaAttachment, Poll, PollDraft, PreferenceRefusal, Preferences,
+    PreferencesPatch, ProfileUpdate, Relationship, SearchResults, Status, Tag,
 };
 use nodus_client_sdk::protocol::Protocol;
 use nodus_mastodon::BrowserInstance;
@@ -569,6 +569,43 @@ pub async fn mute(id: &str, on: bool) -> Result<Relationship, String> {
 pub async fn preferences() -> Result<Preferences, String> {
     let transport = transport()?;
     call(SettingsActions::preferences(&transport)).await
+}
+
+/// Why a preferences write did not land.
+///
+/// A refusal keeps its key and its allowed set: the page paints the instance's sentence
+/// under the row that asked, so flattening the refusal to a string at the bridge would
+/// throw away the only part the row needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreferenceSaveError {
+    Refused(PreferenceRefusal),
+    Failed(String),
+}
+
+impl PreferenceSaveError {
+    #[must_use]
+    pub fn sentence(&self) -> String {
+        match self {
+            Self::Refused(refusal) => refusal.to_string(),
+            Self::Failed(message) => message.clone(),
+        }
+    }
+}
+
+/// Saves a partial preferences body and answers with the whole map the instance now holds.
+///
+pub async fn update_preferences(
+    patch: &PreferencesPatch,
+) -> Result<Preferences, PreferenceSaveError> {
+    let transport = transport().map_err(PreferenceSaveError::Failed)?;
+    SettingsActions::update_preferences(&transport, patch)
+        .await
+        .map_err(|error| match error {
+            nodus_client_core::Error::PreferenceRefused(refusal) => {
+                PreferenceSaveError::Refused(refusal)
+            }
+            other => PreferenceSaveError::Failed(other.to_string()),
+        })
 }
 
 /// Searches accounts, statuses and hashtags; `resolve` lets the instance fetch remote

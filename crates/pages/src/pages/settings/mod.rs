@@ -18,5 +18,6 @@ pub mod lists;
 pub mod nav;
 pub mod notifications;
 pub mod page;
+pub mod preferences;
 pub mod profile;
 pub mod sync;
