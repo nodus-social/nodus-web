@@ -27,10 +27,11 @@ pub(crate) fn reader() -> nodus_pages::profile::ProfileBanners {
 /// A missing capability, a never-published account (404), a transport failure and a body
 /// this build cannot read all end here: a profile without banners is a normal profile, so
 /// none of them deserves a request of its own or a sentence on screen.
+///
+/// The capability question is the caller's, not this read's: `ProfilePage` gates on the
+/// reactive answer and only calls this when the instance advertises `style_public`. Asking
+/// the feature signal here would race the probe and read a stale "no" on the first effect.
 async fn read(account_id: &str) -> Option<PublishedStyle> {
-    if !super::feature("style_public").get_untracked() {
-        return None;
-    }
     let transport = super::instance_transport()?;
     let url = transport
         .url_segments(&["api", "v1", "accounts", account_id, "style_public"])

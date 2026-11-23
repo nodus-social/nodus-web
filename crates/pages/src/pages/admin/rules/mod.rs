@@ -195,7 +195,7 @@ pub fn RulesPage(
                                                         class="btn btn-ghost btn-xs"
                                                         aria-label=edit_label.get_value()
                                                         disabled=move || on_edit.is_none() || !write.get()
-                                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
+                                                        title=move || if write.get() { Default::default() } else { crate::props::NO_WRITE }
                                                         on:click=move |_| {
                                                             if let Some(on_edit) = on_edit {
                                                                 on_edit.run(stored.get_value());
@@ -208,7 +208,7 @@ pub fn RulesPage(
                                                         class="btn btn-ghost btn-xs text-error"
                                                         aria-label=ask_label.get_value()
                                                         disabled=move || on_ask_delete.is_none() || !write.get()
-                                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
+                                                        title=move || if write.get() { Default::default() } else { crate::props::NO_WRITE }
                                                         on:click=move |_| {
                                                             if let Some(on_ask_delete) = on_ask_delete {
                                                                 on_ask_delete.run(id.get_value());

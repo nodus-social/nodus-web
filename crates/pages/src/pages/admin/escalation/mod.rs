@@ -416,7 +416,7 @@ pub fn EscalationPage(
                                         class="btn btn-ghost btn-xs text-error"
                                         data-testid="escalation-remove"
                                         disabled=move || busy.get() || !write.get()
-                                        title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                                        title=move || if write.get() { Default::default() } else { NO_WRITE }
                                         on:click=move |_| remove_step(index)
                                     >
                                         "Remove"
@@ -440,7 +440,7 @@ pub fn EscalationPage(
                         class="btn btn-primary btn-xs"
                         data-testid="escalation-save"
                         disabled=move || busy.get() || !write.get() || on_save.is_none()
-                        title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                        title=move || if write.get() { Default::default() } else { NO_WRITE }
                         on:click=move |_| save.run(())
                     >
                         "Save the ladder"

@@ -745,7 +745,7 @@ fn detail_panel(
                     class="toggle toggle-sm"
                     prop:checked=images
                     disabled=move || on_lossless.is_none() || !administrator.get()
-                    title=move || if !administrator.get() { crate::props::NO_ADMIN_ROLE } else { Default::default() }
+                    title=move || if administrator.get() { Default::default() } else { crate::props::NO_ADMIN_ROLE }
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);
@@ -761,7 +761,7 @@ fn detail_panel(
                     class="toggle toggle-sm"
                     prop:checked=videos
                     disabled=move || on_lossless.is_none() || !administrator.get()
-                    title=move || if !administrator.get() { crate::props::NO_ADMIN_ROLE } else { Default::default() }
+                    title=move || if administrator.get() { Default::default() } else { crate::props::NO_ADMIN_ROLE }
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);

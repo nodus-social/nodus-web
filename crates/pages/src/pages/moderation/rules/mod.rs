@@ -305,7 +305,7 @@ pub fn RulesPage(
                                                         <button
                                                             class="btn btn-ghost btn-xs"
                                                             disabled=move || busy.get() || !write.get()
-                                                            title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                                                            title=move || if write.get() { Default::default() } else { NO_WRITE }
                                                             on:click={
                                                                 let stored = stored;
                                                                 move |_| {
@@ -320,7 +320,7 @@ pub fn RulesPage(
                                                         <button
                                                             class="btn btn-ghost btn-xs text-error"
                                                             disabled=move || busy.get() || !write.get()
-                                                            title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                                                            title=move || if write.get() { Default::default() } else { NO_WRITE }
                                                             on:click={
                                                                 let id = id.clone();
                                                                 move |_| set_confirming.set(Some(id.clone()))

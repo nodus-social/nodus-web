@@ -278,7 +278,7 @@ pub fn DeliveriesPage(
                     class="btn btn-sm btn-outline"
                     data-testid="delivery-retry-failed"
                     disabled=move || on_retry_failed.is_none() || busy.get() || !write.get()
-                    title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                    title=move || if write.get() { Default::default() } else { NO_WRITE }
                     on:click=move |_| {
                         if let Some(on_retry_failed) = on_retry_failed {
                             on_retry_failed.run(());
@@ -352,7 +352,7 @@ pub fn DeliveriesPage(
                                                         class="btn btn-ghost btn-xs"
                                                         data-testid="delivery-retry"
                                                         disabled=move || on_retry.is_none() || busy.get() || !write.get()
-                                                        title=move || if !write.get() { NO_WRITE } else { Default::default() }
+                                                        title=move || if write.get() { Default::default() } else { NO_WRITE }
                                                         on:click=move |_| set_confirming.set(Some(id.get_value()))
                                                     >
                                                         "Retry"
