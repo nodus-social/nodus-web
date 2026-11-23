@@ -597,7 +597,7 @@ async fn read_entity_with<R: EntityReads>(
                 style,
             ))
         } else {
-            read_profile_pre_pages(reads, assets, acct, staff, &id, style).await
+            read_entity_pre_pages(reads, assets, acct, staff, PrePages::Account(&id), style).await
         };
     }
     let id = path.strip_prefix("/status/")?;
@@ -619,50 +619,51 @@ async fn read_entity_with<R: EntityReads>(
             style,
         ));
     }
-    read_thread_pre_pages(reads, assets, acct, staff, id, style).await
+    read_entity_pre_pages(reads, assets, acct, staff, PrePages::Status(id), style).await
+}
+
+/// Which entity an instance without `pages` has to assemble.
+enum PrePages<'a> {
+    Account(&'a str),
+    Status(&'a str),
 }
 
 /// The pre-`pages` path: today's reads, kept for Mastodon, Misskey and older nodus.
 ///
-/// This is the only place that assembles a profile or a thread out of more than one call,
-/// and it exists solely for instances that do not advertise `pages`; do not grow it into a
-/// second hydrator.
-async fn read_profile_pre_pages<R: EntityReads>(
+/// This is the one adapter for instances that do not advertise `pages`; it is the only
+/// place that assembles a profile or a thread out of more than one call. Do not grow it
+/// into a second hydrator.
+async fn read_entity_pre_pages<R: EntityReads>(
     reads: &R,
     assets: &document::Assets,
     acct: &str,
     staff: bool,
-    id: &str,
+    entity: PrePages<'_>,
     style: Option<&SessionStyle>,
 ) -> Option<String> {
-    let account = reads.account(id).await.ok()?;
-    let (statuses, cursor) = reads.account_statuses(id, PAGE).await.ok()?;
-    Some(render_account_with_style(
-        assets,
-        acct,
-        staff,
-        &account,
-        None,
-        &statuses,
-        cursor.as_deref(),
-        style,
-    ))
-}
-
-/// The pre-`pages` thread path, beside [`read_profile_pre_pages`].
-async fn read_thread_pre_pages<R: EntityReads>(
-    reads: &R,
-    assets: &document::Assets,
-    acct: &str,
-    staff: bool,
-    id: &str,
-    style: Option<&SessionStyle>,
-) -> Option<String> {
-    let status = reads.status(id).await.ok()?;
-    let context = reads.context(id).await.ok()?;
-    Some(document::thread_page_with_style(
-        assets, acct, staff, &status, &context, style,
-    ))
+    match entity {
+        PrePages::Account(id) => {
+            let account = reads.account(id).await.ok()?;
+            let (statuses, cursor) = reads.account_statuses(id, PAGE).await.ok()?;
+            Some(render_account_with_style(
+                assets,
+                acct,
+                staff,
+                &account,
+                None,
+                &statuses,
+                cursor.as_deref(),
+                style,
+            ))
+        }
+        PrePages::Status(id) => {
+            let status = reads.status(id).await.ok()?;
+            let context = reads.context(id).await.ok()?;
+            Some(document::thread_page_with_style(
+                assets, acct, staff, &status, &context, style,
+            ))
+        }
+    }
 }
 
 /// Favourites or bookmarks: one screen, two shelves, the same shape.
@@ -1034,7 +1035,6 @@ mod painting {
         );
     }
 
-
     fn test_assets() -> crate::document::Assets {
         crate::document::Assets {
             script: "/nodus-web.js".to_owned(),
@@ -1141,10 +1141,7 @@ mod painting {
             Ok(nodus_client_core::model::SearchResults::default())
         }
 
-        async fn account(
-            &self,
-            _id: &str,
-        ) -> Result<nodus_client_core::model::Account, String> {
+        async fn account(&self, _id: &str) -> Result<nodus_client_core::model::Account, String> {
             self.hit();
             Ok(self.account.clone())
         }
@@ -1158,27 +1155,20 @@ mod painting {
             Ok((self.statuses.clone(), None))
         }
 
-        async fn status(
-            &self,
-            _id: &str,
-        ) -> Result<nodus_client_core::model::Status, String> {
+        async fn status(&self, _id: &str) -> Result<nodus_client_core::model::Status, String> {
             self.hit();
-            self.statuses.first().cloned().ok_or_else(|| "none".to_owned())
+            self.statuses
+                .first()
+                .cloned()
+                .ok_or_else(|| "none".to_owned())
         }
 
-        async fn context(
-            &self,
-            _id: &str,
-        ) -> Result<nodus_client_core::model::Context, String> {
+        async fn context(&self, _id: &str) -> Result<nodus_client_core::model::Context, String> {
             self.hit();
             Ok(self.context.clone())
         }
 
-        async fn profile_page(
-            &self,
-            _id: &str,
-            _limit: u16,
-        ) -> Result<super::ProfilePage, String> {
+        async fn profile_page(&self, _id: &str, _limit: u16) -> Result<super::ProfilePage, String> {
             self.hit();
             Ok(super::ProfilePage {
                 account: self.account.clone(),
@@ -1193,7 +1183,11 @@ mod painting {
 
         async fn status_page(&self, _id: &str) -> Result<super::StatusPage, String> {
             self.hit();
-            let status = self.statuses.first().cloned().ok_or_else(|| "none".to_owned())?;
+            let status = self
+                .statuses
+                .first()
+                .cloned()
+                .ok_or_else(|| "none".to_owned())?;
             Ok(super::StatusPage {
                 status,
                 ancestors: self.context.ancestors.clone(),
@@ -1291,7 +1285,11 @@ mod painting {
         .await
         .expect("the pre-pages profile paints");
 
-        assert_eq!(reads.count(), 2, "the fallback still reads account and page");
+        assert_eq!(
+            reads.count(),
+            2,
+            "the fallback still reads account and page"
+        );
         assert!(html.contains("Alice Example"), "{html}");
         assert!(html.contains("First post body"), "{html}");
     }
@@ -1300,7 +1298,8 @@ mod painting {
     fn a_public_profile_paints_no_island_and_no_relationship() {
         let alice = test_account("1", "Alice Example", "Writer of things");
         let first = test_status("10", "First post body", &alice);
-        let html = super::render_public_account(&test_assets(), "pages.example", "1", alice, vec![first]);
+        let html =
+            super::render_public_account(&test_assets(), "pages.example", "1", alice, vec![first]);
 
         assert!(!html.contains("nodus-page"), "{html}");
         assert!(!html.contains("\"relationship\""), "{html}");
