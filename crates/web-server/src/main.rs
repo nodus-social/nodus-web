@@ -813,6 +813,7 @@ async fn shell(State(app): State<Arc<App>>, headers: HeaderMap, uri: Uri) -> Res
             read_page_with_style(
                 &client,
                 &assets,
+                &session.host,
                 &session.acct,
                 staff,
                 path,

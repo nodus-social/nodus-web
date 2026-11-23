@@ -142,17 +142,19 @@ pub(crate) fn render_thread_with_style(
 pub(crate) async fn read_page(
     client: &Client,
     assets: &document::Assets,
+    session_host: &str,
     acct: &str,
     staff: bool,
     path: &str,
     query: Option<&str>,
 ) -> Option<String> {
-    read_page_with_style(client, assets, acct, staff, path, query, None).await
+    read_page_with_style(client, assets, session_host, acct, staff, path, query, None).await
 }
 
 pub(crate) async fn read_page_with_style(
     client: &Client,
     assets: &document::Assets,
+    session_host: &str,
     acct: &str,
     staff: bool,
     path: &str,
@@ -160,7 +162,7 @@ pub(crate) async fn read_page_with_style(
     style: Option<&SessionStyle>,
 ) -> Option<String> {
     let Some(screen) = Screen::of_path(path) else {
-        return read_entity(client, assets, acct, staff, path, style).await;
+        return read_entity(client, assets, session_host, acct, staff, path, style).await;
     };
 
     let page = match screen.kind {
@@ -285,7 +287,7 @@ pub(crate) async fn read_page_with_style(
     if page.is_some() {
         return page;
     }
-    read_entity(client, assets, acct, staff, path, style).await
+    read_entity(client, assets, session_host, acct, staff, path, style).await
 }
 
 /// Before the routes with a name in them: one account, or one thread.
@@ -535,12 +537,13 @@ impl EntityReads for Client {
 pub(crate) async fn read_entity(
     client: &Client,
     assets: &document::Assets,
+    session_host: &str,
     acct: &str,
     staff: bool,
     path: &str,
     style: Option<&SessionStyle>,
 ) -> Option<String> {
-    read_entity_with(client, assets, acct, staff, path, style).await
+    read_entity_with(client, assets, session_host, acct, staff, path, style).await
 }
 
 /// One account or one thread, read once when the instance hydrates pages itself.
@@ -551,12 +554,17 @@ pub(crate) async fn read_entity(
 async fn read_entity_with<R: EntityReads>(
     reads: &R,
     assets: &document::Assets,
+    session_host: &str,
     acct: &str,
     staff: bool,
     path: &str,
     style: Option<&SessionStyle>,
 ) -> Option<String> {
-    let instance_host = acct.split_once('@').map_or("", |(_, host)| host);
+    // The host the document is painted for is the host the session is signed into: a
+    // local acct has no `@host`, and falling back to `""` would gate every local reader
+    // out of the pages endpoints. A remote handle keeps its own host, because that is the
+    // instance that knows the account.
+    let instance_host = acct.split_once('@').map_or(session_host, |(_, host)| host);
     let pages = crate::capabilities::serves_pages(instance_host);
     if let Some(rest) = path.strip_prefix("/accounts/") {
         if rest.is_empty() {
@@ -1279,6 +1287,7 @@ mod painting {
         let html = super::read_entity_with(
             &reads,
             &test_assets(),
+            "pages.example",
             "viewer@pages.example",
             false,
             "/accounts/1",
@@ -1312,6 +1321,7 @@ mod painting {
         let html = super::read_entity_with(
             &reads,
             &test_assets(),
+            "pages.example",
             "viewer@pages.example",
             false,
             "/accounts/pages.example/alice",
@@ -1347,6 +1357,7 @@ mod painting {
         let html = super::read_entity_with(
             &reads,
             &test_assets(),
+            "legacy.example",
             "viewer@legacy.example",
             false,
             "/accounts/legacy.example/alice",
@@ -1381,6 +1392,7 @@ mod painting {
         let pages_miss = super::read_entity_with(
             &pages,
             &test_assets(),
+            "pages.example",
             "viewer@pages.example",
             false,
             "/accounts/pages.example/nobody",
@@ -1393,6 +1405,7 @@ mod painting {
         let lookup_miss = super::read_entity_with(
             &legacy,
             &test_assets(),
+            "legacy.example",
             "viewer@legacy.example",
             false,
             "/accounts/legacy.example/nobody",
@@ -1431,6 +1444,7 @@ mod painting {
         let html = super::read_entity_with(
             &reads,
             &test_assets(),
+            "thread.example",
             "viewer@thread.example",
             false,
             "/status/10",
@@ -1453,6 +1467,7 @@ mod painting {
         let html = super::read_entity_with(
             &reads,
             &test_assets(),
+            "legacy.example",
             "viewer@legacy.example",
             false,
             "/accounts/1",
@@ -1620,5 +1635,89 @@ mod painting {
             serde_json::from_str(conv_json).expect("valid conversations island json");
         assert_eq!(conv_island["kind"], "conversations");
         assert_eq!(conv_island["cursor"], "conv-next-77");
+    }
+
+    /// The host the document is painted for is the session's, so a local acct (`"ada"`,
+    /// no `@host`) still reaches the pages endpoints of the instance it is signed into.
+    #[tokio::test]
+    async fn a_local_session_paints_with_its_own_instance_host() {
+        crate::capabilities::remember_for_test(
+            "local-session.test",
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
+        );
+        let mut reads = CountingReads::new(test_account("1", "Ada", "Local"), Vec::new());
+        reads.relationship = Some(nodus_client_core::model::Relationship {
+            id: nodus_client_core::model::LocalId("viewer".to_owned()),
+            following: true,
+            requested: false,
+            followed_by: false,
+            blocking: false,
+            blocked_by: false,
+            muting: false,
+            muting_notifications: false,
+            domain_blocking: false,
+            endorsed: false,
+        });
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "local-session.test",
+            "ada",
+            false,
+            "/accounts/1",
+            None,
+        )
+        .await
+        .expect("a local reader still gets the pages profile");
+
+        assert_eq!(reads.page_reads.get(), 1, "the session's host serves pages");
+        assert_eq!(
+            reads.lookups.get(),
+            0,
+            "no pre-pages lookup for a local acct"
+        );
+        assert!(html.contains("Ada"), "{html}");
+        let (_, after) = html
+            .split_once("<script id=\"nodus-page\" type=\"application/json\">")
+            .expect("the profile document carries an island");
+        let (island, _) = after.split_once("</script>").expect("closing script");
+        let island: serde_json::Value = serde_json::from_str(island).expect("valid island json");
+        assert_eq!(island["kind"], "account");
+        assert_eq!(
+            island["relationship"]["following"], true,
+            "a local session's profile island carries the relationship it read"
+        );
+    }
+
+    /// A remote handle names its own instance, which is the one that knows the account;
+    /// the session's host must not override it.
+    #[tokio::test]
+    async fn a_remote_handle_paints_with_the_handle_host() {
+        crate::capabilities::remember_for_test(
+            "remote-handle.test",
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
+        );
+        let reads = CountingReads::new(test_account("1", "Alice", "Remote"), Vec::new());
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "local-session.test",
+            "alice@remote-handle.test",
+            false,
+            "/accounts/1",
+            None,
+        )
+        .await
+        .expect("the remote handle's instance serves pages");
+
+        assert_eq!(reads.page_reads.get(), 1, "the handle's host serves pages");
+        assert_eq!(reads.lookups.get(), 0, "the session's host did not gate it");
+        assert!(html.contains("Alice"), "{html}");
     }
 }
