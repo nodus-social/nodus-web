@@ -267,7 +267,7 @@ pub fn EscalationPage(
             }
         });
     };
-    let save = Callback::new(move |_| {
+    let save = Callback::new(move |()| {
         if let Some(on_save) = on_save {
             on_save.run(draft.get_untracked());
         }
@@ -416,7 +416,7 @@ pub fn EscalationPage(
                                         class="btn btn-ghost btn-xs text-error"
                                         data-testid="escalation-remove"
                                         disabled=move || busy.get() || !write.get()
-                                        title=move || (!write.get()).then_some(NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { NO_WRITE } else { Default::default() }
                                         on:click=move |_| remove_step(index)
                                     >
                                         "Remove"
@@ -440,7 +440,7 @@ pub fn EscalationPage(
                         class="btn btn-primary btn-xs"
                         data-testid="escalation-save"
                         disabled=move || busy.get() || !write.get() || on_save.is_none()
-                        title=move || (!write.get()).then_some(NO_WRITE).unwrap_or_default()
+                        title=move || if !write.get() { NO_WRITE } else { Default::default() }
                         on:click=move |_| save.run(())
                     >
                         "Save the ladder"

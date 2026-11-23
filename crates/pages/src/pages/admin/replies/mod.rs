@@ -107,7 +107,7 @@ pub fn RepliesPage(
                                                     <button
                                                         class="btn btn-ghost btn-xs"
                                                         disabled=move || on_edit.is_none() || !write.get()
-                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                                         on:click=move |_| {
                                                             if let Some(on_edit) = on_edit {
                                                                 on_edit.run(stored.get_value());
@@ -119,7 +119,7 @@ pub fn RepliesPage(
                                                     <button
                                                         class="btn btn-ghost btn-xs text-error"
                                                         disabled=move || on_delete.is_none() || !write.get()
-                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                                         on:click=move |_| {
                                                             if let Some(on_delete) = on_delete {
                                                                 on_delete.run(id.get_value());

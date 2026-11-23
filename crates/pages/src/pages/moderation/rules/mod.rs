@@ -197,7 +197,7 @@ pub fn RulesPage(
         })
     };
 
-    let submit_new = move |_| {
+    let submit_new = move |()| {
         let draft = draft.get_untracked();
         if draft.name.trim().is_empty() || draft.pattern.trim().is_empty() {
             // The instance says the same thing, but saying it here saves a round trip and
@@ -305,7 +305,7 @@ pub fn RulesPage(
                                                         <button
                                                             class="btn btn-ghost btn-xs"
                                                             disabled=move || busy.get() || !write.get()
-                                                            title=move || (!write.get()).then_some(NO_WRITE).unwrap_or_default()
+                                                            title=move || if !write.get() { NO_WRITE } else { Default::default() }
                                                             on:click={
                                                                 let stored = stored;
                                                                 move |_| {
@@ -320,7 +320,7 @@ pub fn RulesPage(
                                                         <button
                                                             class="btn btn-ghost btn-xs text-error"
                                                             disabled=move || busy.get() || !write.get()
-                                                            title=move || (!write.get()).then_some(NO_WRITE).unwrap_or_default()
+                                                            title=move || if !write.get() { NO_WRITE } else { Default::default() }
                                                             on:click={
                                                                 let id = id.clone();
                                                                 move |_| set_confirming.set(Some(id.clone()))
@@ -333,7 +333,7 @@ pub fn RulesPage(
                                                 <Show when=move || confirming_here.get()>
                                                     <div class="mt-2 rounded-box bg-base-200 p-2" data-testid="delete-confirm">
                                                         <p class="text-sm">
-                                                            {format!("Delete “{}”? What it caught stays on record, but the rule stops guarding the instance.", delete_name)}
+                                                            {format!("Delete “{delete_name}”? What it caught stays on record, but the rule stops guarding the instance.")}
                                                         </p>
                                                         <div class="mt-1 flex gap-2">
                                                             <button
@@ -379,7 +379,7 @@ pub fn RulesPage(
                                             })
                                             on_submit={
                                                 let id = id.get_value();
-                                                Callback::new(move |_| {
+                                                Callback::new(move |()| {
                                                     let draft = edit_draft.get_untracked();
                                                     if draft.name.trim().is_empty() || draft.pattern.trim().is_empty() {
                                                         return;
@@ -393,7 +393,7 @@ pub fn RulesPage(
                                                     set_editing.set(None);
                                                 })
                                             }
-                                            on_cancel=Callback::new(move |_| set_editing.set(None))
+                                            on_cancel=Callback::new(move |()| set_editing.set(None))
                                         />
                                     </Show>
                                     <Show when=move || sampling_here.get()>
@@ -451,7 +451,7 @@ pub fn RulesPage(
                     on_enabled=Callback::new(move |value: bool| {
                         set_draft.update(|draft| draft.enabled = value);
                     })
-                    on_submit=Callback::new(move |_| submit_new(()))
+                    on_submit=Callback::new(move |()| submit_new(()))
                 />
             </Panel>
         </div>

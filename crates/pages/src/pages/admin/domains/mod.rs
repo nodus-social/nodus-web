@@ -68,7 +68,7 @@ pub fn DomainsPage(
                             <button
                                 class="btn btn-ghost btn-xs ml-auto"
                                 disabled=move || on_withdraw.is_none() || !write.get()
-                                title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                 on:click=move |_| {
                                     if let Some(on_withdraw) = on_withdraw {
                                         on_withdraw.run(target.get_value());
@@ -110,7 +110,7 @@ pub fn DomainsPage(
                 <button
                     class="btn btn-ghost btn-sm"
                     disabled=move || busy.get() || on_allow.is_none() || !write.get()
-                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                    title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                 >
                     "Allow"
                 </button>
@@ -252,7 +252,7 @@ pub fn RemoteBlocksPage(
                                                     <button
                                                         class="btn btn-ghost btn-xs"
                                                         disabled=move || on_ask.is_none() || !write.get()
-                                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                                         on:click=move |_| {
                                                             if let Some(on_ask) = on_ask {
                                                                 on_ask.run(host.get_value());
@@ -476,7 +476,7 @@ pub fn BlockListPage(
                                     <button
                                         class="btn btn-primary btn-sm mt-3"
                                         disabled=move || applying.get() || on_apply.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:click=move |_| {
                                             if let Some(on_apply) = on_apply {
                                                 on_apply.run(());
@@ -625,7 +625,7 @@ pub fn BlockSubscriptionsPage(
                                                             || on_sync.is_none()
                                                             || !write.get()
                                                     }
-                                                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                    title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                                     on:click=move |_| {
                                                         if let Some(on_sync) = on_sync {
                                                             on_sync.run(id.get_value());
@@ -643,7 +643,7 @@ pub fn BlockSubscriptionsPage(
                                                 <button
                                                     class="btn btn-ghost btn-xs"
                                                     disabled=move || busy.get() || on_remove.is_none() || !write.get()
-                                                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                                    title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                                     on:click=move |_| {
                                                         if let Some(on_remove) = on_remove {
                                                             on_remove.run(id.get_value());
@@ -702,7 +702,7 @@ pub fn BlockSubscriptionsPage(
                 <button
                     class="btn btn-ghost btn-sm"
                     disabled=move || busy.get() || on_add.is_none() || !write.get()
-                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                    title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                 >
                     "Follow list"
                 </button>

@@ -745,7 +745,7 @@ fn detail_panel(
                     class="toggle toggle-sm"
                     prop:checked=images
                     disabled=move || on_lossless.is_none() || !administrator.get()
-                    title=move || (!administrator.get()).then_some(crate::props::NO_ADMIN_ROLE).unwrap_or_default()
+                    title=move || if !administrator.get() { crate::props::NO_ADMIN_ROLE } else { Default::default() }
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);
@@ -761,7 +761,7 @@ fn detail_panel(
                     class="toggle toggle-sm"
                     prop:checked=videos
                     disabled=move || on_lossless.is_none() || !administrator.get()
-                    title=move || (!administrator.get()).then_some(crate::props::NO_ADMIN_ROLE).unwrap_or_default()
+                    title=move || if !administrator.get() { crate::props::NO_ADMIN_ROLE } else { Default::default() }
                     on:change=move |event| {
                         if let Some(on_lossless) = on_lossless {
                             let keep = event_target_checked(&event);
@@ -924,9 +924,7 @@ fn role_cell(
     let current = Signal::derive(move || {
         facts
             .get()
-            .get(&id.get_value())
-            .map(|row| row.role.clone())
-            .unwrap_or_else(|| "none".to_owned())
+            .get(&id.get_value()).map_or_else(|| "none".to_owned(), |row| row.role.clone())
     });
     view! {
         <span class="text-xs opacity-70" data-testid="account-role">

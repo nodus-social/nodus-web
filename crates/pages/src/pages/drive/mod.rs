@@ -156,7 +156,7 @@ pub fn DrivePage(
     // file lands, which is the only signal that the request is over.
     Effect::new(move |_| {
         let open = sharing_file.get();
-        if share.get().map(|(id, _)| Some(id) == open).unwrap_or(false) {
+        if share.get().is_some_and(|(id, _)| Some(id) == open) {
             share_busy.set(false);
         }
     });
@@ -369,11 +369,10 @@ pub fn DrivePage(
                                                         class="btn btn-primary btn-xs"
                                                         disabled=move || on_rename_folder.is_none()
                                                         on:click=move |_| {
-                                                            if let Some((id, draft)) = renaming_folder.get_untracked() {
-                                                                if let Some(rename) = on_rename_folder {
+                                                            if let Some((id, draft)) = renaming_folder.get_untracked()
+                                                                && let Some(rename) = on_rename_folder {
                                                                     rename.run((id, draft));
                                                                 }
-                                                            }
                                                             renaming_folder.set(None);
                                                         }
                                                     >
@@ -396,12 +395,11 @@ pub fn DrivePage(
                                                             class="btn btn-error btn-xs"
                                                             data-testid="confirm-folder-delete"
                                                             on:click=move |_| {
-                                                                if let Some((id, _)) = deleting_folder.get_untracked() {
-                                                                    if let Some(delete) = on_delete_folder {
+                                                                if let Some((id, _)) = deleting_folder.get_untracked()
+                                                                    && let Some(delete) = on_delete_folder {
                                                                         delete.run(id);
                                                                     }
-                                                                }
-                                                                deleting_folder.set(None)
+                                                                deleting_folder.set(None);
                                                             }
                                                         >
                                                             "Delete folder"
@@ -712,8 +710,8 @@ pub fn DrivePage(
                                                                 share_busy.get() || on_share.is_none()
                                                             }
                                                             on:click=move |_| {
-                                                                if let Some(share) = on_share {
-                                                                    if let Some(id) = sharing_file.get_untracked() {
+                                                                if let Some(share) = on_share
+                                                                    && let Some(id) = sharing_file.get_untracked() {
                                                                         share_busy.set(true);
                                                                         copied.set(None);
                                                                         share
@@ -722,7 +720,6 @@ pub fn DrivePage(
                                                                                 share_span.get_untracked(),
                                                                             ));
                                                                     }
-                                                                }
                                                             }
                                                         >
                                                             "Make link"
@@ -842,11 +839,10 @@ pub fn DrivePage(
                                                         class="btn btn-primary btn-xs"
                                                         disabled=move || on_rename_file.is_none()
                                                         on:click=move |_| {
-                                                            if let Some((id, draft)) = renaming_file.get_untracked() {
-                                                                if let Some(rename) = on_rename_file {
+                                                            if let Some((id, draft)) = renaming_file.get_untracked()
+                                                                && let Some(rename) = on_rename_file {
                                                                     rename.run((id, draft));
                                                                 }
-                                                            }
                                                             renaming_file.set(None);
                                                         }
                                                     >
@@ -869,12 +865,11 @@ pub fn DrivePage(
                                                             class="btn btn-error btn-xs"
                                                             data-testid="confirm-file-delete"
                                                             on:click=move |_| {
-                                                                if let Some((id, _)) = deleting_file.get_untracked() {
-                                                                    if let Some(delete) = on_delete_file {
+                                                                if let Some((id, _)) = deleting_file.get_untracked()
+                                                                    && let Some(delete) = on_delete_file {
                                                                         delete.run(id);
                                                                     }
-                                                                }
-                                                                deleting_file.set(None)
+                                                                deleting_file.set(None);
                                                             }
                                                         >
                                                             "Delete file"

@@ -251,7 +251,7 @@ pub fn OverviewPage(
                                     <button
                                         class="btn btn-ghost btn-xs"
                                         disabled=move || on_scan_now.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:click=move |_| {
                                             if let Some(on_scan_now) = on_scan_now {
                                                 on_scan_now.run(());
@@ -303,7 +303,7 @@ pub fn OverviewPage(
                                     <button
                                         class="btn btn-ghost btn-xs shrink-0"
                                         disabled=move || on_acknowledge.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:click=move |_| {
                                             if let Some(on_acknowledge) = on_acknowledge {
                                                 on_acknowledge.run(id.clone());

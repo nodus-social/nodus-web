@@ -89,7 +89,7 @@ pub fn FederationPage(
                                     class="select select-bordered select-xs"
                                     aria-label=select_label
                                     disabled=move || on_severity.is_none() || !write.get()
-                                    title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                    title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                     on:change=move |event| {
                                         if let Some(on_severity) = on_severity {
                                             let next = match event_target_value(&event).as_str() {
@@ -459,7 +459,7 @@ pub fn RemoteAccountsPage(
                                         class="select select-bordered select-xs"
                                         aria-label=select_label
                                         disabled=move || on_apply.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:change=move |event| {
                                             let action = RemoteAction::of(&event_target_value(&event));
                                             draft.update_value(|draft| draft.action = action);
@@ -497,7 +497,7 @@ pub fn RemoteAccountsPage(
                                     <button
                                         class="btn btn-warning btn-xs"
                                         disabled=move || busy.get() || on_apply.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:click=move |_| {
                                             if let Some(on_apply) = on_apply {
                                                 on_apply.run((target.get_value(), draft.get_value()));
@@ -540,7 +540,7 @@ pub fn RemoteAccountsPage(
                                         <button
                                             class="btn btn-ghost btn-xs"
                                             disabled=move || busy.get() || on_ask.is_none() || !write.get()
-                                            title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                            title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                             on:click=move |_| {
                                                 if let Some(on_ask) = on_ask {
                                                     on_ask.run(target.get_value());
@@ -554,7 +554,7 @@ pub fn RemoteAccountsPage(
                                         class="btn btn-ghost btn-xs"
                                         aria-label=refresh_label.get_value()
                                         disabled=move || busy.get() || on_refresh.is_none() || !write.get()
-                                        title=move || (!write.get()).then_some(crate::props::NO_WRITE).unwrap_or_default()
+                                        title=move || if !write.get() { crate::props::NO_WRITE } else { Default::default() }
                                         on:click=move |_| {
                                             if let Some(on_refresh) = on_refresh {
                                                 on_refresh.run(target.get_value());
