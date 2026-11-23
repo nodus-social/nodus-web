@@ -659,6 +659,10 @@ impl Runtime for ClientRuntime {
         with_sdk(|sdk| sdk.read_account(id))
     }
 
+    fn relationship(&self, id: &str) -> Option<Relationship> {
+        crate::state::bridge::seed::painted_relationship(id)
+    }
+
     fn navigate(&self, path: String) {
         crate::router::navigate_href(&path);
     }

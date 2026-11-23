@@ -8,7 +8,7 @@
 //! Nothing here is required for the app to work — a bundle served without the island (the
 //! static deployment, a reload of a client-side route) simply starts cold, as before.
 
-use nodus_client_core::model::{Account, Context, List, SearchResults, Status};
+use nodus_client_core::model::{Account, Context, List, Relationship, SearchResults, Status};
 use nodus_client_sdk::page::{PageItems, PageKind};
 use nodus_client_sdk::{Command, Timeline};
 
@@ -57,6 +57,9 @@ struct Island {
     /// Account when the island carries an `/accounts/{id}` profile.
     #[serde(default)]
     account: Option<Account>,
+    /// The viewer's relationship to that account, as the one profile answer carried it.
+    #[serde(default)]
+    relationship: Option<Relationship>,
 }
 
 /// The page the island carries, when it is one of the lists a screen reads from the store.
@@ -190,6 +193,24 @@ pub fn thread_context(id: &str) -> Option<Context> {
             .as_ref()
             .filter(|(focal, _)| focal == id)
             .map(|(_, context)| context.clone())
+    })
+}
+
+/// The relationship painted into an `/accounts/{id}` island, when this document painted `id`.
+///
+/// The profile effect asks the runtime for the account and the relationship; answering both
+/// from the paint is what keeps hydration from re-reading a profile the HTML already shows.
+/// `None` (no island, a public page, or a server that could not read one) leaves the effect
+/// to fetch, exactly as before.
+#[must_use]
+pub fn painted_relationship(id: &str) -> Option<Relationship> {
+    PAINTED.with(|painted| {
+        let painted = painted.borrow();
+        let island = painted.as_ref()?;
+        if island.kind != "account" || island.account.as_ref()?.id != id {
+            return None;
+        }
+        island.relationship.clone()
     })
 }
 
