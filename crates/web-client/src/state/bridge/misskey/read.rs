@@ -8,8 +8,9 @@
 use core::future::Future;
 
 use nodus_client_core::model::{
-    Account, Context, CredentialAccount, Draft, LocalId, Notification, Page, PageParams,
-    Relationship, Status, StreamKind,
+    Account, Announcement, Context, Conversation, CredentialAccount, Draft, FeaturedTag, Filter,
+    List, LocalId, MarkerTimeline, Markers, Notification, Page, PageParams, Preferences,
+    Relationship, SearchResults, Status, StreamKind,
 };
 use nodus_client_core::rest::Transport;
 use nodus_client_core::{Error, InstanceApi, Result};
@@ -106,6 +107,73 @@ impl<T: Transport> InstanceApi for MisskeyBridge<T> {
         params: PageParams,
     ) -> impl Future<Output = Result<Page<Status>>> {
         self.inner().account_statuses(id, params)
+    }
+
+    // The fourteen reads below are passed through for the same reason as the rest: where
+    // Misskey serves the read, its own client knows the endpoint; where it does not, that
+    // client answers `Error::Unsupported` itself, which is the honest answer for a page to
+    // draw as "this server has no bookmarks" rather than an empty list.
+    fn featured_tags(&self, id: &LocalId) -> impl Future<Output = Result<Vec<FeaturedTag>>> {
+        self.inner().featured_tags(id)
+    }
+
+    fn bookmarks(&self, params: PageParams) -> impl Future<Output = Result<Page<Status>>> {
+        self.inner().bookmarks(params)
+    }
+
+    fn favourites(&self, params: PageParams) -> impl Future<Output = Result<Page<Status>>> {
+        self.inner().favourites(params)
+    }
+
+    fn conversations(
+        &self,
+        params: PageParams,
+    ) -> impl Future<Output = Result<Page<Conversation>>> {
+        self.inner().conversations(params)
+    }
+
+    fn lists(&self) -> impl Future<Output = Result<Vec<List>>> {
+        self.inner().lists()
+    }
+
+    fn follow_requests(&self) -> impl Future<Output = Result<Vec<Account>>> {
+        self.inner().follow_requests()
+    }
+
+    fn mutes(&self, params: PageParams) -> impl Future<Output = Result<Page<Account>>> {
+        self.inner().mutes(params)
+    }
+
+    fn blocks(&self, params: PageParams) -> impl Future<Output = Result<Page<Account>>> {
+        self.inner().blocks(params)
+    }
+
+    fn preferences(&self) -> impl Future<Output = Result<Preferences>> {
+        self.inner().preferences()
+    }
+
+    fn filters(&self) -> impl Future<Output = Result<Vec<Filter>>> {
+        self.inner().filters()
+    }
+
+    fn markers(&self, timelines: &[MarkerTimeline]) -> impl Future<Output = Result<Markers>> {
+        self.inner().markers(timelines)
+    }
+
+    fn announcements(&self) -> impl Future<Output = Result<Vec<Announcement>>> {
+        self.inner().announcements()
+    }
+
+    fn directory(
+        &self,
+        local_only: bool,
+        offset: u32,
+    ) -> impl Future<Output = Result<Vec<Account>>> {
+        self.inner().directory(local_only, offset)
+    }
+
+    fn search(&self, query: &str, resolve: bool) -> impl Future<Output = Result<SearchResults>> {
+        self.inner().search(query, resolve)
     }
 
     fn relationship(&self, id: &LocalId) -> impl Future<Output = Result<Relationship>> {

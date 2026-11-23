@@ -496,7 +496,10 @@ pub fn viewer_id() -> Option<String> {
 
 /// Pending follow requests, newest first.
 pub async fn follow_requests() -> Result<Vec<Account>, String> {
-    call(transport()?.follow_requests()).await
+    // Named through the action trait: `InstanceApi` carries this read too, and both reach
+    // the same request, so an unqualified call is ambiguous rather than different.
+    let transport = transport()?;
+    call(AccountActions::follow_requests(&transport)).await
 }
 
 /// Accepts a follow request.
@@ -564,18 +567,21 @@ pub async fn mute(id: &str, on: bool) -> Result<Relationship, String> {
 /// them still has to answer, so the caller must not read this as "what the account
 /// chose". The settings screen says which server it is talking to.
 pub async fn preferences() -> Result<Preferences, String> {
-    call(transport()?.preferences()).await
+    let transport = transport()?;
+    call(SettingsActions::preferences(&transport)).await
 }
 
 /// Searches accounts, statuses and hashtags; `resolve` lets the instance fetch remote
 /// matches it has never seen.
 pub async fn search(query: &str, resolve: bool) -> Result<SearchResults, String> {
-    call(transport()?.search(query, resolve)).await
+    let transport = transport()?;
+    call(Search::search(&transport, query, resolve)).await
 }
 
 /// The account's lists.
 pub async fn lists() -> Result<Vec<List>, String> {
-    call(transport()?.lists()).await
+    let transport = transport()?;
+    call(Browse::lists(&transport)).await
 }
 
 /// Creates a list and returns it.
