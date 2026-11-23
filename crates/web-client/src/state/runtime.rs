@@ -212,7 +212,7 @@ impl Runtime for ClientRuntime {
     fn feed_settings(&self) -> Option<Callback<()>> {
         Some(Callback::new(|()| {
             crate::router::navigate(crate::router::Route::Settings(
-                SettingsSection::Nodus.slug().to_owned(),
+                SettingsSection::Instance.slug().to_owned(),
             ));
         }))
     }

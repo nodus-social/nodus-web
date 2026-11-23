@@ -6,6 +6,7 @@
 //! where two unrelated questions are answered.
 
 use leptos::prelude::*;
+use nodus_pages::Note;
 use nodus_pages::pages::settings::account::SessionStyleCard;
 use nodus_pages::pages::settings::nav::SettingsSection;
 
@@ -75,14 +76,6 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
     view! {
             <Show when=move || section == SettingsSection::Account>
                 <SessionCard host=host acct=acct/>
-                <Show when=move || extensions.get()>
-                    <SessionStyleCard
-                        style=bridge_style::active_style_signal()
-                        on_edit=Some(Callback::new(move |()| {
-                            router::navigate(Route::StyleEditor);
-                        }))
-                    />
-                </Show>
                 <AccountsCard/>
                 <ModerationLinks/>
             </Show>
@@ -93,20 +86,82 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
                 <SensitiveCard/>
             </Show>
 
-            <Show when=move || section == SettingsSection::Nodus>
-                <Show when=move || sync_token.get()>
-                    <SyncCard/>
+            <Show when=move || section == SettingsSection::Appearance>
+                <Show when=move || extensions.get()>
+                    <SessionStyleCard
+                        style=bridge_style::active_style_signal()
+                        on_edit=Some(Callback::new(move |()| {
+                            router::navigate(Route::StyleEditor);
+                        }))
+                    />
                 </Show>
-                <FeedsCard/>
+                <Show when=move || !extensions.get()>
+                    <Note class="text-sm opacity-70">
+                        "This instance does not store a per-account appearance; this app keeps its own style in this browser."
+                    </Note>
+                </Show>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Notifications>
+                <Note class="text-sm opacity-70">
+                    "This instance does not publish notification settings yet."
+                </Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Preferences>
+                <Note class="text-sm opacity-70">"Reading your posting preferences…"</Note>
             </Show>
 
             <Show when=move || section == SettingsSection::Filters>
                 <FiltersCard/>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Muted>
+                <Note class="text-sm opacity-70">"Reading the mute list…"</Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Blocked>
+                <Note class="text-sm opacity-70">"Reading the block list…"</Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::DomainBlocks>
+                <Note class="text-sm opacity-70">
+                    "This instance serves domain blocks, but this app has no screen for them yet."
+                </Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Lists>
+                <Note class="text-sm opacity-70">
+                    "Lists are managed on the "<a class="link link-hover" href="/lists">"Lists page"</a>"."
+                </Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::FeaturedTags>
                 <FeaturedTagsCard/>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Sessions>
+                <Note class="text-sm opacity-70">
+                    "This instance serves sessions, but this app has no screen for them yet."
+                </Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::TwoFactor>
+                <Note class="text-sm opacity-70">
+                    "This instance serves two-factor authentication, but this app has no screen for it yet."
+                </Note>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Export>
+                <Note class="text-sm opacity-70">"Preparing your export…"</Note>
             </Show>
 
             <Show when=move || section == SettingsSection::Instance>
                 <InstanceCard/>
+                <Show when=move || sync_token.get()>
+                    <SyncCard/>
+                </Show>
+                <FeedsCard/>
             </Show>
     }
 }

@@ -10,6 +10,8 @@ use nodus_client_core::model::InstanceInfo;
 use nodus_state::page::{PageEntry, PageItems, PageKind};
 use nodus_web::shared::router::Route;
 
+use crate::Note;
+use crate::pages::people::Kind;
 use crate::pages::settings::account::{
     AccountItem, AccountsCard, ModerationLinks, SessionCard, SessionStyleCard,
 };
@@ -21,6 +23,8 @@ use crate::pages::settings::nav::SettingsSection;
 use crate::pages::settings::page::SettingsPage;
 use crate::pages::settings::profile::{ClockCard, ClockStyle, SensitiveCard};
 use crate::pages::settings::sync::SyncRows;
+
+use super::people::PeopleList;
 use crate::route::Runtime;
 
 fn filters(entry: Option<PageEntry>) -> Signal<Vec<FilterItem>> {
@@ -119,6 +123,7 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
     }
 
     let style_signal = Signal::derive(move || current_style.get_value());
+    let people_runtime = StoredValue::new(Arc::clone(&runtime));
 
     view! {
         <SettingsPage section=Signal::derive(move || section) on_navigate=on_navigate>
@@ -126,7 +131,6 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                 SettingsSection::Account => view! {
                     <div class="flex flex-col gap-4">
                         <SessionCard host=host acct=acct on_sign_out=None/>
-                        <SessionStyleCard style=style_signal on_edit=on_edit_style/>
                         <AccountsCard accounts=accounts busy=idle error=no_error on_switch=None on_sign_out=None/>
                         <ModerationLinks on_mutes=None on_blocks=None/>
                         <ClockCard
@@ -135,7 +139,6 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                             on_select=None
                         />
                         <SensitiveCard automatic=Signal::derive(|| false) on_toggle=None/>
-                        <FeedsCard feeds=Signal::derive(Vec::<FeedItem>::new) on_toggle=None/>
                     </div>
                 }.into_any(),
                 SettingsSection::Profile => view! {
@@ -162,27 +165,17 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                         <SensitiveCard automatic=Signal::derive(|| false) on_toggle=None/>
                     </div>
                 }.into_any(),
-                SettingsSection::Nodus => {
-                    let empty_add = empty_add.get_value();
-                    view! {
-                    <div class="flex flex-col gap-4">
-                        <FeedsCard feeds=Signal::derive(Vec::<FeedItem>::new) on_toggle=None/>
-                        <FeaturedTagsCard
-                            tags=tag_items
-                            busy=idle
-                            error=no_error
-                            on_delete=None
-                            add_form=empty_add
-                        />
-                        <SyncRows
-                            state=Signal::derive(|| None::<bool>)
-                            busy=idle
-                            result=no_error
-                            on_ask=None
-                        />
-                    </div>
-                }.into_any()
-                },
+                SettingsSection::Appearance => view! {
+                    <SessionStyleCard style=style_signal on_edit=on_edit_style/>
+                }.into_any(),
+                SettingsSection::Notifications => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance does not publish notification settings yet."
+                    </Note>
+                }.into_any(),
+                SettingsSection::Preferences => view! {
+                    <Note class="text-sm opacity-70">"Reading your posting preferences…"</Note>
+                }.into_any(),
                 SettingsSection::Filters => {
                     let empty_add = empty_add.get_value();
                     view! {
@@ -195,8 +188,58 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                     />
                 }.into_any()
                 },
+                SettingsSection::Muted => view! {
+                    <PeopleList runtime=people_runtime.get_value() id=String::new() kind=Kind::Mutes/>
+                }.into_any(),
+                SettingsSection::Blocked => view! {
+                    <PeopleList runtime=people_runtime.get_value() id=String::new() kind=Kind::Blocks/>
+                }.into_any(),
+                SettingsSection::DomainBlocks => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance serves domain blocks, but this app has no screen for them yet."
+                    </Note>
+                }.into_any(),
+                SettingsSection::Lists => view! {
+                    <Note class="text-sm opacity-70">
+                        "Lists are managed on the "<a class="link link-hover" href="/lists">"Lists page"</a>"."
+                    </Note>
+                }.into_any(),
+                SettingsSection::FeaturedTags => {
+                    let empty_add = empty_add.get_value();
+                    view! {
+                    <FeaturedTagsCard
+                        tags=tag_items
+                        busy=idle
+                        error=no_error
+                        on_delete=None
+                        add_form=empty_add
+                    />
+                }.into_any()
+                },
+                SettingsSection::Sessions => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance serves sessions, but this app has no screen for them yet."
+                    </Note>
+                }.into_any(),
+                SettingsSection::TwoFactor => view! {
+                    <Note class="text-sm opacity-70">
+                        "This instance serves two-factor authentication, but this app has no screen for it yet."
+                    </Note>
+                }.into_any(),
+                SettingsSection::Export => view! {
+                    <Note class="text-sm opacity-70">"Preparing your export…"</Note>
+                }.into_any(),
                 SettingsSection::Instance => view! {
-                    <InstanceCard info=no_info failed=Signal::derive(|| false)/>
+                    <div class="flex flex-col gap-4">
+                        <InstanceCard info=no_info failed=Signal::derive(|| false)/>
+                        <FeedsCard feeds=Signal::derive(Vec::<FeedItem>::new) on_toggle=None/>
+                        <SyncRows
+                            state=Signal::derive(|| None::<bool>)
+                            busy=idle
+                            result=no_error
+                            on_ask=None
+                        />
+                    </div>
                 }.into_any(),
             }}
         </SettingsPage>

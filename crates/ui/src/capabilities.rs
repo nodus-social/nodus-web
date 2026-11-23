@@ -57,6 +57,17 @@ pub fn admits(at: Option<&Capabilities>, surface: Surface) -> bool {
     at.is_none_or(|at| surface.served(at))
 }
 
+/// Whether a door gated by a raw [`Feature`] is drawn.
+///
+/// The same rule as [`admits`], for a control that is not one of [`Surface`]'s rows: a gate
+/// of `None` asks for nothing and is always drawn, and a known answer that omits the name is
+/// a refusal. Settings tabs use this because most of their gates are account-list names
+/// (`mutes`, `blocks`) with no page of their own to register as a surface.
+#[must_use]
+pub fn admits_feature(at: Option<&Capabilities>, gate: Option<Feature>) -> bool {
+    gate.is_none_or(|gate| at.is_none_or(|at| at.supports(gate)))
+}
+
 /// Whether a staff door is served to this reader, from the three facts both paints know.
 ///
 /// A staff door is narrower than an ordinary one: the instance must speak this protocol's
@@ -137,7 +148,17 @@ pub fn UnsupportedSurface(surface: Surface) -> impl IntoView {
 /// administrator and a moderator read the same sentence about the same missing page.
 #[component]
 pub fn UnservedPage(surface: Surface) -> impl IntoView {
-    view! { <crate::Note class="text-sm opacity-70">{surface.absent()}</crate::Note> }
+    view! { <UnservedNotice sentence=surface.absent()/> }
+}
+
+/// The sentence-shaped half of [`UnservedPage`], for a gate with no surface row.
+///
+/// A settings section is gated on a [`Feature`] rather than a [`Surface`], so it has no
+/// `absent()` sentence of its own; it still says the same thing, in the same place, rather
+/// than leaving the tab body blank.
+#[component]
+pub fn UnservedNotice(sentence: &'static str) -> impl IntoView {
+    view! { <crate::Note class="text-sm opacity-70">{sentence}</crate::Note> }
 }
 
 #[cfg(test)]
