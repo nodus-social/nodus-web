@@ -614,6 +614,39 @@ pub fn page_of_with_style(
     )
 }
 
+/// A signed-in page whose body is already the shell's own tree.
+///
+/// Unlike [`page_of_with_style`] this does not wrap the body in the hand-painted `Frame`:
+/// the caller rendered [`nodus_shell::ShellPage`], so the string *is* the tree the browser
+/// will adopt. The seed the tree was built from goes into `#nodus-shell`, which is what lets
+/// the client's first pass start from the same values; `#app` also carries `data-shell` so
+/// the client knows which root to hydrate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "document envelope takes asset manifest, session state, route metadata, and style"
+)]
+pub fn page_of_shell(
+    assets: &Assets,
+    reader: &Reader,
+    title: &str,
+    body: &str,
+    island: Option<String>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+    seed: &nodus_shell::ShellSeed,
+) -> String {
+    let island = island.map(|json| with_capabilities(json, &reader.host));
+    let seed = serde_json::to_string(seed).ok();
+    page_marked(
+        assets,
+        &format!("{title} · {}", reader.acct),
+        body,
+        island.as_deref(),
+        style,
+        false,
+        seed.as_deref(),
+    )
+}
+
 /// A public page: the reader has no account, so the rail shows no signed-in doors.
 pub fn page_of_public(
     assets: &Assets,
@@ -758,6 +791,24 @@ fn page_with_style(
     style: Option<&nodus_ui::session_style::SessionStyle>,
     noindex: bool,
 ) -> String {
+    page_marked(assets, title, body, island, style, noindex, None)
+}
+
+/// The document envelope. `shell` is the shell seed when the body is a shell tree: it emits
+/// `#nodus-shell` and marks `#app` so the client hydrates the root the body came from.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the envelope takes the manifest, the document strings, and the two islands"
+)]
+fn page_marked(
+    assets: &Assets,
+    title: &str,
+    body: &str,
+    island: Option<&str>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+    noindex: bool,
+    shell: Option<&str>,
+) -> String {
     let stylesheet = match (&assets.stylesheet_css, &assets.stylesheet) {
         (Some(css), _) => format!("<style>{}</style>", css.replace("</style", "<\\/style")),
         (None, Some(href)) => format!("<link rel=\"stylesheet\" href=\"{}\">", escape(href)),
@@ -767,6 +818,14 @@ fn page_with_style(
         .map(|json| {
             format!(
                 "<script id=\"nodus-page\" type=\"application/json\">{}</script>",
+                json.replace("</", "<\\/")
+            )
+        })
+        .unwrap_or_default();
+    let shell_island = shell
+        .map(|json| {
+            format!(
+                "<script id=\"nodus-shell\" type=\"application/json\">{}</script>",
                 json.replace("</", "<\\/")
             )
         })
@@ -809,8 +868,9 @@ fn page_with_style(
              </script>\
            </head>\
            <body class=\"min-h-screen bg-base-200\">\
-             <div id=\"app\"{hydrate}>{body}</div>\
+             <div id=\"app\"{hydrate}{shell_marker}>{body}</div>\
              {island}\
+             {shell_island}\
              {style_island}\
            </body>\
          </html>",
@@ -825,6 +885,15 @@ fn page_with_style(
         wasm = escape(&assets.wasm),
         preload = preload,
         hydrate = hydrate_marker(),
+        // Only a body that really is the shell tree may claim the shell root. The env gate
+        // still turns hydration off entirely: with no `data-hydrate`, the client swaps the
+        // paint out as it always did.
+        shell_marker = if shell.is_some() && !hydrate_marker().is_empty() {
+            " data-shell"
+        } else {
+            ""
+        },
+        shell_island = shell_island,
     )
 }
 

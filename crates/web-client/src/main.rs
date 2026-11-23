@@ -24,6 +24,7 @@ mod router;
 mod routes;
 mod screen;
 mod scroll;
+mod shell_root;
 mod shell;
 mod state;
 mod theme;

@@ -35,6 +35,8 @@ nodus-web = { path = "../web-shared" }
 nodus-ui = { path = "../ui" }
 nodus-pages = { path = "../pages" }
 nodus-route = { path = "../route" }
+# The frame both paints render; the client hydrates the nodes the host painted from it.
+nodus-shell = { path = "../shell" }
 nodus-editor = { path = "../editor" }
 leptos = { version = "0.8.23" }
 nodus-shared = { workspace = true }

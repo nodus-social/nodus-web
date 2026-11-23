@@ -64,6 +64,17 @@ fn mount_app() {
         mark_hydrated();
         return;
     };
+    // A shell document names its root: `#app` was rendered by `nodus_shell::ShellPage`, and
+    // `#nodus-shell` carries the seed that tree was built from, so the first pass can start
+    // from the paint's own values instead of guessing them.
+    if host.has_attribute("data-shell") {
+        let seed = shell_seed(&document).unwrap_or_default();
+        leptos::mount::hydrate_from(host, move || {
+            crate::shell_root::ShellRoot(crate::shell_root::ShellRootProps { seed })
+        }).forget();
+        mark_hydrated();
+        return;
+    }
     if host.has_attribute("data-hydrate") {
         leptos::mount::hydrate_from(host, App).forget();
         mark_hydrated();
@@ -101,4 +112,13 @@ fn mark_hydrated() {
     if let Some(window) = web_sys::window() {
         let _ = js_sys::Reflect::set(&window, &"__nodus".into(), &wasm_bindgen::JsValue::TRUE);
     }
+}
+
+/// The seed the shell paint used, if this document carries one.
+///
+/// A document without the island is not a shell tree (it predates the shell, or the host
+/// could not serialise the seed), so the defaults are used — both sides draw that state.
+fn shell_seed(document: &web_sys::Document) -> Option<nodus_shell::ShellSeed> {
+    let text = document.get_element_by_id("nodus-shell")?.text_content()?;
+    serde_json::from_str(&text).ok()
 }

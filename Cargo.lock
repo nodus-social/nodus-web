@@ -2057,6 +2057,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodus-shell"
+version = "0.1.0"
+dependencies = [
+ "leptos",
+ "nodus-pages",
+ "nodus-route",
+ "nodus-ui",
+ "nodus-web",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nodus-state"
 version = "0.1.0"
 dependencies = [
@@ -2111,6 +2124,7 @@ dependencies = [
  "nodus-pages",
  "nodus-route",
  "nodus-shared",
+ "nodus-shell",
  "nodus-ui",
  "nodus-web",
  "serde",
@@ -2135,6 +2149,7 @@ dependencies = [
  "nodus-pages",
  "nodus-route",
  "nodus-server-transport",
+ "nodus-shell",
  "nodus-state",
  "nodus-ui",
  "nodus-web",

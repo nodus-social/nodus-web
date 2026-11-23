@@ -1,0 +1,32 @@
+[package]
+name = "nodus-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "The page frame both paints render: the same tree to a string and to the DOM."
+
+# A library with no renderer of its own, like `nodus-route`: it names neither `web_sys` nor
+# axum, so one component tree can be rendered by the SSR host and hydrated by the browser.
+# `ssr` switches the `leptos` build; the wasm client enables nothing and gets `csr`/`hydrate`
+# from its own feature set.
+[features]
+default = []
+ssr = ["leptos/ssr"]
+
+[dependencies]
+nodus-ui = { path = "../ui" }
+nodus-route = { path = "../route" }
+nodus-pages = { path = "../pages" }
+nodus-web = { path = "../web-shared" }
+leptos = { version = "0.8", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+leptos = { version = "0.8", default-features = false, features = ["ssr"] }
