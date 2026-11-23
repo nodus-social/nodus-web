@@ -735,6 +735,21 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
     page_with_style(assets, title, body, island, None, noindex)
 }
 
+/// Whether this document claims to be a Leptos tree the client may adopt.
+///
+/// `data-hydrate` is a promise: `#app`'s children are the node sequence the client's own
+/// view renders, including Leptos' branch markers (`<!--bo-…-->` / `<!--bc-…-->`) and its
+/// empty-view placeholders. Only `leptos::ssr::render_to_string` of that exact tree keeps
+/// the promise; the hand-painted shell below does not, because it writes `inner_html` blobs
+/// and plain markup. The switch exists so a spike can measure the failure; a deploy only
+/// sets it once the paint comes from that render.
+fn hydrate_marker() -> &'static str {
+    match std::env::var("NODUS_TRY_HYDRATE") {
+        Ok(value) if value.trim() == "1" => " data-hydrate",
+        _ => "",
+    }
+}
+
 fn page_with_style(
     assets: &Assets,
     title: &str,
@@ -794,7 +809,7 @@ fn page_with_style(
              </script>\
            </head>\
            <body class=\"min-h-screen bg-base-200\">\
-             <div id=\"app\">{body}</div>\
+             <div id=\"app\"{hydrate}>{body}</div>\
              {island}\
              {style_island}\
            </body>\
@@ -809,6 +824,7 @@ fn page_with_style(
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
         preload = preload,
+        hydrate = hydrate_marker(),
     )
 }
 

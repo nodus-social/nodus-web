@@ -41,10 +41,16 @@ pub fn start() {
     crate::state::bridge::install_impression_flush();
 }
 
-/// Mounts the app into the server-painted node, or into `<body>` when there is none.
+/// Adopts the server-painted tree, or mounts into `<body>` when there is none.
 ///
 /// A static deployment (no SSR host) has no `#app`, and `mount_to_body` is the right answer
 /// there; the SSR document always has one.
+///
+/// A printed document whose `#app` carries `data-hydrate` was rendered from *this* view
+/// tree, so the nodes are adopted: `hydrate_from` walks `#app`'s children looking for the
+/// exact element and marker sequence `App` renders and binds the signals to them. A document
+/// without the attribute is not a Leptos tree (it is the hand-painted shell), so the client
+/// still builds its own tree and swaps the paint out.
 fn mount_app() {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
@@ -58,7 +64,13 @@ fn mount_app() {
         mark_hydrated();
         return;
     };
-    // Mounted into a detached node, then swapped in whole.
+    if host.has_attribute("data-hydrate") {
+        leptos::mount::hydrate_from(host, App).forget();
+        mark_hydrated();
+        return;
+    }
+
+    // Fallback: the paint is not a Leptos tree, so nothing can be adopted from it.
     //
     // Clearing `#app` and mounting into it paints one frame of nothing, and the reader sees
     // the server's page blink out and come back — which reads as the interface resetting
