@@ -281,7 +281,7 @@ fn valid_target(host: &str, id: &str) -> bool {
 /// Mastodon prints decimal ids and nodus prints ULIDs; nothing else is a valid id, so any
 /// other segment is treated as the account's name. Names are what the site links with,
 /// ids are what the API answers with, and both have to keep working.
-fn looks_like_id(segment: &str) -> bool {
+pub(crate) fn looks_like_id(segment: &str) -> bool {
     segment.chars().all(|c| c.is_ascii_digit())
         || (segment.len() == 26 && segment.chars().all(|c| c.is_ascii_alphanumeric()))
 }

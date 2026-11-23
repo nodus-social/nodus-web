@@ -269,9 +269,27 @@ impl Client {
     /// the SDK's own models, so the screen painted here and the screen the browser paints
     /// read the same fields.
     pub async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String> {
+        self.profile_page_at(id, limit).await
+    }
+
+    /// A profile page addressed by `name@host`, resolved by the instance in the same
+    /// snapshot that reads the page.
+    ///
+    /// Ids are ULIDs and contain no `@`, so the `@` is the whole discriminator between the
+    /// two forms. This is the same payload as [`Self::profile_page`], and one request: the
+    /// lookup the id form would have needed is part of the read.
+    pub async fn profile_page_by_handle(
+        &self,
+        handle: &str,
+        limit: u16,
+    ) -> Result<ProfilePage, String> {
+        self.profile_page_at(handle, limit).await
+    }
+
+    async fn profile_page_at(&self, reference: &str, limit: u16) -> Result<ProfilePage, String> {
         let url = self
             .instance
-            .url(&format!("/api/v1/pages/profile/{id}?limit={limit}"))
+            .url(&format!("/api/v1/pages/profile/{reference}?limit={limit}"))
             .map_err(|error| error.to_string())?;
         self.instance
             .fetch(self.instance.get(url))

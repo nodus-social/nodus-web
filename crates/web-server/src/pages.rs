@@ -485,6 +485,8 @@ pub(crate) trait EntityReads {
     async fn status(&self, id: &str) -> Result<nodus_client_core::model::Status, String>;
     async fn context(&self, id: &str) -> Result<nodus_client_core::model::Context, String>;
     async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String>;
+    async fn profile_page_by_handle(&self, handle: &str, limit: u16)
+    -> Result<ProfilePage, String>;
     async fn status_page(&self, id: &str) -> Result<StatusPage, String>;
 }
 
@@ -515,6 +517,14 @@ impl EntityReads for Client {
 
     async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String> {
         Client::profile_page(self, id, limit).await
+    }
+
+    async fn profile_page_by_handle(
+        &self,
+        handle: &str,
+        limit: u16,
+    ) -> Result<ProfilePage, String> {
+        Client::profile_page_by_handle(self, handle, limit).await
     }
 
     async fn status_page(&self, id: &str) -> Result<StatusPage, String> {
@@ -563,9 +573,31 @@ async fn read_entity_with<R: EntityReads>(
         {
             return None;
         }
-        let id = if segment.chars().all(|c| c.is_ascii_digit())
-            || (segment.len() == 26 && segment.chars().all(|c| c.is_ascii_alphanumeric()))
-        {
+        let by_id = crate::public_api::looks_like_id(segment);
+        if pages {
+            // A handle is resolved by the instance inside the page read itself, so the
+            // name never costs a second round trip. The id form is unchanged.
+            let page = if by_id {
+                reads.profile_page(segment, PAGE).await
+            } else {
+                reads
+                    .profile_page_by_handle(&format!("{segment}@{instance_host}"), PAGE)
+                    .await
+            }
+            .ok()?;
+            return Some(render_account_with_style(
+                assets,
+                acct,
+                staff,
+                &page.account,
+                page.relationship.as_ref(),
+                &page.statuses,
+                page.page.next.as_deref(),
+                style,
+            ));
+        }
+        // The pre-`pages` adapter still needs the id: it has no read that takes a handle.
+        let id = if by_id {
             segment.to_owned()
         } else {
             let wanted = segment.to_owned();
@@ -584,21 +616,8 @@ async fn read_entity_with<R: EntityReads>(
                 })?
                 .id
         };
-        return if pages {
-            let page = reads.profile_page(&id, PAGE).await.ok()?;
-            Some(render_account_with_style(
-                assets,
-                acct,
-                staff,
-                &page.account,
-                page.relationship.as_ref(),
-                &page.statuses,
-                page.page.next.as_deref(),
-                style,
-            ))
-        } else {
-            read_entity_pre_pages(reads, assets, acct, staff, PrePages::Account(&id), style).await
-        };
+        return read_entity_pre_pages(reads, assets, acct, staff, PrePages::Account(&id), style)
+            .await;
     }
     let id = path.strip_prefix("/status/")?;
     if id.is_empty() || id.contains('/') {
@@ -1101,12 +1120,21 @@ mod painting {
     }
 
     /// A transport with no network: it counts the calls the render makes.
+    ///
+    /// The counters are split by read shape because the point of the handle route is not
+    /// only "fewer calls" but "this call and not that one": a profile must never pay a
+    /// lookup when the page read can resolve the handle itself.
     struct CountingReads {
         account: nodus_client_core::model::Account,
         statuses: Vec<nodus_client_core::model::Status>,
         relationship: Option<nodus_client_core::model::Relationship>,
         context: nodus_client_core::model::Context,
         calls: std::cell::Cell<usize>,
+        lookups: std::cell::Cell<usize>,
+        page_reads: std::cell::Cell<usize>,
+        handle_reads: std::cell::Cell<usize>,
+        handles: std::cell::RefCell<Vec<String>>,
+        handle_error: Option<String>,
     }
 
     impl CountingReads {
@@ -1120,6 +1148,11 @@ mod painting {
                 relationship: None,
                 context: nodus_client_core::model::Context::default(),
                 calls: std::cell::Cell::new(0),
+                lookups: std::cell::Cell::new(0),
+                page_reads: std::cell::Cell::new(0),
+                handle_reads: std::cell::Cell::new(0),
+                handles: std::cell::RefCell::new(Vec::new()),
+                handle_error: None,
             }
         }
 
@@ -1130,6 +1163,18 @@ mod painting {
         fn hit(&self) {
             self.calls.set(self.calls.get() + 1);
         }
+
+        fn page(&self) -> super::ProfilePage {
+            super::ProfilePage {
+                account: self.account.clone(),
+                statuses: self.statuses.clone(),
+                relationship: self.relationship.clone(),
+                page: crate::mastodon::PageCursors {
+                    next: Some("next-page".to_owned()),
+                    prev: None,
+                },
+            }
+        }
     }
 
     impl super::EntityReads for CountingReads {
@@ -1138,7 +1183,11 @@ mod painting {
             _query: &str,
         ) -> Result<nodus_client_core::model::SearchResults, String> {
             self.hit();
-            Ok(nodus_client_core::model::SearchResults::default())
+            self.lookups.set(self.lookups.get() + 1);
+            Ok(nodus_client_core::model::SearchResults {
+                accounts: vec![self.account.clone()],
+                ..nodus_client_core::model::SearchResults::default()
+            })
         }
 
         async fn account(&self, _id: &str) -> Result<nodus_client_core::model::Account, String> {
@@ -1170,15 +1219,22 @@ mod painting {
 
         async fn profile_page(&self, _id: &str, _limit: u16) -> Result<super::ProfilePage, String> {
             self.hit();
-            Ok(super::ProfilePage {
-                account: self.account.clone(),
-                statuses: self.statuses.clone(),
-                relationship: self.relationship.clone(),
-                page: crate::mastodon::PageCursors {
-                    next: Some("next-page".to_owned()),
-                    prev: None,
-                },
-            })
+            self.page_reads.set(self.page_reads.get() + 1);
+            Ok(self.page())
+        }
+
+        async fn profile_page_by_handle(
+            &self,
+            handle: &str,
+            _limit: u16,
+        ) -> Result<super::ProfilePage, String> {
+            self.hit();
+            self.handle_reads.set(self.handle_reads.get() + 1);
+            self.handles.borrow_mut().push(handle.to_owned());
+            if let Some(error) = &self.handle_error {
+                return Err(error.clone());
+            }
+            Ok(self.page())
         }
 
         async fn status_page(&self, _id: &str) -> Result<super::StatusPage, String> {
@@ -1232,10 +1288,126 @@ mod painting {
         .expect("the pages profile paints");
 
         assert_eq!(reads.count(), 1, "one request per profile render");
+        assert_eq!(reads.page_reads.get(), 1, "the id form is one page read");
+        assert_eq!(reads.handle_reads.get(), 0, "an id is not a handle");
+        assert_eq!(reads.lookups.get(), 0, "an id needs no lookup");
         assert!(html.contains("Alice Example"), "{html}");
         assert!(html.contains("Writer of things"), "{html}");
         assert!(html.contains("First post body"), "{html}");
         assert!(html.contains("\"relationship\""), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_pages_handle_profile_is_one_page_read_and_no_lookup() {
+        crate::capabilities::remember_for_test(
+            "pages.example",
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
+        );
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let first = test_status("10", "First post body", &alice);
+        let reads = CountingReads::new(alice, vec![first]);
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "viewer@pages.example",
+            false,
+            "/accounts/pages.example/alice",
+            None,
+        )
+        .await
+        .expect("the pages handle profile paints");
+
+        assert_eq!(reads.count(), 1, "one request for a handle profile");
+        assert_eq!(
+            reads.lookups.get(),
+            0,
+            "the page read resolves the handle, so no lookup is paid"
+        );
+        assert_eq!(reads.page_reads.get(), 0, "a handle is not read by id");
+        assert_eq!(reads.handle_reads.get(), 1, "one handle-shaped page read");
+        assert_eq!(
+            reads.handles.borrow().first().map(String::as_str),
+            Some("alice@pages.example"),
+            "the handle names the account and its own instance"
+        );
+        assert!(html.contains("Alice Example"), "{html}");
+        assert!(html.contains("First post body"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_handle_profile_without_pages_still_pays_the_lookup() {
+        let mut alice = test_account("1", "alice", "Writer of things");
+        alice.acct = "alice@legacy.example".to_owned();
+        let first = test_status("10", "First post body", &alice);
+        let reads = CountingReads::new(alice, vec![first]);
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "viewer@legacy.example",
+            false,
+            "/accounts/legacy.example/alice",
+            None,
+        )
+        .await
+        .expect("the pre-pages handle profile paints");
+
+        assert_eq!(reads.lookups.get(), 1, "the fallback still looks up");
+        assert_eq!(
+            reads.handle_reads.get(),
+            0,
+            "the fallback has no handle read"
+        );
+        assert_eq!(reads.page_reads.get(), 0, "the fallback has no page read");
+        assert_eq!(reads.count(), 3, "lookup plus the account and posts reads");
+        assert!(html.contains("First post body"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_handle_renders_the_same_no_such_account_page_as_a_lookup_miss() {
+        crate::capabilities::remember_for_test(
+            "pages.example",
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
+        );
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let mut pages = CountingReads::new(alice.clone(), Vec::new());
+        pages.handle_error = Some("the handle @nobody@pages.example is not known here".to_owned());
+
+        let pages_miss = super::read_entity_with(
+            &pages,
+            &test_assets(),
+            "viewer@pages.example",
+            false,
+            "/accounts/pages.example/nobody",
+            None,
+        )
+        .await;
+
+        let mut legacy = CountingReads::new(alice, Vec::new());
+        legacy.account.acct = "alice@legacy.example".to_owned();
+        let lookup_miss = super::read_entity_with(
+            &legacy,
+            &test_assets(),
+            "viewer@legacy.example",
+            false,
+            "/accounts/legacy.example/nobody",
+            None,
+        )
+        .await;
+
+        assert!(
+            pages_miss.is_none(),
+            "a 404 from the handle form must fall through to the shell, not paint an empty profile"
+        );
+        assert!(
+            lookup_miss.is_none(),
+            "the lookup miss is the same absence the handle form must produce"
+        );
     }
 
     #[tokio::test]

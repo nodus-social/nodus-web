@@ -587,14 +587,9 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
         return None;
     }
     // `/accounts/{host}/{name}` is the permanent address and `/accounts/{host}/{id}` is
-    // what the API hands out; the name is resolved by the instance the address named.
-    let id = match crate::public_api::resolve_account_ref(host, segment, None).await {
-        Some(id) => id,
-        None => {
-            tracing::warn!(%host, %segment, "public account name could not be resolved");
-            return None;
-        }
-    };
+    // what the API hands out. A `pages` host resolves the name inside the page read, so a
+    // handle costs one request; only the pre-`pages` path still needs a lookup first.
+    let by_id = crate::public_api::looks_like_id(segment);
     let client = match Client::new(host, "") {
         Ok(client) => client,
         Err(message) => {
@@ -604,15 +599,32 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
     };
     let hydrated =
         capabilities::resolve_host(host).await.is_some() && capabilities::serves_pages(host);
-    let (account, statuses) = if hydrated {
-        match client.profile_page(&id, PAGE).await {
-            Ok(page) => (page.account, page.statuses),
+    let (id, account, statuses) = if hydrated {
+        let page = if by_id {
+            client.profile_page(segment, PAGE).await
+        } else {
+            client
+                .profile_page_by_handle(&format!("{segment}@{host}"), PAGE)
+                .await
+        };
+        match page {
+            Ok(page) => {
+                let id = page.account.id.clone();
+                (id, page.account, page.statuses)
+            }
             Err(message) => {
-                tracing::warn!(%message, %host, %id, "public account page could not be read");
+                tracing::warn!(%message, %host, %segment, "public account page could not be read");
                 return None;
             }
         }
     } else {
+        let id = match crate::public_api::resolve_account_ref(host, segment, None).await {
+            Some(id) => id,
+            None => {
+                tracing::warn!(%host, %segment, "public account name could not be resolved");
+                return None;
+            }
+        };
         let account = match client.account(&id).await {
             Ok(account) => account,
             Err(message) => {
@@ -627,7 +639,7 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
                 return None;
             }
         };
-        (account, statuses)
+        (id, account, statuses)
     };
     Some(pages::render_public_account(
         &app.bundle(),
