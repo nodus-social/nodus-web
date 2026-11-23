@@ -764,6 +764,16 @@ fn page_with_style(
             )
         })
         .unwrap_or_default();
+    // The module is discovered only after the document is parsed, and the wasm only after
+    // the module runs, so without these the 1.8 MB wasm fetch waits for the JS round trip.
+    // The body's inline module still imports the same two hashed files; these links just
+    // let the browser start both fetches while the parser is still in the head.
+    let preload = format!(
+        "<link rel=\"modulepreload\" href=\"{script}\">\
+         <link rel=\"preload\" as=\"fetch\" crossorigin href=\"{wasm}\">",
+        script = escape(&assets.script),
+        wasm = escape(&assets.wasm),
+    );
     format!(
         "<!doctype html>\
          <html lang=\"en\" data-theme=\"light\">\
@@ -776,6 +786,7 @@ fn page_with_style(
              {robots}\
              <script>(function(){{var d=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.dataset.theme=d?'dark':'light';}})()</script>\
              {stylesheet}\
+             {preload}\
              <script type=\"module\">\
                import init, * as bindings from '{script}';\
                await init({{ module_or_path: '{wasm}' }});\
@@ -797,6 +808,7 @@ fn page_with_style(
         },
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
+        preload = preload,
     )
 }
 
@@ -813,6 +825,34 @@ mod tests {
             stylesheet: None,
             stylesheet_css: None,
         }
+    }
+
+    #[test]
+    fn the_head_preloads_the_hashed_module_and_wasm() {
+        // Without these the wasm request cannot start until the module script has been
+        // fetched and run: the served document is the only place that knows both hashes.
+        let mut assets = test_assets();
+        assets.script = "/nodus-web-abc123.js".to_owned();
+        assets.wasm = "/nodus-web-abc123_bg.wasm".to_owned();
+        let html = home(&assets, "me@example.org", false, &[], None);
+        assert!(
+            html.contains("<link rel=\"modulepreload\" href=\"/nodus-web-abc123.js\">"),
+            "{html}"
+        );
+        assert!(
+            html.contains(
+                "<link rel=\"preload\" as=\"fetch\" crossorigin \
+                 href=\"/nodus-web-abc123_bg.wasm\">"
+            ),
+            "{html}"
+        );
+        // Both must be in the head, before the module that imports them.
+        let head_end = html.find("</head>").expect("head closes");
+        let module_start = html
+            .find("<script type=\"module\">")
+            .expect("module script");
+        let preload_start = html.find("rel=\"modulepreload\"").expect("preload");
+        assert!(preload_start < module_start && module_start < head_end);
     }
 
     #[test]
