@@ -31,8 +31,13 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 jxl-oxide = "0.12.6"
 web-sys = { version = "0.3", features = [
+    "Blob",
+    "DataTransfer",
     "Document",
+    "DragEvent",
     "Element",
+    "File",
+    "FileList",
     "HtmlHeadElement",
     "HtmlElement",
     # The motion preference the pictures follow is a media query, read where a browser is.

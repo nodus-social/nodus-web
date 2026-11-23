@@ -221,7 +221,6 @@ fn RailCards(
     #[prop(into)] kinds: Signal<Vec<ModuleKind>>,
     #[prop(optional_no_strip)] sidebar: Option<Signal<SidebarData>>,
     #[prop(optional_no_strip)] editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<ModuleKind>>,
 ) -> impl IntoView {
     view! {
         <div class="flex flex-col gap-3" data-rail-modules="">
@@ -240,7 +239,6 @@ fn RailCards(
                                 kind=kind
                                 items=rows
                                 editor=editor
-                                dragging=Some(dragging)
                             />
                         }
                     }
@@ -286,7 +284,6 @@ pub fn SessionBanner(
         // crop it, instead of being a card floating on a strip.
         BannerRegionKind::Left | BannerRegionKind::Right => "h-full w-full min-w-0 object-cover",
     };
-    let dragging: RwSignal<Option<usize>> = RwSignal::new(None);
     let open: RwSignal<Option<usize>> = RwSignal::new(None);
 
     let slots = Memo::new(move |_| {
@@ -339,7 +336,11 @@ pub fn SessionBanner(
     let outer_class = Signal::derive(move || match kind {
         BannerRegionKind::Top => {
             if slots.get().is_empty() {
-                String::from("hidden")
+                if editor.is_some_and(StyleEditor::is_active) {
+                    String::from("mx-auto w-full max-w-6xl px-2 pt-3")
+                } else {
+                    String::from("hidden")
+                }
             } else {
                 String::from("mx-auto w-full max-w-6xl px-2 pt-3")
             }
@@ -363,9 +364,7 @@ pub fn SessionBanner(
             )
         }
     });
-    let side_empty = Memo::new(move |_| {
-        matches!(kind, BannerRegionKind::Left | BannerRegionKind::Right) && slots.get().is_empty()
-    });
+    let side_empty = Memo::new(move |_| slots.get().is_empty());
 
     // Everything in this node tree is painted once and then shown or hidden with a class.
     // Swapping subtrees with `Show` disposes the owners behind the handlers that are still
@@ -385,8 +384,7 @@ pub fn SessionBanner(
                                 edit.is_active()
                                     && (!side_empty.get()
                                         || matches!(kind, BannerRegionKind::Top))
-                            }>
-                                {region_controls(kind, hidden, region, edit)}
+                            }>                                {region_controls(kind, hidden, region, edit)}
                             </Show>
                         }
                     })}
@@ -413,7 +411,6 @@ pub fn SessionBanner(
                                 index,
                                 editor,
                                 region,
-                                dragging,
                                 open,
                                 on_pick,
                             )
@@ -421,18 +418,27 @@ pub fn SessionBanner(
                     />
                 </div>
             </div>
-            <div class=move || {
-                if side_empty.get() && editing.get() {
-                    "flex w-full flex-col"
-                } else {
-                    "hidden"
+            <div
+                class=move || {
+                    if side_empty.get() && editing.get() {
+                        "flex w-full flex-col"
+                    } else {
+                        "hidden"
+                    }
                 }
-            }>
+                on:dragover=move |event| event.prevent_default()
+                on:drop=move |event| {
+                    event.prevent_default();
+                    if let Some(edit) = editor {
+                        edit.drop_picture(kind, 0);
+                    }
+                }
+            >
                 <button
                     type="button"
-                    class="pointer-events-auto flex h-full min-h-40 w-full flex-1 flex-col items-center justify-center gap-3 rounded-box border-2 border-dashed border-base-content/40 bg-base-100/70 px-0 py-4 text-center text-base-content hover:border-primary hover:bg-primary/10 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    class="pointer-events-auto flex h-full min-h-40 w-full flex-1 flex-col items-center justify-center gap-2 rounded-box border-2 border-dashed border-base-content/40 bg-base-100/70 px-0 py-4 text-center text-base-content hover:border-primary hover:bg-primary/10 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
                     data-style-add-picture=kind.metadata_key()
-                    title="Upload a picture for this side"
+                    title="Upload a picture for this banner"
                     disabled=move || on_pick.is_none()
                     on:click=move |_| {
                         if let Some(pick) = on_pick {
@@ -440,10 +446,10 @@ pub fn SessionBanner(
                         }
                     }
                 >
-                    <span class="text-2xl font-light leading-none">"+"</span>
-                    <span class="text-[10px] font-semibold uppercase tracking-wide [writing-mode:vertical-rl]">
-                        "Add picture"
+                    <span class="text-xs font-semibold uppercase tracking-wide">
+                        "Drag a picture here"
                     </span>
+                    <span class="text-[10px] underline opacity-70">"or upload one"</span>
                 </button>
             </div>
         </div>
@@ -525,10 +531,10 @@ fn nav_item_row(
     item: NavItemConfig,
     active: Signal<String>,
     editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<String>>,
 ) -> AnyView {
     let icon = item.icon();
     let pinned = item.pinned;
+    let rail = StoredValue::new(item.rail);
     let id = Signal::derive({
         let id = item.id;
         move || id.clone()
@@ -544,24 +550,33 @@ fn nav_item_row(
         move || path.clone()
     });
     let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
+    let (over, set_over) = signal(false);
     view! {
         <li
             class="group relative"
             on:dragover=move |event| {
                 if editor.is_some() {
                     event.prevent_default();
+                    set_over.set(true);
                 }
             }
+            on:dragleave=move |_| set_over.set(false)
             on:drop=move |event| {
                 if let Some(edit) = editor {
                     event.prevent_default();
-                    if let Some(from) = dragging.get_untracked() {
-                        edit.reorder_nav_item(&from, &id.get_untracked());
-                    }
-                    dragging.set(None);
+                    set_over.set(false);
+                    edit.drop_on_nav_item(&id.get_untracked());
                 }
             }
         >
+            <Show when=move || over.get()>
+                <span
+                    class="pointer-events-none absolute inset-x-0 -top-5 z-10 rounded-box bg-primary px-2 py-0.5 text-center text-xs text-primary-content shadow"
+                    data-drop-says=""
+                >
+                    "Move here"
+                </span>
+            </Show>
             // While the editor is open a rail entry is a thing to move, not a door to walk
             // through: following a link mid-arrangement would throw the draft away to show a
             // page nobody asked for. The whole row is the handle, so the destination can be
@@ -576,7 +591,19 @@ fn nav_item_row(
                             data-nav-drag=""
                             title="Drag to move this entry"
                             on:dragstart=move |_| {
-                                dragging.set(Some(id.get_untracked()));
+                                if let Some(edit) = editor {
+                                    rail.with_value(|rail| {
+                                        edit.drag_nav_item(
+                                            &id.get_untracked(),
+                                            (!rail.is_empty()).then_some(rail.as_str()),
+                                        );
+                                    });
+                                }
+                            }
+                            on:dragend=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag_end();
+                                }
                             }
                         >
                             <Icon icon=icon/>
@@ -655,7 +682,6 @@ fn NavItems(
     #[prop(into)] items: Signal<Vec<NavItemConfig>>,
     #[prop(into)] active: Signal<String>,
     #[prop(optional_no_strip)] editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<String>>,
 ) -> impl IntoView {
     // One choke point for every navigation list: the left rails, the right rail and the
     // submenu all draw through here, so a destination the server does not serve is dropped
@@ -673,7 +699,7 @@ fn NavItems(
         <For
             each=move || shown.get()
             key=|item| item.id.clone()
-            children=move |item| nav_item_row(item, active, editor, dragging)
+            children=move |item| nav_item_row(item, active, editor)
         />
     }
 }
@@ -720,12 +746,7 @@ fn section_is_drawn(has_rows: bool, editing: bool) -> bool {
 ///
 /// The card is drawn only when a door survived the gate, for the same reason a nav card is:
 /// the heading names the doors under it, and there are none to name.
-fn door_card(
-    doors: Option<ExtraDoors>,
-    editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<String>>,
-) -> AnyView {
-    let _ = dragging;
+fn door_card(doors: Option<ExtraDoors>, editor: Option<StyleEditor>) -> AnyView {
     let Some(doors) = doors else {
         return ().into_any();
     };
@@ -744,6 +765,11 @@ fn door_card(
                             on:dragstart=move |_| {
                                 if let Some(edit) = editor {
                                     edit.drag_staff();
+                                }
+                            }
+                            on:dragend=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag_end();
                                 }
                             }
                         >
@@ -772,7 +798,6 @@ fn NavRailCard(
     #[prop(into)] items: Signal<Vec<NavItemConfig>>,
     #[prop(into)] active: Signal<String>,
     #[prop(optional_no_strip)] editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
     // The heading asks what will actually be drawn under it, not what the layout holds: a
@@ -794,6 +819,7 @@ fn NavRailCard(
     let id_for_empty = id;
     let handle = move || editor;
     let _ = handle;
+    let (over, set_over) = signal(false);
 
     view! {
         <Show when=move || shown.get()>
@@ -816,7 +842,12 @@ fn NavRailCard(
                             title="Drag this category to the other rail"
                             on:dragstart=move |_| {
                                 if let Some(edit) = editor {
-                                    edit.drag_rail(&id.get_untracked());
+                                    edit.drag_rail(&id.get_untracked(), side);
+                                }
+                            }
+                            on:dragend=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag_end();
                                 }
                             }
                         >
@@ -876,23 +907,28 @@ fn NavRailCard(
                     </div>
                 </Show>
                 <ul
-                    class="menu w-full flex-col gap-1 p-0"
+                    class="menu relative w-full flex-col gap-1 p-0"
                     on:dragover=move |event| {
                         if editor.is_some() {
                             event.prevent_default();
+                            set_over.set(true);
                         }
                     }
+                    on:dragleave=move |_| set_over.set(false)
                     on:drop=move |event| {
                         if let Some(edit) = editor {
                             event.prevent_default();
-                            if let Some(from) = dragging.get_untracked() {
-                                edit.set_nav_item_rail(&from, &id_for_drop.get_untracked());
-                            }
-                            dragging.set(None);
+                            set_over.set(false);
+                            edit.drop_in_category(&id_for_drop.get_untracked());
                         }
                     }
                 >
-                    <NavItems items=items active=active editor=editor dragging=dragging/>
+                    <Show when=move || over.get()>
+                        <li class="pointer-events-none absolute inset-x-0 -top-1 z-10 rounded-box bg-primary px-2 py-0.5 text-center text-xs text-primary-content shadow" data-drop-says="">
+                            "Move to this category"
+                        </li>
+                    </Show>
+                    <NavItems items=items active=active editor=editor/>
                     <Show when=move || items.get().is_empty()>
                         <li class="px-2 py-1">
                             <button
@@ -1002,8 +1038,6 @@ pub fn Rail(
     #[prop(optional_no_strip)]
     notices: Option<Signal<NoticeDoor>>,
 ) -> impl IntoView {
-    let dragging: RwSignal<Option<String>> = RwSignal::new(None);
-    let dragging_card: RwSignal<Option<ModuleKind>> = RwSignal::new(None);
     let door = notices.unwrap_or_else(|| Signal::derive(|| NoticeDoor::Unknown));
     let cards = Memo::new(move |_| {
         style
@@ -1135,7 +1169,6 @@ pub fn Rail(
                                         items=items
                                         active=active
                                         editor=editor
-                                        dragging=dragging
                                     />
                                 }
                             }
@@ -1145,6 +1178,17 @@ pub fn Rail(
                                 type="button"
                                 class="w-full rounded-box border border-dashed border-base-content/50 bg-base-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide opacity-80 hover:border-primary hover:text-primary"
                                 data-nav-new-rail=""
+                                draggable="true"
+                                on:dragstart=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag(crate::session_style::Dragged::NewCategory);
+                                    }
+                                }
+                                on:dragend=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_end();
+                                    }
+                                }
                                 on:click=move |_| {
                                     if let Some(edit) = editor {
                                         edit.add_nav_rail_in("New category", ModuleRail::Left);
@@ -1154,7 +1198,7 @@ pub fn Rail(
                                 "+ Category"
                             </button>
                         </Show>
-                        <Show when=move || staff_here.get()>{door_card(doors.clone(), editor, dragging)}</Show>
+                        <Show when=move || staff_here.get()>{door_card(doors.clone(), editor)}</Show>
                         <Show when=move || !submenu_items.get().is_empty()>
                             <details class="rounded-box bg-base-100 p-2 shadow-sm" data-session-submenu="">
                                 <summary class="cursor-pointer select-none px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-70">
@@ -1165,7 +1209,6 @@ pub fn Rail(
                                         items=Signal::derive(move || submenu_items.get())
                                         active=active
                                         editor=editor
-                                        dragging=dragging
                                     />
                                 </ul>
                             </details>
@@ -1178,7 +1221,6 @@ pub fn Rail(
                 kinds=Signal::derive(move || cards.get())
                 sidebar=sidebar
                 editor=editor
-                dragging=dragging_card
             />
         </aside>
     }
@@ -1199,8 +1241,6 @@ pub fn RightRail(
     #[prop(optional_no_strip)]
     sidebar: Option<Signal<SidebarData>>,
 ) -> impl IntoView {
-    let dragging: RwSignal<Option<String>> = RwSignal::new(None);
-    let dragging_card: RwSignal<Option<crate::session_style::ModuleKind>> = RwSignal::new(None);
     let right_items = Memo::new(move |_| {
         style
             .get()
@@ -1269,19 +1309,29 @@ pub fn RightRail(
                                     items=items
                                     active=active
                                     editor=editor
-                                    dragging=dragging
                                 />
                             }
                         }
                     />
                     <Show when=move || staff_here.get()>
-                        {door_card(None, editor, dragging)}
+                        {door_card(None, editor)}
                     </Show>
                     <Show when=move || editor.is_some_and(StyleEditor::is_active)>
                         <button
                             type="button"
                             class="w-full rounded-box border border-dashed border-base-content/50 bg-base-100 px-2 py-2 text-xs font-semibold uppercase tracking-wide opacity-80 hover:border-primary hover:text-primary"
                             data-nav-new-rail="right"
+                            draggable="true"
+                            on:dragstart=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag(crate::session_style::Dragged::NewCategory);
+                                }
+                            }
+                            on:dragend=move |_| {
+                                if let Some(edit) = editor {
+                                    edit.drag_end();
+                                }
+                            }
                             on:click=move |_| {
                                 if let Some(edit) = editor {
                                     edit.add_nav_rail_in("New category", ModuleRail::Right);
@@ -1299,7 +1349,6 @@ pub fn RightRail(
                                 items=Signal::derive(move || right_items.get())
                                 active=active
                                 editor=editor
-                                dragging=dragging
                             />
                         </ul>
                     </nav>
@@ -1308,7 +1357,7 @@ pub fn RightRail(
                     kinds=Signal::derive(move || modules.get())
                     sidebar=sidebar
                     editor=editor
-                    dragging=dragging_card
+
                 />
             </aside>
         </Show>

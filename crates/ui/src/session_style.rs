@@ -1422,20 +1422,64 @@ fn slugify_id(label: &str) -> String {
 pub struct StyleEditor {
     draft: RwSignal<SessionStyle>,
     active: RwSignal<bool>,
-    dragging: RwSignal<Option<EditDrag>>,
+    dragging: RwSignal<Option<Dragged>>,
+    /// How a collection picture becomes a slot. A drive file has no public address until
+    /// the instance mints one, and only the browser can ask; the shell holds the door open
+    /// rather than the address.
+    library_placer: RwSignal<Option<Callback<(LibraryPicture, PictureTarget)>>>,
+}
+
+/// One picture in the account's own collection, ready to be dragged onto the page.
+///
+/// `thumbnail` is what the tray draws; `id` names the drive file the drop has to resolve
+/// into a permanent address before it can be stored in the style.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryPicture {
+    /// The drive file's id.
+    pub id: String,
+    /// The file's name, used as the picture's description when it lands.
+    pub name: String,
+    /// An address the browser can draw on this page only.
+    pub thumbnail: String,
+}
+
+/// A file dropped on the collection's upload target, already read into memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadRequest {
+    /// The file's name.
+    pub name: String,
+    /// The type the browser reported, which the server checks again.
+    pub mime: String,
+    /// The file's bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// What a drag in the editor is carrying.
 ///
-/// The tray in the middle and the two rails are the same arrangement seen twice: what the
-/// tray offers is what a rail can hold, so one payload type covers moving a card, a
-/// category card and the staff doors between columns.
+/// One payload type for every movable thing, held by [`StyleEditor`] so every component reads
+/// and clears the same signal. A drop handler that does not accept a variant refuses it by
+/// type: a picture dragged onto a rail reaches a handler that only knows pictures, so the
+/// picture stays where it was instead of landing in the navigation.
+///
+/// `Library` is the collection's payload, the one thing here that is not already in the
+/// draft: a drive picture that has not been placed yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EditDrag {
+pub enum Dragged {
     /// A card, by kind.
-    Module(ModuleKind),
-    /// A navigation category card, by id.
-    Rail(String),
+    Module { kind: ModuleKind },
+    /// A navigation entry and the category it came from, if any.
+    NavItem { id: String, rail: Option<String> },
+    /// A navigation category card, by id and by the rail it came from.
+    Category { id: String, rail: ModuleRail },
+    /// A picture already in a region.
+    Picture {
+        region: BannerRegionKind,
+        index: usize,
+    },
+    /// A picture from the collection, not yet placed.
+    Library { picture: LibraryPicture },
+    /// A brand-new category card, waiting to be dropped on a rail.
+    NewCategory,
     /// The staff doors, which are one card whatever they contain.
     Staff,
 }
@@ -1461,6 +1505,7 @@ impl StyleEditor {
             draft,
             active,
             dragging: RwSignal::new(None),
+            library_placer: RwSignal::new(None),
         }
     }
 
@@ -1586,6 +1631,64 @@ impl StyleEditor {
             .update(|style| style.reorder_module(dragged, target));
     }
 
+    /// Drop a card on another card: adopt its rail, then its place.
+    ///
+    /// A card that is not on a rail yet is the tray's Add door, so a drop on it adds to the
+    /// rail the Add button would have chosen; the place is only adopted when both cards
+    /// share a rail.
+    pub fn drop_on_module(self, target: ModuleKind) -> bool {
+        let Some(Dragged::Module { kind }) = self.take_drag() else {
+            return false;
+        };
+        if kind == target {
+            return false;
+        }
+        let mut moved = false;
+        self.draft.update(|style| {
+            let rail = style.module_rail(target).unwrap_or(ModuleRail::Right);
+            if style.has_module(kind) {
+                style.set_module_rail(kind, rail);
+            } else {
+                style.add_module(kind, rail);
+            }
+            if style.module_rail(target) == Some(rail) {
+                style.reorder_module(kind, target);
+            }
+            moved = true;
+        });
+        moved
+    }
+
+    /// Drop a navigation entry on another entry, adopting its place.
+    pub fn drop_on_nav_item(self, target: &str) -> bool {
+        match self.take_drag() {
+            Some(Dragged::NavItem { id, .. }) => {
+                self.reorder_nav_item(&id, target);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// File a dragged navigation entry under `rail_id`.
+    pub fn drop_in_category(self, rail_id: &str) -> bool {
+        match self.take_drag() {
+            Some(Dragged::NavItem { id, .. }) => {
+                self.set_nav_item_rail(&id, rail_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Put a dragged navigation entry away, in the state the layout keeps off the rail.
+    pub fn drop_to_hidden(self) -> bool {
+        match self.take_drag() {
+            Some(Dragged::NavItem { id, .. }) => self.hide_nav_item(&id),
+            _ => false,
+        }
+    }
+
     /// Move a navigation item to another placement.
     pub fn move_nav_item(self, id: &str, placement: NavPlacement) {
         let id = id.to_owned();
@@ -1641,32 +1744,162 @@ impl StyleEditor {
             .update(|style| style.nav.set_item_rail(&item_id, &rail_id));
     }
 
+    /// The signal every draggable node writes and every drop target reads.
+    #[must_use]
+    pub const fn drag_signal(self) -> RwSignal<Option<Dragged>> {
+        self.dragging
+    }
+
+    /// Start a drag with `payload`, replacing whatever was there.
+    pub fn drag(self, payload: Dragged) {
+        self.dragging.set(Some(payload));
+    }
+
+    /// Clear the drag on `dragend`, so a cancelled drag cannot leave a stale target.
+    pub fn drag_end(self) {
+        self.dragging.set(None);
+    }
+
     /// Remember what a drag started on, so a rail can take it when it is dropped.
     pub fn drag_module(self, kind: ModuleKind) {
-        self.dragging.set(Some(EditDrag::Module(kind)));
+        self.drag(Dragged::Module { kind });
     }
 
     /// The same, for a category card.
-    pub fn drag_rail(self, id: &str) {
-        self.dragging.set(Some(EditDrag::Rail(id.to_owned())));
+    pub fn drag_rail(self, id: &str, rail: ModuleRail) {
+        self.drag(Dragged::Category {
+            id: id.to_owned(),
+            rail,
+        });
     }
 
     /// The same, for the staff doors.
     pub fn drag_staff(self) {
-        self.dragging.set(Some(EditDrag::Staff));
+        self.drag(Dragged::Staff);
+    }
+
+    /// The same, for a navigation entry.
+    pub fn drag_nav_item(self, id: &str, rail: Option<&str>) {
+        self.drag(Dragged::NavItem {
+            id: id.to_owned(),
+            rail: rail.map(str::to_owned),
+        });
+    }
+
+    /// The same, for a picture that is already on a banner.
+    pub fn drag_picture(self, region: BannerRegionKind, index: usize) {
+        self.drag(Dragged::Picture { region, index });
+    }
+
+    /// The same, for a picture the collection offers.
+    pub fn drag_library(self, picture: LibraryPicture) {
+        self.drag(Dragged::Library { picture });
+    }
+
+    /// Install the browser's answer to "where can this drive picture live?".
+    pub fn set_library_placer(self, place: Callback<(LibraryPicture, PictureTarget)>) {
+        self.library_placer.set(Some(place));
+    }
+
+    /// Put a collection picture in the top banner, the same place a click in the tray
+    /// promises. The keyboard door onto the same edit a drag makes.
+    pub fn place_library(self, picture: LibraryPicture) -> bool {
+        match self.library_placer.get_untracked() {
+            Some(place) => {
+                place.run((picture, PictureTarget::Region(BannerRegionKind::Top)));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Put a resolved collection picture on the page.
+    pub fn place_library_slot(self, target: PictureTarget, slot: ImageSlot) -> bool {
+        self.draft
+            .try_update(|style| match target {
+                PictureTarget::Region(kind) => style.region_mut(kind).add_slot(slot),
+                PictureTarget::Slot(kind, index) => {
+                    style.region_mut(kind).replace_slot(index, slot)
+                }
+            })
+            .unwrap_or(false)
     }
 
     /// Take the payload a drop should apply, clearing it.
-    pub fn take_drag(self) -> Option<EditDrag> {
+    pub fn take_drag(self) -> Option<Dragged> {
         self.dragging
             .get_untracked()
             .inspect(|_| self.dragging.set(None))
     }
 
+    /// Drop a picture on `target` at `index`.
+    ///
+    /// A picture from another region moves there (keeping its slot in the draft), a
+    /// collection picture is added, and anything else is refused rather than rerouted: a
+    /// module or a category dropped on a banner does nothing.
+    pub fn drop_picture(self, target: BannerRegionKind, index: usize) -> bool {
+        match self.take_drag() {
+            Some(Dragged::Picture {
+                region,
+                index: from,
+            }) => {
+                if region == target {
+                    self.move_slot(target, from, index);
+                    return true;
+                }
+                self.draft
+                    .try_update(|style| {
+                        let Some(image) = style.region_mut(region).slots.get(from).cloned() else {
+                            return false;
+                        };
+                        if !style.region_mut(target).add_slot(image) {
+                            return false;
+                        }
+                        style.region_mut(region).remove_slot(from);
+                        let last = style.region_mut(target).slots.len().saturating_sub(1);
+                        style.region_mut(target).move_slot(last, index.min(last));
+                        true
+                    })
+                    .unwrap_or(false)
+            }
+            Some(Dragged::Library { picture }) => {
+                // A drop on an occupied place replaces that picture, the same edit the
+                // picture's own replace control asks for; a drop past the end adds one.
+                let occupied = self
+                    .draft
+                    .with_untracked(|style| index < style.region(target).slots.len());
+                let place = if occupied {
+                    PictureTarget::Slot(target, index)
+                } else {
+                    PictureTarget::Region(target)
+                };
+                match self.library_placer.get_untracked() {
+                    Some(place_it) => {
+                        place_it.run((picture, place));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Take a picture off the page when it is dropped back on the collection.
+    pub fn drop_on_collection(self) -> bool {
+        match self.take_drag() {
+            Some(Dragged::Picture { region, index }) => {
+                self.remove_slot(region, index);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Apply whatever is being dragged to `rail`. Returns whether anything moved.
     pub fn drop_on(self, rail: ModuleRail) -> bool {
         match self.take_drag() {
-            Some(EditDrag::Module(kind)) => {
+            Some(Dragged::Module { kind }) => {
                 let mut placed = false;
                 self.draft.update(|style| {
                     if style.has_module(kind) {
@@ -1678,14 +1911,30 @@ impl StyleEditor {
                 });
                 placed
             }
-            Some(EditDrag::Rail(id)) => {
+            Some(Dragged::Category { id, .. }) => {
                 let mut moved = false;
                 self.draft.update(|style| {
                     moved = style.nav.set_rail_side(&id, rail);
                 });
                 moved
             }
-            Some(EditDrag::Staff) => {
+            Some(Dragged::NavItem { id, .. }) => {
+                let mut moved = false;
+                let placement = match rail {
+                    ModuleRail::Left => NavPlacement::Left,
+                    ModuleRail::Right => NavPlacement::Right,
+                };
+                self.draft.update(|style| {
+                    if let Some(item) = style.nav.items.iter_mut().find(|item| item.id == id) {
+                        item.placement = placement;
+                        item.rail.clear();
+                        moved = true;
+                    }
+                });
+                moved
+            }
+            Some(Dragged::NewCategory) => self.add_nav_rail_in("New category", rail).is_some(),
+            Some(Dragged::Staff) => {
                 let mut moved = false;
                 self.draft.update(|style| {
                     moved = style.staff_rail != rail;
@@ -1693,7 +1942,7 @@ impl StyleEditor {
                 });
                 moved
             }
-            None => false,
+            Some(Dragged::Picture { .. } | Dragged::Library { .. }) | None => false,
         }
     }
 
@@ -2158,5 +2407,203 @@ mod tests {
                 .set_slot_alt(BannerRegionKind::Right, 9, "x")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn picture_dragged_between_regions_keeps_its_slot() {
+        let mut style = SessionStyle::default();
+        for url in ["https://cdn.example/a.png", "https://cdn.example/b.png"] {
+            assert!(
+                style
+                    .left
+                    .add_slot(ImageSlot::new(url, None, None).unwrap())
+            );
+        }
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor.drag_picture(BannerRegionKind::Left, 1);
+        assert!(editor.drop_picture(BannerRegionKind::Right, 0));
+        let style = editor.draft().get_untracked();
+        assert_eq!(style.left.slots.len(), 1);
+        assert_eq!(style.left.slots[0].url, "https://cdn.example/a.png");
+        assert_eq!(style.right.slots.len(), 1);
+        assert_eq!(style.right.slots[0].url, "https://cdn.example/b.png");
+    }
+
+    #[test]
+    fn module_dragged_from_the_tray_lands_on_a_rail_and_leaves_the_tray() {
+        let mut style = SessionStyle::default();
+        style.remove_module(ModuleKind::TrendingTags);
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor.drag_module(ModuleKind::TrendingTags);
+        assert!(editor.drop_on(ModuleRail::Right));
+        assert!(
+            editor
+                .draft()
+                .get_untracked()
+                .has_module(ModuleKind::TrendingTags)
+        );
+        assert!(
+            editor
+                .draft()
+                .get_untracked()
+                .modules_in(ModuleRail::Right)
+                .contains(&ModuleKind::TrendingTags)
+        );
+    }
+
+    #[test]
+    fn a_picture_dropped_on_a_module_holder_is_refused() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style
+                .left
+                .add_slot(ImageSlot::new("https://cdn.example/a.png", None, None).unwrap())
+        );
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor.drag_picture(BannerRegionKind::Left, 0);
+        assert!(!editor.drop_on_module(ModuleKind::TrendingTags));
+        assert!(
+            editor.take_drag().is_none(),
+            "a refused drop still clears the drag"
+        );
+        assert_eq!(editor.draft().get_untracked().left.slots.len(), 1);
+    }
+
+    #[test]
+    fn module_dragged_between_categories_lands_only_in_the_destination() {
+        let mut style = SessionStyle::default();
+        style.add_module(ModuleKind::TrendingTags, ModuleRail::Left);
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        assert!(
+            editor
+                .draft()
+                .get_untracked()
+                .modules_in(ModuleRail::Left)
+                .contains(&ModuleKind::TrendingTags)
+        );
+        editor.drag_module(ModuleKind::TrendingTags);
+        assert!(editor.drop_on(ModuleRail::Right));
+        let style = editor.draft().get_untracked();
+        assert!(style.modules_in(ModuleRail::Right).contains(&ModuleKind::TrendingTags));
+        assert!(
+            !style.modules_in(ModuleRail::Left).contains(&ModuleKind::TrendingTags),
+            "a moved card is moved, not copied"
+        );
+        assert_eq!(
+            style
+                .modules
+                .iter()
+                .filter(|held| held.kind == ModuleKind::TrendingTags)
+                .count(),
+            1,
+            "one card cannot be in two rails at once"
+        );
+    }
+
+    #[test]
+    fn a_collection_picture_dropped_on_a_slot_replaces_that_slot() {
+        let mut style = SessionStyle::default();
+        for url in ["https://cdn.example/a.png", "https://cdn.example/b.png"] {
+            assert!(
+                style
+                    .top
+                    .add_slot(ImageSlot::new(url, None, None).unwrap())
+            );
+        }
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        // The browser normally resolves the drive file asynchronously; the test supplies
+        // that answer directly, which is the only part of the drop that is not the shell's.
+        editor.set_library_placer(Callback::new(move |(_, target): (LibraryPicture, PictureTarget)| {
+            editor.place_library_slot(
+                target,
+                ImageSlot::new("https://cdn.example/c.png", None, Some("attached"))
+                    .expect("a safe address"),
+            );
+        }));
+        editor.drag_library(LibraryPicture {
+            id: String::from("file-1"),
+            name: String::from("c.png"),
+            thumbnail: String::from("blob:test"),
+        });
+        assert!(editor.drop_picture(BannerRegionKind::Top, 1));
+        let top = editor.draft().get_untracked().top;
+        assert_eq!(top.slots.len(), 2, "a collection drop replaces, never grows");
+        assert_eq!(top.slots[0].url, "https://cdn.example/a.png");
+        assert_eq!(top.slots[1].url, "https://cdn.example/c.png");
+    }
+
+    #[test]
+    fn an_add_target_accepts_the_same_edit_by_drop_and_by_click() {
+        // The tray's Add button and a drop on the same card are one edit; the button is
+        // the keyboard door onto it, so both have to end in the same placement.
+        let dropped = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        dropped.drag_module(ModuleKind::LiveFeed);
+        assert!(dropped.drop_on_module(ModuleKind::TrendingTags));
+        let clicked = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        clicked.toggle_module(ModuleKind::LiveFeed);
+        assert_eq!(
+            dropped
+                .draft()
+                .get_untracked()
+                .module_rail(ModuleKind::LiveFeed),
+            clicked.draft().get_untracked().module_rail(ModuleKind::LiveFeed),
+            "the drop and the click must choose the same rail"
+        );
+    }
+
+    #[test]
+    fn a_collection_drag_is_cleared_when_the_browser_cancels_the_drop() {
+        let editor = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        editor.drag_library(LibraryPicture {
+            id: String::from("file-1"),
+            name: String::from("c.png"),
+            thumbnail: String::from("blob:test"),
+        });
+        // No drop target accepts it, and the browser then fires `dragend`: the shared
+        // signal must be empty, or the next hover promises a drop that cannot happen.
+        editor.drag_end();
+        assert!(editor.take_drag().is_none());
+    }
+
+    #[test]
+    fn a_link_dragged_to_the_hidden_list_leaves_the_rail() {
+        let editor = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        let id = editor
+            .draft()
+            .get_untracked()
+            .nav
+            .items
+            .iter()
+            .find(|item| item.placement == NavPlacement::Left)
+            .map(|item| item.id.clone())
+            .expect("the default layout puts a link on the left");
+        editor.drag_nav_item(&id, Some(""));
+        assert!(editor.drop_to_hidden());
+        let nav = editor.draft().get_untracked().nav;
+        assert!(
+            nav.items_in(NavPlacement::Hidden)
+                .iter()
+                .any(|item| item.id == id)
+        );
+        assert!(
+            !nav.items_in(NavPlacement::Left)
+                .iter()
+                .any(|item| item.id == id)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_drag_leaves_no_phantom_target() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style
+                .left
+                .add_slot(ImageSlot::new("https://cdn.example/a.png", None, None).unwrap())
+        );
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor.drag_picture(BannerRegionKind::Left, 0);
+        assert!(editor.take_drag().is_some(), "the drag really started");
+        editor.drag_end();
+        assert!(editor.take_drag().is_none());
     }
 }

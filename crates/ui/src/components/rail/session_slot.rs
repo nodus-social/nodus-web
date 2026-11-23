@@ -33,7 +33,6 @@ pub(super) fn banner_slot(
     index: usize,
     editor: Option<StyleEditor>,
     region: Signal<BannerRegion>,
-    dragging: RwSignal<Option<usize>>,
     open: RwSignal<Option<usize>>,
     on_pick: Option<Callback<PictureTarget>>,
 ) -> AnyView {
@@ -57,19 +56,18 @@ pub(super) fn banner_slot(
             on:dragover=move |event| event.prevent_default()
             on:drop=move |event| {
                 event.prevent_default();
-                if let Some(from) = dragging.get_untracked() {
-                    edit.move_slot(kind, from, index);
-                }
-                dragging.set(None);
+                edit.drop_picture(kind, index);
             }
         >
             {image}
             <span class=verbs class:hidden=move || !edit.is_active()>
                 <span
                     class="cursor-grab select-none rounded bg-base-100/90 px-1 text-xs opacity-70"
-                    title="Drag to reorder"
+                    title="Drag to reorder, or to another banner"
                     draggable="true"
-                    on:dragstart=move |_| dragging.set(Some(index))
+                    data-style-picture-drag=""
+                    on:dragstart=move |_| edit.drag_picture(kind, index)
+                    on:dragend=move |_| edit.drag_end()
                 >
                     "\u{28ff}"
                 </span>

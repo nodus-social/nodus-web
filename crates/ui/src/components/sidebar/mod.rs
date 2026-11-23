@@ -11,7 +11,10 @@
 
 use leptos::prelude::*;
 
-use crate::session_style::{ModuleKind, ModuleRail, NavLayout, PlacedModule, StyleEditor};
+use crate::session_style::{
+    LibraryPicture, ModuleKind, ModuleRail, NavLayout, NavPlacement, PlacedModule, StyleEditor,
+    UploadRequest,
+};
 
 /// One line inside a card: a tag, a person, a post, a notification.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -122,9 +125,6 @@ pub fn SidebarModule(
     kind: ModuleKind,
     #[prop(into)] items: Signal<Vec<SidebarItem>>,
     #[prop(optional_no_strip)] editor: Option<StyleEditor>,
-    /// Which card is being dragged right now, shared by the cards in one rail.
-    #[prop(optional_no_strip)]
-    dragging: Option<RwSignal<Option<ModuleKind>>>,
 ) -> impl IntoView {
     let editing = Memo::new(move |_| editor.is_some_and(StyleEditor::is_active));
     let rows = Memo::new(move |_| items.get());
@@ -135,8 +135,13 @@ pub fn SidebarModule(
             data-rail-module=id
             draggable=move || editing.get().to_string()
             on:dragstart=move |_| {
-                if let Some(dragging) = dragging {
-                    dragging.set(Some(kind));
+                if let Some(edit) = editor {
+                    edit.drag_module(kind);
+                }
+            }
+            on:dragend=move |_| {
+                if let Some(edit) = editor {
+                    edit.drag_end();
                 }
             }
             on:dragover=move |event| {
@@ -146,10 +151,8 @@ pub fn SidebarModule(
             }
             on:drop=move |event| {
                 event.prevent_default();
-                let from = dragging.and_then(|signal| signal.get_untracked());
-                if let (Some(dragging), Some(editor), Some(from)) = (dragging, editor, from) {
-                    editor.reorder_module(from, kind);
-                    dragging.set(None);
+                if let Some(edit) = editor {
+                    edit.drop_on_module(kind);
                 }
             }
         >
@@ -278,14 +281,35 @@ pub fn ModuleTray(
                     key=|kind| *kind
                     children=move |kind| {
                         let chosen = Signal::derive(move || placed(kind));
+                        let (over, set_over) = signal(false);
+                        let editable_card = editable;
                         view! {
                             <li
                                 class="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 shadow-sm"
                                 data-module-option=kind.id()
-                                draggable=move || editable.get().to_string()
+                                draggable=move || editable_card.get().to_string()
                                 on:dragstart=move |_| {
                                     if let Some(edit) = editor {
                                         edit.drag_module(kind);
+                                    }
+                                }
+                                on:dragend=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_end();
+                                    }
+                                }
+                                on:dragover=move |event| {
+                                    if editable_card.get_untracked() {
+                                        event.prevent_default();
+                                        set_over.set(true);
+                                    }
+                                }
+                                on:dragleave=move |_| set_over.set(false)
+                                on:drop=move |event| {
+                                    event.prevent_default();
+                                    set_over.set(false);
+                                    if let Some(edit) = editor {
+                                        edit.drop_on_module(kind);
                                     }
                                 }
                             >
@@ -293,6 +317,11 @@ pub fn ModuleTray(
                                     <h3 class="truncate text-sm font-semibold">{kind.label()}</h3>
                                     <p class="text-xs opacity-70">{kind.hint()}</p>
                                 </div>
+                                <Show when=move || over.get()>
+                                    <p class="rounded-box bg-primary/15 px-2 py-1 text-xs" data-drop-says="">
+                                        "Place in this card's rail"
+                                    </p>
+                                </Show>
                                 <div class="mt-auto flex flex-wrap items-center gap-2">
                                     <button
                                         type="button"
@@ -347,6 +376,7 @@ pub fn ModuleTray(
                             let id = rail.id.clone();
                             move || nav.get().items_of_rail(&id).len()
                         });
+                        let (over, set_over) = signal(false);
                         view! {
                             <li
                                 class="flex flex-wrap items-center gap-2 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm"
@@ -354,7 +384,24 @@ pub fn ModuleTray(
                                 draggable=move || editable.get().to_string()
                                 on:dragstart=move |_| {
                                     if let Some(edit) = editor {
-                                        edit.drag_rail(&id.get_untracked());
+                                        edit.drag_rail(&id.get_untracked(), side.get_untracked());
+                                    }
+                                }
+                                on:dragend=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_end();
+                                    }
+                                }
+                                on:dragover=move |event| {
+                                    event.prevent_default();
+                                    set_over.set(true);
+                                }
+                                on:dragleave=move |_| set_over.set(false)
+                                on:drop=move |event| {
+                                    event.prevent_default();
+                                    set_over.set(false);
+                                    if let Some(edit) = editor {
+                                        edit.drop_in_category(&id.get_untracked());
                                     }
                                 }
                             >
@@ -363,6 +410,11 @@ pub fn ModuleTray(
                                 </span>
                                 <span class="min-w-0 flex-1 truncate text-sm font-semibold">{move || label.get()}</span>
                                 <span class="text-xs opacity-60">{move || format!("{} links", entries.get())}</span>
+                                <Show when=move || over.get()>
+                                    <span class="rounded-box bg-primary/15 px-2 py-1 text-xs" data-drop-says="">
+                                        "Move to this category"
+                                    </span>
+                                </Show>
                                 <span class="flex items-center gap-1">
                                     <RailSideButton
                                         side=ModuleRail::Left
@@ -396,6 +448,11 @@ pub fn ModuleTray(
                             edit.drag_staff();
                         }
                     }
+                    on:dragend=move |_| {
+                        if let Some(edit) = editor {
+                            edit.drag_end();
+                        }
+                    }
                 >
                     <span class="cursor-grab select-none opacity-60">"\u{28FF}"</span>
                     <span class="min-w-0 flex-1 truncate text-sm font-semibold">"Moderation and administration"</span>
@@ -405,6 +462,56 @@ pub fn ModuleTray(
                     </span>
                 </div>
             </Show>
+
+            <h2 class="text-sm font-semibold uppercase tracking-wide opacity-70">"Hidden"</h2>
+            <ul
+                class="flex flex-col gap-1 rounded-box border border-dashed border-base-300 p-2"
+                data-tray-hidden=""
+                on:dragover=move |event| event.prevent_default()
+                on:drop=move |event| {
+                    event.prevent_default();
+                    if let Some(edit) = editor {
+                        edit.drop_to_hidden();
+                    }
+                }
+            >
+                <For
+                    each=move || {
+                        nav.get()
+                            .items_in(NavPlacement::Hidden)
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    }
+                    key=|item| item.id.clone()
+                    children=move |item| {
+                        let id = item.id.clone();
+                        view! {
+                            <li
+                                class="flex items-center gap-2 text-sm"
+                                data-tray-hidden-item=id.clone()
+                                draggable=move || editable.get().to_string()
+                                on:dragstart=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_nav_item(&id, None);
+                                    }
+                                }
+                                on:dragend=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_end();
+                                    }
+                                }
+                            >
+                                <span class="cursor-grab select-none opacity-60">"\u{28FF}"</span>
+                                <span class="min-w-0 flex-1 truncate">{item.label.clone()}</span>
+                            </li>
+                        }
+                    }
+                />
+                <Show when=move || nav.get().items_in(NavPlacement::Hidden).is_empty()>
+                    <li class="px-1 py-2 text-xs opacity-60">"Drop a link here to take it off the rail."</li>
+                </Show>
+            </ul>
 
             <p class="text-xs opacity-60">
                 "Cards that read the instance work as soon as you add them. The two that ask the recommender need a minute of reading before they have anything to say. Settings stays on a rail: it is how you come back."
@@ -506,4 +613,162 @@ fn RailButton(
             {rail.label()}
         </button>
     }
+}
+
+/// The pictures the account already owns, laid out to drag from.
+///
+/// The editor used to offer one door — a file dialog — for every picture on the page, which
+/// made the page feel like a form. The collection is the shelf the pictures come off: each
+/// thumbnail is a [`crate::session_style::Dragged::Library`] payload, and a drop on a banner
+/// place or a rail slot resolves it into a permanent address. The upload target at the end
+/// keeps the old door open, and now also takes a file dropped straight onto it.
+#[component]
+pub fn MediaTray(
+    /// The account's own pictures, already thumbnailed by the browser.
+    #[prop(into)]
+    pictures: Signal<Vec<LibraryPicture>>,
+    /// What to say while the collection is being read, or why it is not there.
+    #[prop(into)]
+    status: Signal<Option<String>>,
+    /// The editor, which carries the drag and the placement door.
+    #[prop(optional_no_strip)]
+    editor: Option<StyleEditor>,
+    /// What to do with a file dropped on the upload target.
+    #[prop(optional_no_strip)]
+    on_upload: Option<Callback<UploadRequest>>,
+    /// The keyboard door: a click opens the same file chooser a drop would fill.
+    #[prop(optional_no_strip)]
+    on_upload_click: Option<Callback<()>>,
+) -> impl IntoView {
+    let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
+    view! {
+        <section class="flex flex-col gap-2" data-media-tray="">
+            <header class="flex flex-col gap-1">
+                <h1 class="text-lg font-semibold">"Your pictures"</h1>
+                <p class="text-sm opacity-70">
+                    "Drag a picture onto a banner or a picture slot. A click puts it in the top banner, for when a drag is not how you work."
+                </p>
+            </header>
+            <ul class="flex flex-wrap items-stretch gap-2" data-media-tray-items="">
+                <For
+                    each=move || pictures.get()
+                    key=|picture| picture.id.clone()
+                    children=move |picture| {
+                        let dragged = picture.clone();
+                        let clicked = picture.clone();
+                        let name = picture.name.clone();
+                        let title = format!("Place {} in the top banner", picture.name);
+                        view! {
+                            <li
+                                class="size-24 overflow-hidden rounded-box border border-base-300 bg-base-200"
+                                data-library-picture=picture.id.clone()
+                                draggable="true"
+                                on:dragstart=move |event| {
+                                    #[cfg(target_arch = "wasm32")]
+                                    start_picture_drag(&event, &name);
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    let _ = (&event, &name);
+                                    if let Some(edit) = editor {
+                                        edit.drag_library(dragged.clone());
+                                    }
+                                }
+                                on:dragend=move |_| {
+                                    if let Some(edit) = editor {
+                                        edit.drag_end();
+                                    }
+                                }
+                            >
+                                <button
+                                    type="button"
+                                    class="block size-full"
+                                    title=title
+                                    disabled=move || !editing.get()
+                                    on:click=move |_| {
+                                        if let Some(edit) = editor {
+                                            edit.place_library(clicked.clone());
+                                        }
+                                    }
+                                >
+                                    <img
+                                        class="size-full object-cover"
+                                        src=clicked.thumbnail.clone()
+                                        alt=clicked.name.clone()
+                                        draggable="false"
+                                    />
+                                </button>
+                            </li>
+                        }
+                    }
+                />
+                <li
+                    class="flex size-24 flex-col items-center justify-center gap-1 rounded-box border border-dashed border-base-300 p-1 text-center"
+                    data-media-upload=""
+                    on:dragover=move |event| event.prevent_default()
+                    on:drop=move |event| {
+                        event.prevent_default();
+                        #[cfg(target_arch = "wasm32")]
+                        if let Some(on_upload) = on_upload {
+                            if let Some(file) = first_dropped_file(&event) {
+                                read_dropped_file(file, on_upload);
+                            }
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let _ = (&event, on_upload);
+                    }
+                >
+                    <button
+                        type="button"
+                        class="flex size-full flex-col items-center justify-center gap-1 text-xs"
+                        disabled=move || !editing.get() || on_upload_click.is_none()
+                        on:click=move |_| {
+                            if let Some(open) = on_upload_click {
+                                open.run(());
+                            }
+                        }
+                    >
+                        <span class="text-lg">"＋"</span>
+                        <span>"Upload"</span>
+                    </button>
+                </li>
+            </ul>
+            <Show when=move || status.get().is_some()>
+                <p class="text-xs opacity-60" data-media-tray-status="">
+                    {move || status.get().unwrap_or_default()}
+                </p>
+            </Show>
+        </section>
+    }
+}
+
+/// Firefox only starts a drag when the payload is set, even for a value nothing reads.
+#[cfg(target_arch = "wasm32")]
+fn start_picture_drag(event: &web_sys::DragEvent, name: &str) {
+    if let Some(transfer) = event.data_transfer() {
+        let _ = transfer.set_data("text/plain", name);
+    }
+}
+
+/// The first file in a drop, if the drop carried one.
+#[cfg(target_arch = "wasm32")]
+fn first_dropped_file(event: &web_sys::DragEvent) -> Option<web_sys::File> {
+    event.data_transfer()?.files()?.get(0)
+}
+
+/// Read a dropped file and hand its bytes to the caller, which owns the upload.
+#[cfg(target_arch = "wasm32")]
+fn read_dropped_file(file: web_sys::File, on_upload: Callback<UploadRequest>) {
+    use wasm_bindgen_futures::JsFuture;
+
+    let name = file.name();
+    let mime = file.type_();
+    wasm_bindgen_futures::spawn_local(async move {
+        let Ok(buffer) = JsFuture::from(file.array_buffer()).await else {
+            return;
+        };
+        on_upload.run(UploadRequest {
+            name,
+            mime,
+            bytes: js_sys::Uint8Array::new(&buffer).to_vec(),
+        });
+    });
 }
