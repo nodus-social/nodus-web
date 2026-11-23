@@ -22,3 +22,4 @@ pub mod preferences;
 pub mod profile;
 pub mod sessions;
 pub mod sync;
+pub mod two_factor;

@@ -111,3 +111,37 @@ test('a direct visit to a hidden section names the server, not a blank tab', asy
   // The explanation is not an error page: the rest of settings still works.
   await expect(tab(page, 'account')).toBeVisible()
 })
+
+test('two-factor is absent when the instance does not publish the name', async ({ page }) => {
+  const without = SERVED.filter((name) => name !== 'two_factor')
+  await stubApi(page, { features: without })
+  await signedIn(page)
+  await page.goto('/settings/account')
+  await hydrated(page)
+
+  await expect(tab(page, 'two-factor')).toHaveCount(0)
+  // The tab's absence is stated where a reader lands, not left as a blank panel.
+  await page.goto('/settings/two-factor')
+  await hydrated(page)
+  await expect(
+    page.getByText('This instance does not serve two-factor authentication.'),
+  ).toBeVisible()
+})
+
+test('two-factor opens the page that the instance itself serves', async ({ page }) => {
+  await stubApi(page, { features: SERVED })
+  await signedIn(page)
+  await page.goto('/settings/account')
+  await hydrated(page)
+
+  await expect(tab(page, 'two-factor')).toBeVisible()
+  await tab(page, 'two-factor').click()
+  await hydrated(page)
+
+  // The section is a door to the instance's own HTML settings, which is where the
+  // password login proves the second factor; this app draws no state of its own.
+  const open = page.getByRole('link', { name: "Open this instance's two-factor settings" })
+  await expect(open).toBeVisible()
+  await expect(open).toHaveAttribute('href', '/auth/2fa')
+  await expect(page.getByText("asked for by the instance's login")).toBeVisible()
+})

@@ -9,6 +9,7 @@ use leptos::prelude::*;
 use nodus_pages::Note;
 use nodus_pages::pages::settings::account::SessionStyleCard;
 use nodus_pages::pages::settings::nav::SettingsSection;
+use nodus_pages::pages::settings::two_factor::TwoFactorCard;
 
 use crate::router::{self, Route};
 use crate::routes::settings::notifications::NotificationsCard;
@@ -154,9 +155,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::TwoFactor>
-                <Note class="text-sm opacity-70">
-                    "This instance serves two-factor authentication, but this app has no screen for it yet."
-                </Note>
+                <TwoFactorCard/>
             </Show>
 
             <Show when=move || section == SettingsSection::Export>

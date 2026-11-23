@@ -23,6 +23,7 @@ use crate::pages::settings::nav::SettingsSection;
 use crate::pages::settings::page::SettingsPage;
 use crate::pages::settings::profile::{ClockCard, ClockStyle, SensitiveCard};
 use crate::pages::settings::sync::SyncRows;
+use crate::pages::settings::two_factor::TwoFactorCard;
 
 use super::people::PeopleList;
 use crate::route::Runtime;
@@ -222,9 +223,7 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                     </Note>
                 }.into_any(),
                 SettingsSection::TwoFactor => view! {
-                    <Note class="text-sm opacity-70">
-                        "This instance serves two-factor authentication, but this app has no screen for it yet."
-                    </Note>
+                    <TwoFactorCard/>
                 }.into_any(),
                 SettingsSection::Export => view! {
                     <Note class="text-sm opacity-70">
