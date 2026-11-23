@@ -232,3 +232,55 @@ fn a_side_banner_fills_its_column_and_offers_its_picture_to_the_editor() {
     // The controls are not waiting for `2xl` any more: the column is wide enough at `xl`.
     assert!(!editing.contains("hidden 2xl:flex"));
 }
+
+/// Paints the whole rail with one notifications answer and, optionally, a capability answer.
+fn painted_notice(door: super::NoticeDoor, served: Option<&[&str]>) -> String {
+    Owner::new().with(|| {
+        if let Some(names) = served {
+            let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+            provide_serves(Signal::stored(Capabilities::from_parts("0.1.0", &names)));
+        }
+        view! {
+            <Rail
+                active=Signal::derive(|| "/home".to_owned())
+                profile=Signal::derive(|| None)
+                extra=None
+                notices=Some(Signal::stored(door))
+            />
+        }
+        .to_html()
+    })
+}
+
+/// A probe that answered 404 is one failed read, not a capability refusal: the directory
+/// road stays in its category, because a transient 404 must not delete a nav destination.
+#[test]
+fn an_absent_notification_probe_keeps_the_door() {
+    let html = painted_notice(super::NoticeDoor::Absent, Some(&["notifications"]));
+    assert!(html.contains("href=\"/notifications\""), "{html}");
+    assert!(!html.contains("data-notice-bell"), "{html}");
+}
+
+/// The capability answer is the only thing that removes the door: when the instance says it
+/// serves no notifications, neither the row nor a bell is drawn.
+#[test]
+fn only_a_capability_refusal_removes_the_notification_door() {
+    let html = painted_notice(super::NoticeDoor::Absent, Some(&["lists"]));
+    assert!(!html.contains("href=\"/notifications\""), "{html}");
+    assert!(!html.contains("data-notice-bell"), "{html}");
+}
+
+/// A served notifications surface replaces the catalogue row with the bell; a zero count
+/// draws no badge, and a positive count draws it.
+#[test]
+fn a_served_notification_probe_draws_the_bell_and_its_count() {
+    let zero = painted_notice(super::NoticeDoor::Unread(0), Some(&["notifications"]));
+    assert!(zero.contains("data-notice-bell"), "{zero}");
+    assert!(!zero.contains("data-notice-count"), "{zero}");
+    assert_eq!(zero.matches("href=\"/notifications\"").count(), 1, "{zero}");
+
+    let unread = painted_notice(super::NoticeDoor::Unread(3), Some(&["notifications"]));
+    let compact: String = unread.split_whitespace().collect();
+    assert!(compact.contains("data-notice-count"), "{unread}");
+    assert!(compact.contains(">3<"), "{unread}");
+}

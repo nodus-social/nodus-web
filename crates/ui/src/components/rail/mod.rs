@@ -130,15 +130,17 @@ pub struct Group {
 
 /// Whether this account's instance serves notifications, and how many are unread.
 ///
-/// The entry is not deleted from the layout when the answer is unknown: a server paint and
-/// a browser that has not asked yet both have to draw a door a reader can leave by. Only a
-/// 404 turns the entry off, and only a count turns it into a bell with a badge.
+/// The probe answers about one read, not about the layout: a 404 is equally what a proxy
+/// returns for a route it has not been taught and what an instance returns when it has no
+/// such endpoint, so it cannot be evidence that a destination does not exist. Only a count
+/// turns the entry into a bell; every other answer leaves the layout's ordinary door in
+/// place, and the capability answer is the only thing allowed to remove it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NoticeDoor {
     /// Not asked yet, or no session: draw the ordinary entry.
     #[default]
     Unknown,
-    /// The instance answered 404: draw nothing.
+    /// The probe did not answer (including a 404): we do not know yet, so draw the entry.
     Absent,
     /// The instance serves notifications; the number is what the reader has not read.
     Unread(usize),
@@ -1045,6 +1047,19 @@ pub fn Rail(
     notices: Option<Signal<NoticeDoor>>,
 ) -> impl IntoView {
     let door = notices.unwrap_or_else(|| Signal::derive(|| NoticeDoor::Unknown));
+    let at = crate::capabilities::serves();
+    // The bell is the door, so it is drawn only when the probe has a count *and* the
+    // instance serves the surface: a failed probe says "we do not know yet", never "there
+    // is nothing here", and the capability answer remains the only refusal. While the bell
+    // is drawn the catalogue copy is suppressed, because two doors to one page read as two
+    // pages.
+    let bell = Signal::derive(move || {
+        matches!(door.get(), NoticeDoor::Unread(_))
+            && crate::capabilities::admits(
+                at.map(|at| at.get()).as_ref(),
+                crate::capabilities::Surface::Notifications,
+            )
+    });
     let cards = Memo::new(move |_| {
         style
             .map(|s| s.get().modules_in(ModuleRail::Left))
@@ -1118,7 +1133,7 @@ pub fn Rail(
                 // The bell stands beside the categories rather than inside one: it is the
                 // one entry whose badge changes while the page is open, and a reader who
                 // filed Notifications under a category of their own still gets the count.
-                <Show when=move || matches!(door.get(), NoticeDoor::Unread(_))>
+                <Show when=move || bell.get()>
                     <ul class="menu w-full flex-col gap-1 p-0" data-notice-bell="">
                         <li>
                             <a
@@ -1157,12 +1172,11 @@ pub fn Rail(
                                 let rail_for_items = rail_id.clone();
                                 let label = Signal::derive(move || rail.label.clone());
                                 let items = Signal::derive(move || {
-                                    let known = door.get() != NoticeDoor::Unknown;
                                     nav.get()
                                         .items_of_rail(rail_for_items.as_str())
                                         .into_iter()
                                         .filter(|item| {
-                                            !(known && item.path == "/notifications")
+                                            !(bell.get() && item.path == "/notifications")
                                         })
                                         .cloned()
                                         .collect::<Vec<NavItemConfig>>()
