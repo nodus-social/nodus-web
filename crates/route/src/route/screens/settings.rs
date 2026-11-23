@@ -218,7 +218,7 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                 },
                 SettingsSection::Sessions => view! {
                     <Note class="text-sm opacity-70">
-                        "This instance serves sessions, but this app has no screen for them yet."
+                        "Sessions are read in the browser you are signed in with, once the app is running."
                     </Note>
                 }.into_any(),
                 SettingsSection::TwoFactor => view! {

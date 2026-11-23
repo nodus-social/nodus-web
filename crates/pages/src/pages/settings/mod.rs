@@ -20,4 +20,5 @@ pub mod notifications;
 pub mod page;
 pub mod preferences;
 pub mod profile;
+pub mod sessions;
 pub mod sync;

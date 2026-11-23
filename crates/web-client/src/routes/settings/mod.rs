@@ -35,6 +35,7 @@ mod notifications;
 mod profile;
 pub(crate) mod sensitive;
 mod session;
+mod sessions;
 pub(crate) mod sync;
 pub(crate) mod tags;
 
@@ -50,6 +51,7 @@ use preferences::PreferencesCard;
 use profile::ProfileCard;
 use sensitive::SensitiveCard;
 use session::SessionCard;
+use sessions::SessionsCard;
 use tags::FeaturedTagsCard;
 
 /// One settings section's body.
@@ -148,9 +150,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Sessions>
-                <Note class="text-sm opacity-70">
-                    "This instance serves sessions, but this app has no screen for them yet."
-                </Note>
+                <SessionsCard/>
             </Show>
 
             <Show when=move || section == SettingsSection::TwoFactor>

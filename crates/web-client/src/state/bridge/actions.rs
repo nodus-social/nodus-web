@@ -12,12 +12,12 @@ use core::future::Future;
 use nodus_client_core::InstanceApi;
 use nodus_client_core::actions::{
     AccountActions, Browse, FilterActions, HighlightActions, InstanceMeta, MediaActions,
-    ScheduleActions, Search, SettingsActions, StatusActions, TagActions,
+    ScheduleActions, Search, SessionActions, SettingsActions, StatusActions, TagActions,
 };
 use nodus_client_core::model::{
-    Account, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft, HistoryEntry,
-    Language, List, LocalId, MediaAttachment, Poll, PollDraft, PreferenceRefusal, Preferences,
-    PreferencesPatch, ProfileUpdate, Relationship, SearchResults, Status, Tag,
+    Account, AuthSession, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft,
+    HistoryEntry, Language, List, LocalId, MediaAttachment, Poll, PollDraft, PreferenceRefusal,
+    Preferences, PreferencesPatch, ProfileUpdate, Relationship, SearchResults, Status, Tag,
 };
 use nodus_client_sdk::protocol::Protocol;
 use nodus_mastodon::BrowserInstance;
@@ -559,6 +559,27 @@ pub async fn mute(id: &str, on: bool) -> Result<Relationship, String> {
     } else {
         call(transport.unmute(&id)).await
     }
+}
+
+/// The browsers and apps signed in to the account.
+///
+/// The list is a Nodus surface: the settings tab is only drawn when the instance
+/// publishes `sessions`, and the server marks which row is the request that asked.
+pub async fn sessions() -> Result<Vec<AuthSession>, String> {
+    let transport = transport()?;
+    call(SessionActions::sessions(&transport)).await
+}
+
+/// Ends one signed-in session.
+pub async fn revoke_session(id: &str) -> Result<(), String> {
+    let transport = transport()?;
+    call(SessionActions::revoke_session(&transport, id)).await
+}
+
+/// Ends every session except the one reading this page.
+pub async fn revoke_other_sessions() -> Result<(), String> {
+    let transport = transport()?;
+    call(SessionActions::revoke_other_sessions(&transport)).await
 }
 
 /// The defaults the instance reports for this account.
