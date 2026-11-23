@@ -718,6 +718,15 @@ pub async fn save_style(style: SessionStyle) -> Result<SessionStyle, String> {
         style_rw().set(clean.clone());
         sync_ssr_style(&key, &clean).await;
     }
+    // The account's own save has landed, so a refused publish must not throw it away: the
+    // reader keeps their arrangement and the sentence says what is still missing.
+    if let Err(error) = super::profile_banners::publish(&clean).await {
+        let sentence = format!(
+            "Your style is saved here, but other readers cannot see your banners yet: {error}. Save again to retry."
+        );
+        notice().set(Some(sentence.clone()));
+        return Err(sentence);
+    }
     Ok(clean)
 }
 

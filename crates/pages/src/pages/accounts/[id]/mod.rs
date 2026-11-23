@@ -15,7 +15,7 @@
 use crate::pages::settings::form::{ProfileField, ProfileImage, is_link};
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, Relationship, Status};
-use nodus_ui::session_style::BannerRegionKind;
+use nodus_ui::session_style::{BannerRegionKind, PublishedStyle};
 
 use crate::components::CardRenderer;
 use crate::display_name;
@@ -44,6 +44,17 @@ pub struct ProfileEditor {
     pub right_banner: Signal<bool>,
     /// Hands the account the instance answered with back to the screen that paints it.
     pub on_saved: Callback<Account>,
+}
+
+/// How a profile reads the banners an account published for other readers.
+///
+/// A callback rather than a value because only the browser has a transport: this crate owns
+/// the gate and the page's lifecycle, the client owns the request. Absent on the server,
+/// which has nothing to ask with and therefore draws no banners.
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileBanners {
+    /// Asks for one account's published style and hands back `None` when it has none.
+    pub load: Callback<(String, Callback<Option<PublishedStyle>>)>,
 }
 
 /// A profile header with Follow, Mute and Block, then the account's posts.
@@ -103,7 +114,34 @@ pub fn ProfilePage(
     fields: Option<Signal<Vec<ProfileField>>>,
     /// The owner's picture and banner controls, or `None` on anyone else's profile.
     editor: Option<ProfileEditor>,
+    /// How this paint reads the banners the account published for readers. Absent on the
+    /// server, which has no transport and draws no banners.
+    banners: Option<ProfileBanners>,
 ) -> impl IntoView {
+    let published = RwSignal::new(None::<PublishedStyle>);
+    let capability = nodus_ui::capabilities::serves();
+    if let Some(banners) = banners {
+        let account_id = account.id.clone();
+        // One read per account, even if the capability answer arrives in two steps: the
+        // second run sees the id already asked for and leaves the answer alone.
+        let requested = StoredValue::new(None::<String>);
+        Effect::new(move |_| {
+            let at = capability.map(|signal| signal.get());
+            if !nodus_ui::capabilities::reads_public_banners(at.as_ref(), true) {
+                requested.set_value(None);
+                return;
+            }
+            if requested.get_value().as_deref() == Some(account_id.as_str()) {
+                return;
+            }
+            requested.set_value(Some(account_id.clone()));
+            // The previous account's banners must not stand in for this account's while
+            // its own read is in flight.
+            published.set(None);
+            let done = Callback::new(move |style: Option<PublishedStyle>| published.set(style));
+            banners.load.run((account_id.clone(), done));
+        });
+    }
     let name = display_name(&account.display_name, &account.acct);
     let handle = format!("@{}", account.acct);
     let counts = format!(
@@ -180,6 +218,7 @@ pub fn ProfilePage(
 
     view! {
         <crate::Screen>
+            <nodus_ui::PublishedBanners style=Signal::derive(move || published.get()) />
             <header class="card overflow-hidden border border-base-300 bg-base-100 shadow-sm">
                 {has_header.then(|| view! {
                     // The banner fills the header's width. Its published shape supplies
@@ -488,6 +527,7 @@ mod tests {
                 show_verbs: false,
                 fields: None,
                 editor: None,
+                banners: None,
             })
             .to_html()
         })
@@ -539,6 +579,7 @@ mod tests {
                 show_verbs: false,
                 fields: None,
                 editor: Some(editor),
+                banners: None,
             })
             .to_html()
         });

@@ -172,3 +172,14 @@ fn the_absent_surface_paints_an_explanation() {
     );
     assert!(html.contains("href=\"/home\""), "{html}");
 }
+
+/// A profile stops at the gate on both sides of the reader: no reader means no transport,
+/// and a Nodus answer without `style_public` means the endpoint would only 404.
+#[test]
+fn an_absent_style_public_capability_reads_nothing() {
+    let without = nodus(&["feed_accounts"]);
+    assert!(!reads_public_banners(Some(&without), true));
+    assert!(!reads_public_banners(None, false));
+    assert!(reads_public_banners(None, true));
+    assert!(reads_public_banners(Some(&nodus(&["style_public"])), true));
+}

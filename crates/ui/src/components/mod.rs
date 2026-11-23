@@ -20,6 +20,7 @@ pub mod notification_card;
 pub mod page_header;
 pub mod panel;
 pub mod popover;
+pub mod profile_banners;
 pub mod rail;
 pub mod screen;
 pub mod shell;

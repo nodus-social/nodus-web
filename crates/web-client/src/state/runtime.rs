@@ -677,6 +677,10 @@ impl Runtime for ClientRuntime {
         Some(crate::state::bridge::profile_media::editor())
     }
 
+    fn profile_banners(&self) -> Option<nodus_pages::profile::ProfileBanners> {
+        Some(crate::state::bridge::profile_banners::reader())
+    }
+
     fn navigate(&self, path: String) {
         crate::router::navigate_href(&path);
     }

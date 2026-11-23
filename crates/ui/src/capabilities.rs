@@ -68,6 +68,17 @@ pub fn admits_feature(at: Option<&Capabilities>, gate: Option<Feature>) -> bool 
     gate.is_none_or(|gate| at.is_none_or(|at| at.supports(gate)))
 }
 
+/// Whether a profile should ask for the banners an account published.
+///
+/// A paint with no reader (the server) has no transport to ask with, and an instance that
+/// did not advertise `style_public` answers every profile with a 404. Both stop at this
+/// gate: a profile without published banners is a normal profile, so neither case may cost
+/// a request or paint an error.
+#[must_use]
+pub fn reads_public_banners(at: Option<&Capabilities>, reader: bool) -> bool {
+    reader && admits_feature(at, Some(Feature::StylePublic))
+}
+
 /// Whether a staff door is served to this reader, from the three facts both paints know.
 ///
 /// A staff door is narrower than an ordinary one: the instance must speak this protocol's

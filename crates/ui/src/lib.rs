@@ -35,6 +35,7 @@ pub use components::media::rules as media;
 pub use components::notification_card::*;
 pub use components::page_header::*;
 pub use components::popover::Popover;
+pub use components::profile_banners::*;
 pub use components::rail::*;
 pub use components::screen::*;
 pub use components::shell::*;

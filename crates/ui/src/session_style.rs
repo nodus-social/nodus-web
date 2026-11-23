@@ -2230,10 +2230,81 @@ mod hidden_tests {
     }
 }
 
+/// The three banners one account shows to other readers.
+///
+/// Deliberately narrower than [`SessionStyle`]: navigation, rail cards and the staff rail
+/// are the reader's own frame and have no business on someone else's profile. The store
+/// replaces the whole published document on save, so a field that is not here cannot be
+/// published by accident.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedStyle {
+    #[serde(default)]
+    pub top: BannerRegion,
+    #[serde(default)]
+    pub left: BannerRegion,
+    #[serde(default)]
+    pub right: BannerRegion,
+}
+
+impl PublishedStyle {
+    /// The regions with their position names, in the order a profile draws them.
+    #[must_use]
+    pub fn banners(&self) -> [(&'static str, &BannerRegion); 3] {
+        [
+            ("top", &self.top),
+            ("left", &self.left),
+            ("right", &self.right),
+        ]
+    }
+}
+
+impl SessionStyle {
+    /// The publishable half of this style.
+    ///
+    /// Sanitized here rather than at the call site: the document outlives this screen and
+    /// is the copy other readers' browsers will draw, so it cannot carry an address this
+    /// one would refuse to draw itself.
+    #[must_use]
+    pub fn published(&self) -> PublishedStyle {
+        let clean = self.clone().sanitized();
+        PublishedStyle {
+            top: clean.top,
+            left: clean.left,
+            right: clean.right,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_published_document_carries_only_the_three_banners() {
+        let mut style = SessionStyle::default();
+        let mut slot = ImageSlot::new("https://cdn.example/left.png", Some("Left"), None).unwrap();
+        slot.sensitive = true;
+        style.left.add_slot(slot);
+        let value = serde_json::to_value(style.published()).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "top": {"split": "horizontal"},
+                "left": {
+                    "split": "horizontal",
+                    "slots": [{
+                        "url": "https://cdn.example/left.png",
+                        "alt": "Left",
+                        "sensitive": true
+                    }]
+                },
+                "right": {"split": "horizontal"}
+            })
+        );
+        let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["left", "right", "top"]);
+    }
 
     #[test]
     fn metadata_roundtrip_preserves_split_banners_and_nav_layout() {

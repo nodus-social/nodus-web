@@ -465,6 +465,14 @@ pub trait Runtime: Send + Sync + 'static {
         None
     }
 
+    /// Reads the banners an account published for its readers.
+    ///
+    /// A stateless paint has no transport, so it has no reader and draws no banners; the
+    /// browser answers with a request only when the instance advertises `style_public`.
+    fn profile_banners(&self) -> Option<nodus_pages::profile::ProfileBanners> {
+        None
+    }
+
     /// A route body only the browser can build: the editor, the staff probe.
     fn body(&self, _route: &Route) -> Option<ChildrenFn> {
         None

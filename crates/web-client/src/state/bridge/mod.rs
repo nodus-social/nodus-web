@@ -38,6 +38,7 @@ pub mod accounts;
 pub mod actions;
 pub mod capabilities;
 pub mod misskey;
+pub(crate) mod profile_banners;
 pub(crate) mod profile_media;
 pub mod provider;
 

@@ -266,6 +266,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                     })
                     fields=fields
                     editor=editor
+                    banners=runtime.get_value().profile_banners()
                     on_avatar=on_avatar
                 />
             }

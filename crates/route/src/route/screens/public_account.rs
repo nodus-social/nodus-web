@@ -250,6 +250,7 @@ pub fn PublicAccountScreen(
                     card=card.get_value()
                     age_of=age_of.get_value()
                     editor=None
+                    banners=runtime.get_value().profile_banners()
                 />
             })}
         </Show>

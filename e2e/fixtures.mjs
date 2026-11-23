@@ -176,6 +176,7 @@ export const FEATURES = [
   'featured_tags',
   'notification_settings',
   'pages',
+  'style_public',
 ]
 
 /**
