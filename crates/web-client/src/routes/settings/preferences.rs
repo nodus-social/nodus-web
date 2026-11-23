@@ -7,7 +7,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use nodus_client_core::model::Preferences;
+use nodus_client_core::model::{ExpandMedia, Preferences};
 use nodus_pages::components::panel::Panel;
 
 use crate::state::alive::Alive;
@@ -58,10 +58,7 @@ pub fn PreferencesCard() -> impl IntoView {
                             <dl class="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                                 {row(
                                     "Default visibility",
-                                    values
-                                        .posting_default_visibility
-                                        .clone()
-                                        .unwrap_or_else(|| "server default".to_owned()),
+                                    values.posting_default_visibility.as_str().to_owned(),
                                 )}
                                 {row("New posts start sensitive", yes_no(values.posting_default_sensitive))}
                                 {row(
@@ -71,7 +68,7 @@ pub fn PreferencesCard() -> impl IntoView {
                                         .clone()
                                         .unwrap_or_else(|| "server default".to_owned()),
                                 )}
-                                {row("Media starts expanded", media(&values.reading_expand_media))}
+                                {row("Media starts expanded", media(values.reading_expand_media))}
                                 {row("Content warnings start open", yes_no(values.reading_expand_spoilers))}
                             </dl>
                         }
@@ -100,6 +97,6 @@ fn yes_no(value: bool) -> String {
 }
 
 /// The media preference is a word (`default`, `show_all`, `hide_all`), not a boolean.
-fn media(value: &str) -> String {
-    value.replace('_', " ")
+fn media(value: ExpandMedia) -> String {
+    value.to_string().replace('_', " ")
 }
