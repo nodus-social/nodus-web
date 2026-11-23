@@ -63,7 +63,12 @@ thread_local! {
 
 fn extensions_revision() -> RwSignal<u64> {
     thread_local! {
-        static REVISION: RwSignal<u64> = RwSignal::new(0);
+        /// A root of its own, deliberately detached from the component tree: the counter
+        /// outlives whichever screen asks the question first. Created on first use inside
+        /// that screen's owner instead, it would be disposed with the screen, and the next
+        /// screen to ask would panic on a disposed signal.
+        static ROOT: Owner = Owner::new_root(None);
+        static REVISION: RwSignal<u64> = ROOT.with(|root| root.with(|| RwSignal::new(0)));
     }
     REVISION.with(|revision| *revision)
 }
@@ -466,6 +471,14 @@ fn schedule_repaint() {
 /// happened to be mounted first — would raise
 /// `reactive_graph … Tried to access a reactive value that has already been disposed`,
 /// panic inside a task poll, and leave the executor unable to resume anything.
+///
+/// The rule this function exists to enforce: **a reactive value that a later handler,
+/// click or background task reads must be owned before the first render, never created
+/// lazily inside a screen.** Both spellings are accepted — create it here, or give it a
+/// detached `Owner::new_root(None)` of its own (see `provider::revision`) — but the
+/// owner must not be a screen or an effect run. A value created on first use inside a
+/// screen is disposed with that screen, and the next reader panics in the handler before
+/// it does its work: no file dialog, no banner, no visible error.
 pub fn install_reactive_root() {
     if REVISION.with_borrow(Option::is_none) {
         let revision = RwSignal::new(0_u64);

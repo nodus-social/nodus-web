@@ -102,6 +102,24 @@ pub fn PublicAccountScreen(
             .load_public_account_statuses(load_host.clone(), wanted, done);
     });
 
+    // The two graph answers belong to the screen, not to a run of the tab effect below.
+    // That effect tracks the tab, so each switch disposes everything its previous run
+    // created — including the callback of a request still in flight, whose answer would
+    // then panic in `Callback::run` before it wrote anything. Created once here, before
+    // the first render, a tab switch cannot dispose them.
+    let followers_done = Callback::new(move |result: Result<Vec<Account>, String>| {
+        alive.if_alive(|| match result {
+            Ok(found) => followers.set(Some(found)),
+            Err(message) => error.set(Some(message)),
+        });
+    });
+    let following_done = Callback::new(move |result: Result<Vec<Account>, String>| {
+        alive.if_alive(|| match result {
+            Ok(found) => following.set(Some(found)),
+            Err(message) => error.set(Some(message)),
+        });
+    });
+
     let graph_host = host.clone();
     Effect::new(move |_| match tab.get() {
         Tab::Posts => {}
@@ -109,32 +127,20 @@ pub fn PublicAccountScreen(
             if followers.get_untracked().is_some() {
                 return;
             }
-            let done = Callback::new(move |result: Result<Vec<Account>, String>| {
-                alive.if_alive(|| match result {
-                    Ok(found) => followers.set(Some(found)),
-                    Err(message) => error.set(Some(message)),
-                });
-            });
             runtime.get_value().load_public_account_followers(
                 graph_host.clone(),
                 resolved.get_untracked(),
-                done,
+                followers_done,
             );
         }
         Tab::Following => {
             if following.get_untracked().is_some() {
                 return;
             }
-            let done = Callback::new(move |result: Result<Vec<Account>, String>| {
-                alive.if_alive(|| match result {
-                    Ok(found) => following.set(Some(found)),
-                    Err(message) => error.set(Some(message)),
-                });
-            });
             runtime.get_value().load_public_account_following(
                 graph_host.clone(),
                 resolved.get_untracked(),
-                done,
+                following_done,
             );
         }
     });

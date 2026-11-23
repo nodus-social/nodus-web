@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::session::staff;
 use super::{admin_scope, admin_transport, instance_transport};
-use leptos::prelude::{Get, RwSignal, Signal, Update};
+use leptos::prelude::{Get, Owner, RwSignal, Signal, Update};
 use nodus_client_core::actions::{AdminActions, RegistrationActions};
 use nodus_client_core::model::{
     AccountDetail, AccountNote, AdminAccount, AdminAccountQuery, AdminAlert, AdminMeasure,
@@ -225,7 +225,12 @@ pub fn ensure_standing() {
 /// Bumped whenever the cached verdict changes, so a signal derived from it repaints.
 fn standing_revision() -> RwSignal<u64> {
     thread_local! {
-        static REVISION: RwSignal<u64> = RwSignal::new(0);
+        /// A root of its own, deliberately detached from the component tree: the counter is
+        /// read by whichever admin screen asks first and bumped by the background stand
+        /// probe. Created on first use inside a screen's owner, it would be disposed with
+        /// that screen and the next screen to gate on `may_write` would panic.
+        static ROOT: Owner = Owner::new_root(None);
+        static REVISION: RwSignal<u64> = ROOT.with(|root| root.with(|| RwSignal::new(0)));
     }
     REVISION.with(|revision| *revision)
 }
