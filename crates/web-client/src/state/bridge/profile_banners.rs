@@ -15,7 +15,10 @@ pub(crate) fn reader() -> nodus_pages::profile::ProfileBanners {
         load: Callback::new(
             |(account_id, done): (String, Callback<Option<PublishedStyle>>)| {
                 leptos::task::spawn_local(async move {
-                    done.run(read(&account_id).await);
+                    let answer = read(&account_id).await;
+                    // The page may be left while the read is in flight; its callback is
+                    // disposed with it, and calling a disposed callback panics.
+                    done.try_run(answer);
                 });
             },
         ),

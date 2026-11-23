@@ -125,6 +125,11 @@ pub fn ProfilePage(
         // One read per account, even if the capability answer arrives in two steps: the
         // second run sees the id already asked for and leaves the answer alone.
         let requested = StoredValue::new(None::<String>);
+        // Owned by the page, not by the effect run that starts the read. The capability
+        // answer re-runs the effect, and a callback created inside it would be disposed
+        // with that run before the read answers; `Callback::run` then panics and the
+        // banners never reach `published`.
+        let done = Callback::new(move |style: Option<PublishedStyle>| published.set(style));
         Effect::new(move |_| {
             let at = capability.map(|signal| signal.get());
             if !nodus_ui::capabilities::reads_public_banners(at.as_ref(), true) {
@@ -138,7 +143,6 @@ pub fn ProfilePage(
             // The previous account's banners must not stand in for this account's while
             // its own read is in flight.
             published.set(None);
-            let done = Callback::new(move |style: Option<PublishedStyle>| published.set(style));
             banners.load.run((account_id.clone(), done));
         });
     }
