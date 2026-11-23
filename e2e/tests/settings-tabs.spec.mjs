@@ -5,6 +5,8 @@
 //! These tests make the instance answer narrowly and assert the tab list, plus the
 //! sentence a direct visit gets instead of a blank panel.
 
+import { readFileSync } from 'node:fs'
+
 import { expect, test } from '@playwright/test'
 
 import { FEATURES, hydrated, signedIn, stubApi } from '../fixtures.mjs'
@@ -45,17 +47,6 @@ test('a server that publishes every name draws every gated and ungated tab', asy
 })
 
 test('a server without mutes and blocks drops only those two tabs', async ({ page }) => {
-  // This is the flicker check as well as the gate check: a tab drawn from the wrong
-  // answer and removed when `/api/v1/meta` lands would pass a final-count assertion, so
-  // the page records whether the hidden tab was ever in the document.
-  await page.addInitScript(() => {
-    window.__drewMutedBeforeAnswer = false
-    new MutationObserver(() => {
-      if (document.querySelector('a[role="tab"][href="/settings/muted"]')) {
-        window.__drewMutedBeforeAnswer = true
-      }
-    }).observe(document, { childList: true, subtree: true })
-  })
   const narrower = SERVED.filter((name) => name !== 'mutes' && name !== 'blocks')
   await stubApi(page, { features: narrower })
   await signedIn(page)
@@ -67,7 +58,44 @@ test('a server without mutes and blocks drops only those two tabs', async ({ pag
   for (const slug of ['domain-blocks', 'sessions', 'two-factor', 'export', ...UNGATED]) {
     await expect(tab(page, slug)).toBeVisible()
   }
-  expect(await page.evaluate(() => window.__drewMutedBeforeAnswer)).toBe(false)
+})
+
+test('a seeded answer paints before the probe, so no tab is drawn and then removed', async ({ page }) => {
+  // A static deploy has no server island. A `trunk build` is served with one injected here,
+  // the way the server paints it, and `/api/v1/meta` answers every name late: a strip that
+  // waited for the probe would draw Muted first and the test would record it.
+  const features = SERVED.filter((name) => name !== 'mutes' && name !== 'blocks')
+  const island = JSON.stringify({
+    capabilities: { contract: '0.1.0', provider: 'nodus', features, unknown: [] },
+  })
+  const html = readFileSync(new URL('../../dist/index.html', import.meta.url), 'utf8').replace(
+    '<body>',
+    `<body><script id="nodus-page" type="application/json">${island}</script>`,
+  )
+  await page.route('**/settings/account', (route) =>
+    route.fulfill({ body: html, contentType: 'text/html' }),
+  )
+  await page.addInitScript(() => {
+    window.__drewMuted = false
+    new MutationObserver(() => {
+      if (document.querySelector('a[role="tab"][href="/settings/muted"]')) {
+        window.__drewMuted = true
+      }
+    }).observe(document, { childList: true, subtree: true })
+  })
+  await stubApi(page, { features: SERVED })
+  await page.route('**/api/v1/meta', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await route.fallback()
+  })
+  await signedIn(page)
+  await page.goto('/settings/account')
+  await hydrated(page)
+
+  await expect(tab(page, 'muted')).toHaveCount(0)
+  await expect(tab(page, 'blocked')).toHaveCount(0)
+  await expect(tab(page, 'domain-blocks')).toBeVisible()
+  expect(await page.evaluate(() => window.__drewMuted)).toBe(false)
 })
 
 test('a direct visit to a hidden section names the server, not a blank tab', async ({ page }) => {
