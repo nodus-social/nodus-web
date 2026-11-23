@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use super::rail::{ExtraDoors, NoticeDoor, Rail, RightRail, SessionBanner};
-use crate::session_style::{BannerRegionKind, SessionStyle, StyleEditor};
+use crate::session_style::{BannerRegionKind, PictureTarget, SessionStyle, StyleEditor};
 
 #[component]
 #[expect(
@@ -50,7 +50,7 @@ pub fn Frame(
     /// Ask for a picture for a banner region. The browser opens a file dialog and adds what
     /// comes back to the draft; the server has no dialog, so the control is painted disabled.
     #[prop(optional_no_strip)]
-    on_pick: Option<Callback<BannerRegionKind>>,
+    on_pick: Option<Callback<PictureTarget>>,
     /// One line of feedback from the editor (an upload that failed, for instance).
     #[prop(optional_no_strip)]
     notice: Option<Signal<Option<String>>>,

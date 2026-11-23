@@ -12,8 +12,11 @@ use crate::components::sidebar::{SidebarData, SidebarModule};
 use crate::html::safe_url;
 use crate::session_style::{
     BannerRegion, BannerRegionKind, ImageSlot, ModuleKind, ModuleRail, NavItemConfig, NavPlacement,
-    SessionStyle, SplitDirection, StyleEditor, is_required_nav_item,
+    PictureTarget, SessionStyle, SplitDirection, StyleEditor, is_required_nav_item,
 };
+
+mod session_slot;
+use session_slot::{banner_slot, slot_image};
 /// The drawing for a destination, by name.
 ///
 /// The label is the key rather than a field on `Destination`, because the label is what a
@@ -270,7 +273,7 @@ pub fn SessionBanner(
     /// the add target is painted disabled rather than removed, so both renders agree about
     /// what the page offers.
     #[prop(optional_no_strip)]
-    on_pick: Option<Callback<BannerRegionKind>>,
+    on_pick: Option<Callback<PictureTarget>>,
 ) -> impl IntoView {
     let data_kind = match kind {
         BannerRegionKind::Top => "top",
@@ -279,11 +282,12 @@ pub fn SessionBanner(
     };
     let img_class = match kind {
         BannerRegionKind::Top => "h-28 w-full min-w-0 flex-1 rounded-box object-cover sm:h-36",
-        BannerRegionKind::Left | BannerRegionKind::Right => {
-            "max-h-[70vh] w-full min-w-0 rounded-box object-cover"
-        }
+        // A side picture is the column: it fills the full height and lets `object-cover`
+        // crop it, instead of being a card floating on a strip.
+        BannerRegionKind::Left | BannerRegionKind::Right => "h-full w-full min-w-0 object-cover",
     };
     let dragging: RwSignal<Option<usize>> = RwSignal::new(None);
+    let open: RwSignal<Option<usize>> = RwSignal::new(None);
 
     let slots = Memo::new(move |_| {
         region
@@ -296,10 +300,13 @@ pub fn SessionBanner(
     let hidden = Memo::new(move |_| region.get().is_hidden());
     let editing = Memo::new(move |_| editor.is_some_and(StyleEditor::is_active));
     let layout = Memo::new(move |_| {
-        if hidden.get() || matches!(kind, BannerRegionKind::Left | BannerRegionKind::Right) {
-            // A side column is tall and narrow: pictures stack there whatever the split
-            // says, because two pictures side by side in 8 rem would be postage stamps.
+        if hidden.get() {
+            // A hidden banner is a bare strip: no split to describe.
             String::from("flex flex-col gap-2")
+        } else if matches!(kind, BannerRegionKind::Left | BannerRegionKind::Right) {
+            // The column is the split: pictures stack down the banner, so one picture
+            // fills the height and several divide it between them.
+            String::from("flex h-full flex-col")
         } else {
             match region.get().split {
                 SplitDirection::Horizontal => String::from("flex flex-col gap-2 sm:flex-row"),
@@ -315,11 +322,18 @@ pub fn SessionBanner(
             .enumerate()
             .collect::<Vec<(usize, ImageSlot)>>()
     });
-    let strip = Signal::derive(move || {
-        format!(
-            "{} overflow-hidden rounded-box bg-base-100 p-1 shadow-sm",
-            layout.get()
-        )
+    let strip = Signal::derive(move || match kind {
+        BannerRegionKind::Top => {
+            format!(
+                "{} overflow-hidden rounded-box bg-base-100 p-1 shadow-sm",
+                layout.get()
+            )
+        }
+        // The side banner is an edge of the page, not a card on one: no padding, no rounded
+        // corners, and it fills the column so the pictures reach both edges.
+        BannerRegionKind::Left | BannerRegionKind::Right => {
+            format!("pointer-events-auto h-full w-full {}", layout.get())
+        }
     });
 
     let outer_class = Signal::derive(move || match kind {
@@ -341,7 +355,12 @@ pub fn SessionBanner(
             } else {
                 "right-0"
             };
-            format!("fixed inset-y-0 {edge} z-10 hidden w-10 xl:flex xl:flex-col 2xl:w-40")
+            // `pointer-events-none` because the column is wider than the page's own gutter
+            // at `xl`: only the picture strip and the controls take clicks, so the banner
+            // never swallows a click meant for the rail beside it.
+            format!(
+                "pointer-events-none fixed inset-y-0 {edge} z-10 hidden xl:flex xl:w-20 xl:flex-col 2xl:w-40"
+            )
         }
     });
     let side_empty = Memo::new(move |_| {
@@ -356,10 +375,9 @@ pub fn SessionBanner(
     view! {
         <div class=move || outer_class.get() data-session-banner=data_kind>
             <div class=move || if hidden.get() { "hidden" } else { "contents" }>
-                // A side strip is only ten characters wide on most screens: a row of verbs
-                // squeezed into it would cover the picture it manages. So the side verbs
-                // appear once there is a picture to manage and only where the strip has the
-                // width for them; the empty strip offers the one thing it is for, adding one.
+                // The side column has a banner's width now, so its verbs fit at every width
+                // the banner exists at; they still wait for a picture to manage, and the
+                // empty column offers the one thing it is for, adding one.
                 {editor
                     .map(move |edit| {
                         view! {
@@ -374,14 +392,31 @@ pub fn SessionBanner(
                     })}
             </div>
             <div class=move || {
-                if side_empty.get() { "hidden" } else { "flex w-full flex-col gap-2" }
+                if side_empty.get() {
+                    "hidden"
+                } else if matches!(kind, BannerRegionKind::Left | BannerRegionKind::Right) {
+                    // The column is the split: the strip fills it, and the pictures divide
+                    // whatever height the column has.
+                    "flex h-full w-full flex-col"
+                } else {
+                    "flex w-full flex-col gap-2"
+                }
             }>
                 <div class=strip>
                     <For
                         each=move || rows.get()
                         key=|(index, slot)| (*index, slot.url.clone())
                         children=move |(index, slot)| {
-                            banner_slot(slot_image(slot, img_class), kind, index, editor, dragging)
+                            banner_slot(
+                                slot_image(slot, img_class),
+                                kind,
+                                index,
+                                editor,
+                                region,
+                                dragging,
+                                open,
+                                on_pick,
+                            )
                         }
                     />
                 </div>
@@ -395,13 +430,13 @@ pub fn SessionBanner(
             }>
                 <button
                     type="button"
-                    class="flex h-full min-h-40 w-full flex-1 flex-col items-center justify-center gap-3 rounded-box border-2 border-dashed border-base-content/40 bg-base-100/70 px-0 py-4 text-center text-base-content hover:border-primary hover:bg-primary/10 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    class="pointer-events-auto flex h-full min-h-40 w-full flex-1 flex-col items-center justify-center gap-3 rounded-box border-2 border-dashed border-base-content/40 bg-base-100/70 px-0 py-4 text-center text-base-content hover:border-primary hover:bg-primary/10 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
                     data-style-add-picture=kind.metadata_key()
                     title="Upload a picture for this side"
                     disabled=move || on_pick.is_none()
                     on:click=move |_| {
                         if let Some(pick) = on_pick {
-                            pick.run(kind);
+                            pick.run(PictureTarget::Region(kind));
                         }
                     }
                 >
@@ -415,109 +450,66 @@ pub fn SessionBanner(
     }
 }
 
-/// The picture itself: the same node in a reader's banner and in the editor's.
-fn slot_image(slot: ImageSlot, class: &'static str) -> AnyView {
-    view! {
-        <img src=slot.url alt=slot.alt.unwrap_or_default() class=class loading="lazy"/>
-    }
-    .into_any()
-}
-
-/// The one-line toolbar a banner grows while the editor is open.
+/// The toolbar a banner grows while the editor is open.
+///
+/// A top banner has a page's width for a row of verbs; a side banner has a column's, so it
+/// stacks them and keeps only the two words a reader needs to choose between.
 fn region_controls(
     kind: BannerRegionKind,
     hidden: Memo<bool>,
     region: Signal<BannerRegion>,
     edit: StyleEditor,
 ) -> AnyView {
+    let stacked = !matches!(kind, BannerRegionKind::Top);
+    let verb = move || {
+        if stacked {
+            "btn btn-ghost btn-xs w-full"
+        } else {
+            "btn btn-ghost btn-xs"
+        }
+    };
     view! {
         <div
             class=move || {
-                let base = "mb-1 items-center gap-2 rounded-box bg-base-100 px-2 py-1 text-xs shadow-sm";
-                // A side strip is ten characters wide until `2xl`; its verb row waits for the
-                // wide strip rather than covering the picture it manages.
-                if matches!(kind, BannerRegionKind::Top) {
-                    format!("{base} flex")
+                let base = "pointer-events-auto mb-1 rounded-box bg-base-100 shadow-sm";
+                if stacked {
+                    // A banner is a column: the verbs stack under the picture they manage
+                    // instead of sitting beside a label that no longer fits.
+                    format!("{base} flex w-full flex-col gap-1 px-1 py-1 text-[10px]")
                 } else {
-                    format!("{base} hidden 2xl:flex")
+                    format!("{base} flex items-center gap-2 px-2 py-1 text-xs")
                 }
             }
             data-style-controls="region"
         >
-                <span class="font-semibold">{kind.label()}</span>
-                <span
-                    class="badge badge-xs badge-ghost"
-                    class:hidden=move || !hidden.get()
-                >
-                    "hidden"
-                </span>
-                <span class="ml-auto flex items-center gap-1">
-                    <button
-                        type="button"
-                        class="btn btn-ghost btn-xs"
-                        title="Show or hide this banner without losing its pictures"
-                        on:click=move |_| edit.set_region_hidden(kind, !hidden.get_untracked())
-                    >
-                        {move || if hidden.get() { "Show" } else { "Hide" }}
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-ghost btn-xs"
-                        title="Switch between side-by-side and stacked"
-                        on:click=move |_| edit.toggle_split(kind)
-                    >
-                        {move || region.get().split.label()}
-                    </button>
-                </span>
-        </div>
-    }
-    .into_any()
-}
-
-/// One picture in a banner, with the grab handle and remove button the editor adds.
-///
-/// Split out of [`SessionBanner`] so the drawn banner and its editing chrome stay readable
-/// as two things: the picture is always the same, only the furniture around it changes.
-fn banner_slot(
-    image: AnyView,
-    kind: BannerRegionKind,
-    index: usize,
-    editor: Option<StyleEditor>,
-    dragging: RwSignal<Option<usize>>,
-) -> AnyView {
-    let Some(edit) = editor.filter(|edit| edit.is_active_now()) else {
-        return image;
-    };
-    view! {
-        <div
-            class="relative min-w-0 flex-1"
-            data-style-module="banner-slot"
-            on:dragover=move |event| event.prevent_default()
-            on:drop=move |event| {
-                event.prevent_default();
-                if let Some(from) = dragging.get_untracked() {
-                    edit.move_slot(kind, from, index);
+            <span class=move || if stacked { "sr-only" } else { "font-semibold" }>
+                {kind.label()}
+            </span>
+            <span class="badge badge-xs badge-ghost" class:hidden=move || !hidden.get()>
+                "hidden"
+            </span>
+            <span class=move || {
+                if stacked {
+                    "flex w-full flex-col gap-1"
+                } else {
+                    "ml-auto flex items-center gap-1"
                 }
-                dragging.set(None);
-            }
-        >
-            {image}
-            <span class="absolute right-1 top-1 flex items-center gap-1">
-                <span
-                    class="cursor-grab select-none rounded bg-base-100/90 px-1 text-xs opacity-70"
-                    title="Drag to reorder"
-                    draggable="true"
-                    on:dragstart=move |_| dragging.set(Some(index))
-                >
-                    "\u{28ff}"
-                </span>
+            }>
                 <button
                     type="button"
-                    class="btn btn-xs btn-circle"
-                    title="Remove this picture"
-                    on:click=move |_| edit.remove_slot(kind, index)
+                    class=verb
+                    title="Show or hide this banner without losing its pictures"
+                    on:click=move |_| edit.set_region_hidden(kind, !hidden.get_untracked())
                 >
-                    "\u{2715}"
+                    {move || if hidden.get() { "Show" } else { "Hide" }}
+                </button>
+                <button
+                    type="button"
+                    class=verb
+                    title="Switch between side-by-side and stacked"
+                    on:click=move |_| edit.toggle_split(kind)
+                >
+                    {move || region.get().split.label()}
                 </button>
             </span>
         </div>

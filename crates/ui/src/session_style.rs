@@ -66,7 +66,11 @@ pub const REQUIRED_NAV_ITEMS: [&str; 1] = ["settings"];
 pub fn is_required_nav_item(id: &str) -> bool {
     REQUIRED_NAV_ITEMS.contains(&id)
 }
-const MAX_ALT_LEN: usize = 200;
+/// Longest description a banner picture may carry.
+///
+/// Public because the editor checks typed text against it and has to say which limit it
+/// refused: cutting a description short would leave a picture described by half a sentence.
+pub const MAX_ALT_LEN: usize = 200;
 const MAX_LABEL_LEN: usize = 48;
 const MAX_ID_LEN: usize = 48;
 
@@ -113,6 +117,19 @@ pub enum SplitDirection {
     Horizontal,
     /// Stack slots vertically.
     Vertical,
+}
+
+/// What a picture pick is for: a region that wants one, or a placed picture being replaced.
+///
+/// The pick travels through the browser's file dialog, so it has to carry the destination
+/// itself: a replacement that appended a second picture would be a different edit from the
+/// one the reader asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PictureTarget {
+    /// Add a picture to the region.
+    Region(BannerRegionKind),
+    /// Put a different picture where this one is, keeping its place in the split.
+    Slot(BannerRegionKind, usize),
 }
 
 impl SplitDirection {
@@ -240,6 +257,42 @@ impl BannerRegion {
         } else {
             self.add_slot(clean)
         }
+    }
+
+    /// Put `slot` where the picture at `index` is; `false` if that place is gone.
+    ///
+    /// Replacement is not addition: the region keeps its length and the new picture takes
+    /// the old one's place in the split.
+    pub fn replace_slot(&mut self, index: usize, slot: ImageSlot) -> bool {
+        if index >= self.slots.len() {
+            return false;
+        }
+        self.set_slot(index, slot)
+    }
+
+    /// Set the description of one picture, or clear it.
+    ///
+    /// Empty is a real answer — a decorative banner is drawn with `alt=""` — so an empty
+    /// string stores `None`. Text past [`MAX_ALT_LEN`] is refused instead of cut: a
+    /// description that silently lost its end is worse than no description at all.
+    pub fn set_alt(&mut self, index: usize, alt: &str) -> Result<(), String> {
+        let clean: String = alt
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        let length = clean.chars().count();
+        if length > MAX_ALT_LEN {
+            return Err(format!(
+                "Alt text is {length} characters; the limit is {MAX_ALT_LEN}. Shorten it — nothing was changed."
+            ));
+        }
+        let Some(slot) = self.slots.get_mut(index) else {
+            return Err(String::from("That picture is no longer on the page."));
+        };
+        slot.alt = (!clean.is_empty()).then_some(clean);
+        Ok(())
     }
 
     /// Remove the slot at `index`, if present.
@@ -1444,6 +1497,25 @@ impl StyleEditor {
             .update(|style| style.region_mut(kind).remove_slot(index));
     }
 
+    /// Replace one picture, keeping its place in the region.
+    pub fn replace_slot(self, kind: BannerRegionKind, index: usize, slot: ImageSlot) -> bool {
+        self.draft
+            .try_update(|style| style.region_mut(kind).replace_slot(index, slot))
+            .unwrap_or(false)
+    }
+
+    /// Set the description of one picture; see [`BannerRegion::set_alt`].
+    pub fn set_slot_alt(
+        self,
+        kind: BannerRegionKind,
+        index: usize,
+        alt: &str,
+    ) -> Result<(), String> {
+        self.draft
+            .try_update(|style| style.region_mut(kind).set_alt(index, alt))
+            .unwrap_or_else(|| Err(String::from("That picture is no longer on the page.")))
+    }
+
     /// Move a picture within its region.
     pub fn move_slot(self, kind: BannerRegionKind, from: usize, to: usize) {
         self.draft
@@ -2009,5 +2081,82 @@ mod tests {
         let island = style.to_safe_json_island();
         assert!(!island.contains("</script>"));
         assert!(island.contains("<\\/script>"));
+    }
+
+    #[test]
+    fn a_placed_picture_is_replaced_where_it_stands() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style
+                .left
+                .add_slot(ImageSlot::new("https://cdn.example/a.png", Some("A"), None).unwrap())
+        );
+        assert!(
+            style
+                .left
+                .add_slot(ImageSlot::new("https://cdn.example/b.png", Some("B"), None).unwrap())
+        );
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        assert!(editor.replace_slot(
+            BannerRegionKind::Left,
+            1,
+            ImageSlot::new("https://cdn.example/c.png", Some("C"), Some("m3")).unwrap()
+        ));
+        let left = editor.draft().get_untracked().left;
+        assert_eq!(left.slots.len(), 2, "a replacement does not add a picture");
+        assert_eq!(left.slots[0].alt.as_deref(), Some("A"));
+        assert_eq!(left.slots[1].url, "https://cdn.example/c.png");
+        assert_eq!(left.slots[1].media_id.as_deref(), Some("m3"));
+        assert!(
+            !editor.replace_slot(
+                BannerRegionKind::Left,
+                2,
+                ImageSlot::new("https://cdn.example/d.png", None, None).unwrap()
+            ),
+            "there is no third place to fill"
+        );
+    }
+
+    #[test]
+    fn alt_text_is_trimmed_cleared_when_empty_and_refused_past_the_limit() {
+        let mut style = SessionStyle::default();
+        assert!(
+            style
+                .right
+                .add_slot(ImageSlot::new("https://cdn.example/a.png", Some("Old"), None).unwrap())
+        );
+        let editor = StyleEditor::new(RwSignal::new(style), RwSignal::new(true));
+        editor
+            .set_slot_alt(BannerRegionKind::Right, 0, "  New\nline  ")
+            .unwrap();
+        assert_eq!(
+            editor.draft().get_untracked().right.slots[0].alt.as_deref(),
+            Some("Newline")
+        );
+
+        editor
+            .set_slot_alt(BannerRegionKind::Right, 0, "   ")
+            .unwrap();
+        assert_eq!(
+            editor.draft().get_untracked().right.slots[0].alt,
+            None,
+            "an empty description is a decorative picture, not a failure"
+        );
+
+        let too_long = "a".repeat(MAX_ALT_LEN + 1);
+        let refused = editor
+            .set_slot_alt(BannerRegionKind::Right, 0, &too_long)
+            .unwrap_err();
+        assert!(refused.contains(&MAX_ALT_LEN.to_string()), "{refused}");
+        assert_eq!(
+            editor.draft().get_untracked().right.slots[0].alt,
+            None,
+            "refused text is not cut and not stored"
+        );
+        assert!(
+            editor
+                .set_slot_alt(BannerRegionKind::Right, 9, "x")
+                .is_err()
+        );
     }
 }

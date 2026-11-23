@@ -2,14 +2,14 @@
 //! SSR `#nodus-session-style` island adoption, multi-account `(host, account_id)` cache,
 //! and local fallback persistence).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use leptos::prelude::*;
 use nodus_client_core::rest::{HttpRequest, Method};
 use nodus_client_sdk::instance_api::Instance;
 use nodus_mastodon::BrowserInstance;
 use nodus_mastodon::rest::Transport as _;
-use nodus_ui::session_style::{BannerRegionKind, ImageSlot, STYLE_KEYS, SessionStyle, StyleEditor};
+use nodus_ui::session_style::{ImageSlot, PictureTarget, STYLE_KEYS, SessionStyle, StyleEditor};
 use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::Deserialize;
 use wasm_bindgen::JsCast as _;
@@ -26,6 +26,9 @@ thread_local! {
     static NOTICE: RefCell<Option<RwSignal<Option<String>>>> = const { RefCell::new(None) };
     static EDITOR: RefCell<Option<StyleEditor>> = const { RefCell::new(None) };
     static INSTALLED: RefCell<bool> = const { RefCell::new(false) };
+    /// Bumped whenever an editing session starts or ends. A picture upload that spans either
+    /// boundary belongs to the editor that is gone, so its result is dropped.
+    static PICK_EPOCH: Cell<u64> = const { Cell::new(0) };
 }
 
 #[derive(Deserialize)]
@@ -72,17 +75,18 @@ pub fn notice() -> RwSignal<Option<String>> {
 
 /// Start editing from the style currently in force.
 pub fn begin_edit() {
+    PICK_EPOCH.set(PICK_EPOCH.get() + 1);
     draft().set(active_style_signal().get_untracked());
     notice().set(None);
     editing().set(true);
 }
 
-/// Asks the browser for a picture and files it under `kind` of the draft.
+/// Asks the browser for a picture and files it where `target` says of the draft.
 ///
 /// The dialog belongs to the browser, but the upload does not: the picture is sent through
 /// the media endpoint the composer already uses, and only its URL and id reach the draft, so
 /// nothing is uploaded twice and Save stays the single step that publishes anything.
-pub fn pick_picture_for(kind: BannerRegionKind) {
+pub fn pick_picture_for(target: PictureTarget) {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         notice().set(Some(String::from(
             "This browser has no file dialog to offer.",
@@ -108,7 +112,10 @@ pub fn pick_picture_for(kind: BannerRegionKind) {
             })
             .unwrap_or_default();
         if !files.is_empty() {
-            upload_pictures_into(kind, files);
+            // The target and the epoch ride with the closure: the dialog can outlive the
+            // click that opened it, and the answer has to say which slot it is for and
+            // whether that editor is still the one on screen.
+            upload_pictures_into(target, files, PICK_EPOCH.get());
         }
     });
     input
@@ -119,8 +126,11 @@ pub fn pick_picture_for(kind: BannerRegionKind) {
     input.click();
 }
 
-/// Uploads pictures one at a time and adds each to the draft as it lands.
-fn upload_pictures_into(kind: BannerRegionKind, files: Vec<web_sys::File>) {
+/// Uploads pictures one at a time and files each into the draft as it lands.
+///
+/// `epoch` is the editing session that asked; a file that arrives after the reader left that
+/// session is uploaded and then dropped rather than landing in a draft nobody is looking at.
+fn upload_pictures_into(target: PictureTarget, files: Vec<web_sys::File>, epoch: u64) {
     leptos::task::spawn_local(async move {
         for file in files {
             let name = file.name();
@@ -154,18 +164,38 @@ fn upload_pictures_into(kind: BannerRegionKind, files: Vec<web_sys::File>) {
                         )));
                         continue;
                     };
+                    if PICK_EPOCH.get() != epoch {
+                        return;
+                    }
                     let mut landed = false;
-                    draft().update(|style| {
-                        landed = style.region_mut(kind).add_slot(slot);
-                    });
-                    notice().set(if landed {
-                        None
-                    } else {
-                        Some(format!(
-                            "{} already holds as many pictures as it can.",
-                            kind.label()
-                        ))
-                    });
+                    let done = match target {
+                        PictureTarget::Region(kind) => {
+                            draft().update(|style| {
+                                landed = style.region_mut(kind).add_slot(slot);
+                            });
+                            if landed {
+                                None
+                            } else {
+                                Some(format!(
+                                    "{} already holds as many pictures as it can.",
+                                    kind.label()
+                                ))
+                            }
+                        }
+                        PictureTarget::Slot(kind, index) => {
+                            draft().update(|style| {
+                                landed = style.region_mut(kind).replace_slot(index, slot);
+                            });
+                            if landed {
+                                None
+                            } else {
+                                Some(String::from(
+                                    "That picture is no longer on the page; nothing was replaced.",
+                                ))
+                            }
+                        }
+                    };
+                    notice().set(done);
                 }
                 Err(error) => notice().set(Some(format!("Could not upload that picture: {error}"))),
             }
@@ -175,6 +205,7 @@ fn upload_pictures_into(kind: BannerRegionKind, files: Vec<web_sys::File>) {
 
 /// Leave the editor and drop the edits.
 pub fn cancel_edit() {
+    PICK_EPOCH.set(PICK_EPOCH.get() + 1);
     draft().set(active_style_signal().get_untracked());
     editing().set(false);
 }

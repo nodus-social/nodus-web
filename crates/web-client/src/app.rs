@@ -236,10 +236,11 @@ pub(crate) fn App() -> impl IntoView {
                 crate::state::bridge::style::cancel_edit();
                 router::navigate(Route::Home);
             }))
-            // Asking for a picture is the browser's job; the draft is ours. This keeps the
-            // reader in the editor: the empty side column becomes the picture they chose.
-            on_pick=Some(Callback::new(|kind: nodus_ui::session_style::BannerRegionKind| {
-                crate::state::bridge::style::pick_picture_for(kind);
+            // Asking for a picture is the browser's job; the draft is ours. The callback
+            // carries where the picture goes: an empty column wants one added, an open
+            // picture editor wants the one in its place replaced.
+            on_pick=Some(Callback::new(|target: nodus_ui::session_style::PictureTarget| {
+                crate::state::bridge::style::pick_picture_for(target);
             }))
             notice=Some(Signal::derive(move || crate::state::bridge::style::notice().get()))
             notices=Some(notice_door)

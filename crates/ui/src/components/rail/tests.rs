@@ -11,7 +11,9 @@ use leptos::prelude::*;
 use super::{ExtraDoors, Rail};
 use crate::capabilities::{Capabilities, provide_serves, staff_door};
 use crate::icons::Icon;
-use crate::session_style::{NavItemConfig, NavPlacement, NavRail, SessionStyle};
+use crate::session_style::{
+    BannerRegionKind, ImageSlot, NavItemConfig, NavPlacement, NavRail, SessionStyle, StyleEditor,
+};
 
 /// One door, drawn the way the client draws its staff rows.
 fn door(label: &'static str, href: &'static str) -> AnyView {
@@ -182,4 +184,51 @@ fn a_group_whose_only_doors_are_refused_loses_its_heading() {
     );
     assert!(served.contains("Library"), "{served}");
     assert!(served.contains("data-nav-rail=\"library\""), "{served}");
+}
+
+/// A side picture is a banner: the column is the split, and the picture fills it.
+///
+/// The verbs are built only when an editor is installed, and a reader's paint carries none
+/// of them — the same node tree, so both paints agree about what the page offers.
+#[test]
+fn a_side_banner_fills_its_column_and_offers_its_picture_to_the_editor() {
+    let mut style = SessionStyle::default();
+    style
+        .left
+        .add_slot(ImageSlot::new("https://cdn.example/left.png", Some("Left"), None).unwrap());
+    let region = Signal::stored(style.left.clone());
+
+    let reading = Owner::new().with(|| {
+        view! { <super::SessionBanner region=region kind=BannerRegionKind::Left/> }.to_html()
+    });
+    assert!(reading.contains("h-full w-full min-w-0 object-cover"));
+    assert!(
+        !reading.contains("max-h-[70vh]"),
+        "a banner has no card's height cap"
+    );
+    assert!(!reading.contains("data-style-slot-edit"));
+
+    let editing = Owner::new().with(|| {
+        view! {
+            <super::SessionBanner
+                region=region
+                kind=BannerRegionKind::Left
+                editor=Some(StyleEditor::new(
+                    RwSignal::new(style.clone()),
+                    RwSignal::new(true),
+                ))
+            />
+        }
+        .to_html()
+    });
+    assert!(
+        editing.contains("xl:w-20"),
+        "the side column has a banner's width"
+    );
+    assert!(editing.contains("data-style-slot-edit"));
+    assert!(editing.contains("data-style-slot-editor"));
+    assert!(editing.contains("data-style-slot-alt"));
+    assert!(editing.contains("Replace picture"));
+    // The controls are not waiting for `2xl` any more: the column is wide enough at `xl`.
+    assert!(!editing.contains("hidden 2xl:flex"));
 }
