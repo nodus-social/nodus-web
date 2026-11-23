@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use nodus_ui::capabilities::Capabilities;
+use nodus_ui::capabilities::{Capabilities, Feature};
 
 use crate::protocol::Protocol;
 use crate::session::Session;
@@ -124,13 +124,10 @@ pub(crate) async fn resolve_host(host: &str) -> Option<Capabilities> {
 
 /// Whether this host advertises the backend's hydrated `pages` endpoints.
 ///
-/// The SDK's `Feature` enum has no `Pages` variant yet, so the name is looked up where
-/// `Capabilities::from_published` keeps every published name this build cannot spell;
-/// the gate still goes through the SDK's parsed answer rather than the raw meta list.
-/// Once the SDK names it, this becomes `at.supports(Feature::Pages)`.
+/// The gate goes through the SDK's parsed answer rather than the raw meta list, so it
+/// asks the same feature the shared frame does.
 pub(crate) fn serves_pages(host: &str) -> bool {
-    const PAGES: &str = "pages";
-    answer_for(host).is_some_and(|at| at.unknown.iter().any(|name| name == PAGES))
+    answer_for(host).is_some_and(|at| at.supports(Feature::Pages))
 }
 
 /// The names this host published, in its own order.
@@ -281,6 +278,23 @@ mod tests {
         let at = Capabilities::from_parts("0.1.0", &["admin".to_owned()]);
         remember_for_test(host, at.clone());
         assert_eq!(answer_for(host), Some(at));
+    }
+
+    #[test]
+    fn a_host_that_publishes_pages_serves_them() {
+        let host = "pages-published.test";
+        remember_for_test(
+            host,
+            Capabilities::from_published(&[Feature::Pages.as_str().to_owned(), "admin".to_owned()]),
+        );
+        assert!(serves_pages(host));
+    }
+
+    #[test]
+    fn a_host_that_does_not_publish_pages_does_not_serve_them() {
+        let host = "pages-absent.test";
+        remember_for_test(host, Capabilities::from_published(&["admin".to_owned()]));
+        assert!(!serves_pages(host));
     }
 
     #[test]

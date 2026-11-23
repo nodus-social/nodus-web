@@ -1200,7 +1200,9 @@ mod painting {
     async fn a_pages_profile_is_one_call_and_paints_name_bio_and_first_post() {
         crate::capabilities::remember_for_test(
             "pages.example",
-            nodus_ui::capabilities::Capabilities::from_published(&["pages".to_owned()]),
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
         );
         let alice = test_account("1", "Alice Example", "Writer of things");
         let first = test_status("10", "First post body", &alice);
@@ -1240,7 +1242,9 @@ mod painting {
     async fn a_pages_thread_is_one_call_and_paints_the_body_and_a_reply() {
         crate::capabilities::remember_for_test(
             "thread.example",
-            nodus_ui::capabilities::Capabilities::from_published(&["pages".to_owned()]),
+            nodus_ui::capabilities::Capabilities::from_published(&[
+                nodus_ui::capabilities::Feature::Pages.as_str().to_owned(),
+            ]),
         );
         let alice = test_account("1", "Alice Example", "Writer of things");
         let focal = test_status("10", "The post body", &alice);
