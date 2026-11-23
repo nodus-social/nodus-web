@@ -10,21 +10,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_pages::pages::settings::form::{ProfileImage, ProfileImagePicker, ProfileImages};
 use wasm_bindgen::JsCast as _;
-use wasm_bindgen_futures::JsFuture;
 
 use crate::state::alive::Alive;
-use crate::state::bridge::{actions, revision, with_sdk};
-
-/// How many times to look again while the instance is still making the small copy.
-const PROCESSING_POLLS: u8 = 30;
-
-/// The bytes and media type of a chosen file.
-async fn read_file_bytes(file: web_sys::File) -> Result<(Vec<u8>, String), String> {
-    let buffer = JsFuture::from(file.array_buffer())
-        .await
-        .map_err(|error| format!("Could not read the file: {error:?}"))?;
-    Ok((js_sys::Uint8Array::new(&buffer).to_vec(), file.type_()))
-}
+use crate::state::bridge::{actions, profile_media, revision, with_sdk};
 
 /// The account's current pictures, uploaded the moment one is chosen.
 ///
@@ -102,67 +90,23 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
         set_percent.set(Some(0));
         set_message.set(None);
 
-        let name = file.name();
         spawn_local(async move {
-            let read = read_file_bytes(file).await;
-            let answer = match read {
-                Ok((bytes, mime)) => {
-                    // A browser may leave the type empty for an extension it does not know;
-                    // the instance sniffs the bytes anyway, so a PNG is the safe guess.
-                    let mime = if mime.is_empty() {
-                        "image/png".to_owned()
-                    } else {
-                        mime
-                    };
-                    let progress = move |value: u8| alive.if_alive(|| set_percent.set(Some(value)));
-                    match actions::upload_media_with_progress(bytes, &mime, Some(&name), progress)
-                        .await
-                    {
-                        Ok(mut media) => {
-                            // The instance answers before the preview copy exists, so a
-                            // picture with no url yet is still being processed: look again
-                            // rather than applying an attachment nothing can render.
-                            for _ in 0..PROCESSING_POLLS {
-                                if media.url.is_some()
-                                    || media.processing_state.as_deref() == Some("failed")
-                                {
-                                    break;
-                                }
-                                gloo_timers::future::TimeoutFuture::new(400).await;
-                                let Ok(current) = actions::media_status(&media.id).await else {
-                                    break;
-                                };
-                                media = current;
-                            }
-                            if media.processing_state.as_deref() == Some("failed") {
-                                Err("The instance could not process that image.".to_owned())
-                            } else {
-                                let written = match kind {
-                                    ProfileImage::Avatar => {
-                                        actions::update_profile_images(Some(media.id), None)
-                                            .await
-                                            .map(|account| {
-                                                set_avatar_shape.set(account.avatar_shape());
-                                                set_avatar.set(account.avatar);
-                                            })
-                                    }
-                                    ProfileImage::Header => {
-                                        actions::update_profile_images(None, Some(media.id))
-                                            .await
-                                            .map(|account| {
-                                                set_header_shape.set(account.header_shape());
-                                                set_header.set(account.header);
-                                            })
-                                    }
-                                };
-                                written.map(|()| format!("{} updated.", kind.label()))
-                            }
+            let progress = move |value: u8| alive.if_alive(|| set_percent.set(Some(value)));
+            let answer = profile_media::upload(kind, file, progress)
+                .await
+                .map(|account| {
+                    match kind {
+                        ProfileImage::Avatar => {
+                            set_avatar_shape.set(account.avatar_shape());
+                            set_avatar.set(account.avatar);
                         }
-                        Err(error) => Err(error),
+                        ProfileImage::Header => {
+                            set_header_shape.set(account.header_shape());
+                            set_header.set(account.header);
+                        }
                     }
-                }
-                Err(error) => Err(error),
-            };
+                    format!("{} updated.", kind.label())
+                });
 
             alive.if_alive(|| {
                 set_uploading.set(None);

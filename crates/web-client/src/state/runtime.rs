@@ -673,6 +673,10 @@ impl Runtime for ClientRuntime {
         crate::state::bridge::seed::painted_relationship(id)
     }
 
+    fn profile_editor(&self) -> Option<nodus_pages::profile::ProfileEditor> {
+        Some(crate::state::bridge::profile_media::editor())
+    }
+
     fn navigate(&self, path: String) {
         crate::router::navigate_href(&path);
     }

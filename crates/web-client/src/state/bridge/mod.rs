@@ -38,6 +38,7 @@ pub mod accounts;
 pub mod actions;
 pub mod capabilities;
 pub mod misskey;
+pub(crate) mod profile_media;
 pub mod provider;
 
 // Whether the account's instance serves the Nodus extension surface, as the answer for one

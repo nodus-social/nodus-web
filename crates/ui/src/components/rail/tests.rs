@@ -235,6 +235,39 @@ fn a_side_banner_fills_its_column_and_offers_its_picture_to_the_editor() {
     assert!(!editing.contains("hidden 2xl:flex"));
 }
 
+/// A sensitive picture is covered by a reveal the reader has to press.
+///
+/// The cover is the same node in a reader's paint as in the editor's, and the reveal is a
+/// press, not a stored answer: nothing about it is written back into the style.
+#[test]
+fn a_sensitive_picture_is_covered_until_the_reader_reveals_it() {
+    let mut style = SessionStyle::default();
+    style.left.add_slot(
+        ImageSlot {
+            url: String::from("https://cdn.example/private.png"),
+            alt: Some(String::from("Private")),
+            media_id: None,
+            sensitive: true,
+        },
+    );
+    assert!(style.left.slots[0].sensitive, "the slot kept its cover flag");
+    let html = Owner::new().with(|| {
+        view! {
+            <super::SessionBanner
+                region=Signal::stored(style.left.clone())
+                kind=BannerRegionKind::Left
+            />
+        }
+        .to_html()
+    });
+    assert!(html.contains("data-style-sensitive"), "{html}");
+    assert!(html.contains("Sensitive picture"), "{html}");
+    assert!(
+        html.contains("blur-2xl"),
+        "the picture is painted blurred under the cover: {html}"
+    );
+}
+
 /// Paints the whole rail with one notifications answer and, optionally, a capability answer.
 fn painted_notice(door: super::NoticeDoor, served: Option<&[&str]>) -> String {
     Owner::new().with(|| {

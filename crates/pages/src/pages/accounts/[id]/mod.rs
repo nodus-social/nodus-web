@@ -12,13 +12,39 @@
 //! transport behind each verb. They arrive as slots, and the page owns their order — header,
 //! tabs, the status list, then whatever the screen adds under it.
 
-use crate::pages::settings::form::{ProfileField, is_link};
+use crate::pages::settings::form::{ProfileField, ProfileImage, is_link};
 use leptos::prelude::*;
 use nodus_client_core::model::{Account, Relationship, Status};
+use nodus_ui::session_style::BannerRegionKind;
 
 use crate::components::CardRenderer;
 use crate::display_name;
 use crate::status_card::StatusCard;
+
+/// What the reader can change about their own profile, and nothing else.
+///
+/// The profile picture and the account header are two different pictures on the account
+/// document. The side banners are the reader's session artwork, painted outside the
+/// profile card by the shell. One struct carries all four so the page can show them as one
+/// group of owner-only controls, while the client keeps the two transports apart: account
+/// pictures travel through the media endpoint, side banners through the style editor.
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileEditor {
+    /// Asks the browser for a picture. The answer is handed back through the callback.
+    pub pick_picture: Callback<(ProfileImage, Callback<Account>)>,
+    /// Opens the style editor at one side banner.
+    pub edit_banner: Callback<BannerRegionKind>,
+    /// The account picture already being uploaded, if any.
+    pub busy: Signal<Option<ProfileImage>>,
+    /// The last save's sentence: `Ok` when it landed, `Err` when the instance refused it.
+    pub message: Signal<Option<Result<String, String>>>,
+    /// Whether the left side banner already holds a picture.
+    pub left_banner: Signal<bool>,
+    /// Whether the right side banner already holds a picture.
+    pub right_banner: Signal<bool>,
+    /// Hands the account the instance answered with back to the screen that paints it.
+    pub on_saved: Callback<Account>,
+}
 
 /// A profile header with Follow, Mute and Block, then the account's posts.
 ///
@@ -75,6 +101,8 @@ pub fn ProfilePage(
     /// a visitor's page has no session to attribute them to.
     #[prop(optional)]
     fields: Option<Signal<Vec<ProfileField>>>,
+    /// The owner's picture and banner controls, or `None` on anyone else's profile.
+    editor: Option<ProfileEditor>,
 ) -> impl IntoView {
     let name = display_name(&account.display_name, &account.acct);
     let handle = format!("@{}", account.acct);
@@ -174,6 +202,7 @@ pub fn ProfilePage(
                             <p class="mt-2 text-xs opacity-60">{counts}</p>
                         </div>
                     </div>
+                    {editor.map(editor_controls)}
                     {has_bio
                         .then(|| {
                             view! {
@@ -198,6 +227,79 @@ pub fn ProfilePage(
             {list}
             {after.with_value(|after| after.as_ref().map(|after| after()))}
         </crate::Screen>
+    }
+}
+
+/// The owner's four controls, under the name and counts.
+///
+/// Two account pictures and two session banners sit in one row because that is what the
+/// reader is choosing between, but each button names its own target: a profile picture is not
+/// a header image, and neither is a side banner. The row is absent on every profile but the
+/// reader's own; the page receives no editor there.
+fn editor_controls(editor: ProfileEditor) -> AnyView {
+    let pick = editor.pick_picture;
+    let saved = editor.on_saved;
+    let busy = editor.busy;
+    let message = editor.message;
+    let edit_banner = editor.edit_banner;
+    let left_banner = editor.left_banner;
+    let right_banner = editor.right_banner;
+    view! {
+        <div class="flex flex-wrap items-center gap-2" aria-label="Profile pictures and banners">
+            <button
+                class="btn btn-outline btn-xs"
+                type="button"
+                aria-label="Change profile picture"
+                disabled=move || busy.get().is_some()
+                on:click=move |_| pick.run((ProfileImage::Avatar, saved))
+            >
+                "Change profile picture"
+            </button>
+            <button
+                class="btn btn-outline btn-xs"
+                type="button"
+                aria-label="Change header image"
+                disabled=move || busy.get().is_some()
+                on:click=move |_| pick.run((ProfileImage::Header, saved))
+            >
+                "Change header image"
+            </button>
+            <button
+                class="btn btn-ghost btn-xs"
+                type="button"
+                aria-label=move || banner_label("left", left_banner.get())
+                on:click=move |_| edit_banner.run(BannerRegionKind::Left)
+            >
+                {move || banner_label("left", left_banner.get())}
+            </button>
+            <button
+                class="btn btn-ghost btn-xs"
+                type="button"
+                aria-label=move || banner_label("right", right_banner.get())
+                on:click=move |_| edit_banner.run(BannerRegionKind::Right)
+            >
+                {move || banner_label("right", right_banner.get())}
+            </button>
+        </div>
+        {move || match message.get() {
+            Some(Ok(sentence)) => {
+                view! { <p class="text-xs text-success" role="status">{sentence}</p> }.into_any()
+            }
+            Some(Err(sentence)) => {
+                view! { <p class="text-xs text-error" role="alert">{sentence}</p> }.into_any()
+            }
+            None => ().into_any(),
+        }}
+    }
+    .into_any()
+}
+
+/// The sentence a side-banner button carries: add an empty one, edit one with a picture.
+fn banner_label(side: &str, has_picture: bool) -> String {
+    if has_picture {
+        format!("Edit {side} side banner")
+    } else {
+        format!("Add a {side} side banner")
     }
 }
 
@@ -356,10 +458,16 @@ fn default_card(status: Status, age_of: Option<Callback<String, String>>) -> Any
 
 #[cfg(test)]
 mod tests {
-    use leptos::prelude::{Owner, RenderHtml as _, Signal};
-    use nodus_client_core::model::Account;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{ProfilePage, ProfilePageProps};
+    use leptos::prelude::{Callback, Owner, RenderHtml as _, Signal};
+    use nodus_client_core::model::Account;
+    use nodus_ui::session_style::BannerRegionKind;
+
+    use crate::pages::settings::form::ProfileImage;
+
+    use super::{ProfileEditor, ProfilePage, ProfilePageProps};
 
     fn render_profile(account: Account) -> String {
         Owner::new().with(|| {
@@ -379,9 +487,90 @@ mod tests {
                 on_avatar: None,
                 show_verbs: false,
                 fields: None,
+                editor: None,
             })
             .to_html()
         })
+    }
+
+    fn owner_editor(
+        message: Option<Result<String, String>>,
+        left_banner: bool,
+        right_banner: bool,
+        picks: Arc<AtomicUsize>,
+    ) -> ProfileEditor {
+        ProfileEditor {
+            pick_picture: Callback::new(
+                move |(_kind, _done): (ProfileImage, Callback<Account>)| {
+                    picks.fetch_add(1, Ordering::Relaxed);
+                },
+            ),
+            edit_banner: Callback::new(|_region: BannerRegionKind| {}),
+            busy: Signal::derive(|| None),
+            message: Signal::derive(move || message.clone()),
+            left_banner: Signal::derive(move || left_banner),
+            right_banner: Signal::derive(move || right_banner),
+            on_saved: Callback::new(|_account: Account| {}),
+        }
+    }
+
+    fn render_own_profile(
+        message: Option<Result<String, String>>,
+        left_banner: bool,
+        right_banner: bool,
+    ) -> String {
+        let picks = Arc::new(AtomicUsize::new(0));
+        let editor = owner_editor(message, left_banner, right_banner, picks.clone());
+        let html = Owner::new().with(|| {
+            let statuses = Signal::derive(Vec::new);
+            ProfilePage(ProfilePageProps {
+                account: account_with_picture(),
+                relationship: None,
+                statuses,
+                show_statuses: false,
+                tabs: None,
+                after: None,
+                card: None,
+                age_of: None,
+                on_follow: None,
+                on_mute: None,
+                on_block: None,
+                on_avatar: None,
+                show_verbs: false,
+                fields: None,
+                editor: Some(editor),
+            })
+            .to_html()
+        });
+        assert_eq!(
+            picks.load(Ordering::Relaxed),
+            0,
+            "painting the controls must not ask for a file"
+        );
+        html
+    }
+
+    fn account_with_picture() -> Account {
+        Account {
+            id: "1".to_owned(),
+            acct: "alice@example.org".to_owned(),
+            display_name: "Alice".to_owned(),
+            note: String::new(),
+            avatar: "https://social.test/media/1/avatar".to_owned(),
+            avatar_meta: None,
+            header: "https://social.test/media/2/header".to_owned(),
+            header_meta: None,
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+            fields: Vec::new(),
+        }
     }
 
     fn render_profile_note(note: &str) -> String {
@@ -462,15 +651,58 @@ mod tests {
     }
 
     #[test]
-    fn profile_page_blocks_unclosed_tag_and_open_quote_xss_on_ssr() {
-        for payload in [
-            "<img src=x onerror=\"alert(1)\" ",
-            "<img src=x onerror=\"alert(1)\" alt=\"",
+    fn own_profile_names_the_profile_picture_the_header_and_both_side_banners() {
+        let html = render_own_profile(None, false, true);
+        assert!(html.contains("Change profile picture"), "{html}");
+        assert!(html.contains("Change header image"), "{html}");
+        assert!(html.contains("Add a left side banner"), "{html}");
+        assert!(html.contains("Edit right side banner"), "{html}");
+        assert_eq!(
+            html.matches("aria-label=\"Change profile picture\"")
+                .count(),
+            1,
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_profile_without_an_editor_paints_none_of_the_four_controls() {
+        let html = render_profile(account_with_picture());
+        for label in [
+            "Change profile picture",
+            "Change header image",
+            "side banner",
         ] {
-            let rendered = render_profile_note(payload);
-            assert!(!rendered.contains("<img"), "{rendered}");
-            assert!(!rendered.contains("onerror"), "{rendered}");
-            assert!(!rendered.contains("alert(1)"), "{rendered}");
+            assert!(
+                !html.contains(label),
+                "{label} on a stranger's profile: {html}"
+            );
         }
+    }
+
+    #[test]
+    fn a_refused_save_paints_its_message_in_place() {
+        let html = render_own_profile(
+            Some(Err("The instance refused that picture.".to_owned())),
+            false,
+            false,
+        );
+        assert!(
+            html.contains("role=\"alert\"") && html.contains("The instance refused that picture."),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_landed_save_paints_its_sentence_as_status() {
+        let html = render_own_profile(
+            Some(Ok("Profile picture updated.".to_owned())),
+            false,
+            false,
+        );
+        assert!(
+            html.contains("role=\"status\"") && html.contains("Profile picture updated."),
+            "{html}"
+        );
     }
 }

@@ -151,6 +151,13 @@ pub struct ImageSlot {
     pub alt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_id: Option<String>,
+    /// Whether the picture stays covered until each reader asks for it.
+    ///
+    /// It rides the slot into the stored metadata and into the published style, so a
+    /// sensitive banner is covered for everyone who sees it. The reveal is this screen's
+    /// own state and is never written back.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensitive: bool,
 }
 
 impl ImageSlot {
@@ -169,6 +176,7 @@ impl ImageSlot {
             media_id: media_id
                 .map(|id| sanitize_text(id, MAX_ID_LEN))
                 .filter(|id| !id.is_empty()),
+            sensitive: false,
         })
     }
 }
@@ -218,7 +226,14 @@ impl BannerRegion {
             .slots
             .iter()
             .filter_map(|slot| {
-                ImageSlot::new(&slot.url, slot.alt.as_deref(), slot.media_id.as_deref())
+                ImageSlot::new(&slot.url, slot.alt.as_deref(), slot.media_id.as_deref()).map(
+                    |mut clean| {
+                        // Sanitizing rewrites the fields it checks; the reader's choice to
+                        // cover a picture is not one of them.
+                        clean.sensitive = slot.sensitive;
+                        clean
+                    },
+                )
             })
             .take(MAX_SLOTS_PER_REGION)
             .collect();
@@ -229,13 +244,14 @@ impl BannerRegion {
         if self.slots.len() >= MAX_SLOTS_PER_REGION {
             return false;
         }
-        let Some(clean) = ImageSlot::new(
+        let Some(mut clean) = ImageSlot::new(
             slot.url.as_str(),
             slot.alt.as_deref(),
             slot.media_id.as_deref(),
         ) else {
             return false;
         };
+        clean.sensitive = slot.sensitive;
         drop(slot);
         self.slots.push(clean);
         true
@@ -243,13 +259,14 @@ impl BannerRegion {
 
     /// Replace a slot at `index` or append if `index >= self.slots.len()`.
     pub fn set_slot(&mut self, index: usize, slot: ImageSlot) -> bool {
-        let Some(clean) = ImageSlot::new(
+        let Some(mut clean) = ImageSlot::new(
             slot.url.as_str(),
             slot.alt.as_deref(),
             slot.media_id.as_deref(),
         ) else {
             return false;
         };
+        clean.sensitive = slot.sensitive;
         drop(slot);
         if index < self.slots.len() {
             self.slots[index] = clean;
@@ -293,6 +310,15 @@ impl BannerRegion {
         };
         slot.alt = (!clean.is_empty()).then_some(clean);
         Ok(())
+    }
+
+    /// Cover one picture behind a reveal, or let it show again.
+    pub fn set_sensitive(&mut self, index: usize, sensitive: bool) -> bool {
+        let Some(slot) = self.slots.get_mut(index) else {
+            return false;
+        };
+        slot.sensitive = sensitive;
+        true
     }
 
     /// Remove the slot at `index`, if present.
@@ -1549,6 +1575,13 @@ impl StyleEditor {
             .unwrap_or(false)
     }
 
+    /// Cover one picture behind a reveal, or let it show uncovered.
+    pub fn set_slot_sensitive(self, kind: BannerRegionKind, index: usize, sensitive: bool) -> bool {
+        self.draft
+            .try_update(|style| style.region_mut(kind).set_sensitive(index, sensitive))
+            .unwrap_or(false)
+    }
+
     /// Set the description of one picture; see [`BannerRegion::set_alt`].
     pub fn set_slot_alt(
         self,
@@ -2320,12 +2353,36 @@ mod tests {
     }
 
     #[test]
+    fn a_sensitive_picture_survives_serde_and_sanitizing() {
+        // A style saved before the flag existed has no `sensitive` key: it must read as
+        // uncovered rather than failing to load.
+        let legacy: ImageSlot =
+            serde_json::from_str(r#"{"url":"https://cdn.example/a.png"}"#).unwrap();
+        assert!(!legacy.sensitive);
+
+        let mut style = SessionStyle::default();
+        style
+            .left
+            .add_slot(ImageSlot::new("https://cdn.example/a.png", Some("A"), Some("m1")).unwrap());
+        assert!(style.left.set_sensitive(0, true));
+        style.sanitize();
+        assert!(
+            style.left.slots[0].sensitive,
+            "sanitizing must not uncover a picture"
+        );
+        let metadata = style.to_patch_metadata();
+        let carried = serde_json::to_string(metadata.get(KEY_LEFT_IMAGE).unwrap()).unwrap();
+        assert!(carried.contains(r#""sensitive":true"#), "{carried}");
+    }
+
+    #[test]
     fn safe_json_island_escapes_closing_script_tag() {
         let mut style = SessionStyle::default();
         style.top.add_slot(ImageSlot {
             url: String::from("https://cdn.example/banner.png"),
             alt: Some(String::from("</script><script>alert(1)</script>")),
             media_id: None,
+            sensitive: false,
         });
         let island = style.to_safe_json_island();
         assert!(!island.contains("</script>"));

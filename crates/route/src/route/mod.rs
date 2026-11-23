@@ -459,6 +459,12 @@ pub trait Runtime: Send + Sync + 'static {
         nodus_ui::session_style::SessionStyle::default()
     }
 
+    /// The owner's controls for the profile pictures and side banners, when this paint can
+    /// write them. A stateless paint has no session, so it has no editor.
+    fn profile_editor(&self) -> Option<nodus_pages::profile::ProfileEditor> {
+        None
+    }
+
     /// A route body only the browser can build: the editor, the staff probe.
     fn body(&self, _route: &Route) -> Option<ChildrenFn> {
         None

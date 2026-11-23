@@ -164,12 +164,19 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
     // the account already in hand rather than asking the instance a second question. They
     // stay the reader's: this screen has only ever drawn the signed-in reader's rows, and
     // another account's are not it to grow. A visitor's page carries none at all.
-    let own_fields = runtime
-        .get_value()
-        .session()
-        .is_some_and(|session| session.account_id == page_id.get_value());
+    // A cold load can finish rendering before the stored session is restored, so ownership
+    // is derived from the revision signal rather than read once at construction. A profile
+    // opened by a visitor never grows the reader's controls when a later session arrives
+    // for a different account.
+    let own_fields = Signal::derive(move || {
+        runtime.get_value().revision().get();
+        runtime
+            .get_value()
+            .session()
+            .is_some_and(|session| session.account_id == page_id.get_value())
+    });
     let fields = Signal::derive(move || {
-        if !own_fields {
+        if !own_fields.get() {
             return Vec::new();
         }
         account
@@ -177,6 +184,10 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
             .map(|profile| profile_rows(&profile.fields))
             .unwrap_or_default()
     });
+    // The controls exist only on the reader's own profile, and only when the running paint
+    // can write. The account the instance answers with replaces the one this screen holds,
+    // so a new picture paints without a second read.
+    let available_editor = runtime.get_value().profile_editor();
 
     let age_of = StoredValue::new(Callback::new(move |created_at: String| {
         crate::relative_age(&created_at, runtime.get_value().now_millis())
@@ -195,6 +206,14 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
     view! {
         {move || account.get().map(|profile| {
             let id = profile.id.clone();
+            let editor = own_fields
+                .get()
+                .then_some(available_editor)
+                .flatten()
+                .map(|editor| nodus_pages::profile::ProfileEditor {
+                    on_saved: Callback::new(move |fresh: Account| account.set(Some(fresh))),
+                    ..editor
+                });
             view! {
                 <crate::profile::ProfilePage
                     account=profile
@@ -246,6 +265,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                         }
                     })
                     fields=fields
+                    editor=editor
                     on_avatar=on_avatar
                 />
             }
@@ -297,11 +317,26 @@ mod tests {
 
     use leptos::prelude::{Callback, IntoAny as _, Owner, RenderHtml as _, Signal};
     use nodus_client_core::model::{Account, Status};
+    use nodus_ui::session_style::BannerRegionKind;
 
     use super::{AccountScreen, AccountScreenProps};
     use crate::components::CardRenderer;
     use crate::route::{Runtime, SessionView, TimelineKind, TimelineReply};
     use nodus_client_core::model::ProfileField as SdkField;
+    use nodus_pages::pages::settings::form::ProfileImage;
+    use nodus_pages::profile::ProfileEditor;
+
+    fn test_editor(message: Option<Result<String, String>>) -> ProfileEditor {
+        ProfileEditor {
+            pick_picture: Callback::new(|(_kind, _done): (ProfileImage, Callback<Account>)| {}),
+            edit_banner: Callback::new(|_region: BannerRegionKind| {}),
+            busy: Signal::derive(|| None),
+            message: Signal::derive(move || message.clone()),
+            left_banner: Signal::derive(|| false),
+            right_banner: Signal::derive(|| false),
+            on_saved: Callback::new(|_account: Account| {}),
+        }
+    }
 
     struct HeldAccountRuntime;
 
@@ -353,6 +388,12 @@ mod tests {
                 fields: Vec::new(),
             })
         }
+
+        fn profile_editor(&self) -> Option<ProfileEditor> {
+            // Deliberately present even without a session: the screen, not the runtime, owns
+            // the "this is my profile" gate.
+            Some(test_editor(None))
+        }
     }
 
     #[test]
@@ -378,6 +419,7 @@ mod tests {
     /// The signed-in reader of the stub instance, holding the rows given to it.
     struct OwnProfileRuntime {
         fields: Vec<SdkField>,
+        message: Option<Result<String, String>>,
     }
 
     impl Runtime for OwnProfileRuntime {
@@ -414,6 +456,10 @@ mod tests {
             })
         }
 
+        fn profile_editor(&self) -> Option<ProfileEditor> {
+            Some(test_editor(self.message.clone()))
+        }
+
         fn account(&self, id: &str) -> Option<Account> {
             (id == "42").then(|| Account {
                 id: "42".to_owned(),
@@ -442,7 +488,10 @@ mod tests {
         let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
         Owner::new().with(|| {
             AccountScreen(AccountScreenProps {
-                runtime: Arc::new(OwnProfileRuntime { fields }),
+                runtime: Arc::new(OwnProfileRuntime {
+                    fields,
+                    message: None,
+                }),
                 id: "42".to_owned(),
                 card,
             })
@@ -467,6 +516,57 @@ mod tests {
             html.matches(r#"aria-label="Verified link""#).count(),
             1,
             "only the verified row is ticked"
+        );
+    }
+
+    #[test]
+    fn own_profile_offers_the_picture_the_header_and_both_side_banners() {
+        let html = render_own_profile(Vec::new());
+        for label in [
+            "Change profile picture",
+            "Change header image",
+            "Add a left side banner",
+            "Add a right side banner",
+        ] {
+            assert!(html.contains(label), "{label} missing: {html}");
+        }
+    }
+
+    #[test]
+    fn another_accounts_profile_offers_no_media_controls_even_if_the_runtime_can_write() {
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        let html = Owner::new().with(|| {
+            AccountScreen(AccountScreenProps {
+                runtime: Arc::new(HeldAccountRuntime),
+                id: "42".to_owned(),
+                card,
+            })
+            .to_html()
+        });
+        assert!(!html.contains("Change profile picture"), "{html}");
+        assert!(!html.contains("Change header image"), "{html}");
+        assert!(!html.contains("side banner"), "{html}");
+    }
+
+    #[test]
+    fn a_refused_picture_save_paints_its_message_in_place() {
+        let message = Some(Err("The instance refused that picture.".to_owned()));
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        let html = Owner::new().with(|| {
+            AccountScreen(AccountScreenProps {
+                runtime: Arc::new(OwnProfileRuntime {
+                    fields: Vec::new(),
+                    message,
+                }),
+                id: "42".to_owned(),
+                card,
+            })
+            .to_html()
+        });
+        assert!(html.contains(r#"role="alert""#), "{html}");
+        assert!(
+            html.contains("The instance refused that picture."),
+            "{html}"
         );
     }
 

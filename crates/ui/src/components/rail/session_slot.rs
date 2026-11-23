@@ -11,9 +11,39 @@ use crate::session_style::{
 };
 
 /// The picture itself: the same node in a reader's banner and in the editor's.
+///
+/// A picture marked sensitive is covered until the reader asks for it. The reveal is a
+/// signal on this node alone and is never written back, so a reload covers it again.
 pub(super) fn slot_image(slot: ImageSlot, class: &'static str) -> AnyView {
+    if !slot.sensitive {
+        return view! {
+            <img src=slot.url alt=slot.alt.unwrap_or_default() class=class loading="lazy"/>
+        }
+        .into_any();
+    }
+    let revealed = RwSignal::new(false);
+    let url = slot.url;
+    let alt = slot.alt.unwrap_or_default();
     view! {
-        <img src=slot.url alt=slot.alt.unwrap_or_default() class=class loading="lazy"/>
+        <div class="relative flex h-full w-full min-w-0 flex-1" data-style-sensitive="">
+            <img
+                src=url
+                alt=alt
+                class=class
+                class=("blur-2xl", move || !revealed.get())
+                loading="lazy"
+            />
+            <button
+                type="button"
+                class="absolute inset-0 z-10 flex items-center justify-center bg-base-100/70 px-2 text-center text-xs font-semibold"
+                class:hidden=move || revealed.get()
+                title="This picture is marked sensitive; it stays covered until you ask"
+                data-style-sensitive-reveal=""
+                on:click=move |_| revealed.set(true)
+            >
+                "Sensitive picture — show"
+            </button>
+        </div>
     }
     .into_any()
 }
@@ -203,6 +233,24 @@ fn slot_editor(
             >
                 {move || problem.get().unwrap_or_default()}
             </span>
+            <label class="flex cursor-pointer items-center gap-2" title="Cover this picture until a reader asks to see it">
+                <input
+                    type="checkbox"
+                    class="checkbox checkbox-xs"
+                    data-style-slot-sensitive=""
+                    prop:checked=move || {
+                        region
+                            .get()
+                            .slots
+                            .get(index)
+                            .is_some_and(|slot| slot.sensitive)
+                    }
+                    on:change=move |event| {
+                        edit.set_slot_sensitive(kind, index, event_target_checked(&event));
+                    }
+                />
+                <span>"Sensitive picture"</span>
+            </label>
         </div>
     }
     .into_any()

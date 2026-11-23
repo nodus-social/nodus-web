@@ -249,6 +249,7 @@ pub fn PublicAccountScreen(
                     after=rows.get_value()
                     card=card.get_value()
                     age_of=age_of.get_value()
+                    editor=None
                 />
             })}
         </Show>
