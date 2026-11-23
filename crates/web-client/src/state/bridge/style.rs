@@ -14,6 +14,7 @@ use nodus_ui::session_style::{
 };
 use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::Deserialize;
+use url::Url;
 use wasm_bindgen::JsCast as _;
 
 use super::{accounts, active_cache_key, instance_transport, revision};
@@ -188,18 +189,86 @@ fn object_url(bytes: &[u8]) -> Option<String> {
     web_sys::Url::create_object_url_with_blob(&blob).ok()
 }
 
+/// What one upload answer gives the editor: a picture to place, and whether the instance is
+/// still preparing the layer it points at.
+#[derive(Debug)]
+struct PlacedUpload {
+    slot: ImageSlot,
+    processing: bool,
+}
+
+/// Why an upload answer left nothing to place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadRefusal {
+    /// The answer named no id, so no layer address could be derived.
+    Unnamed,
+    /// The answer named an address the shell will not draw.
+    Unsupported,
+}
+
+impl UploadRefusal {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Unnamed => "The instance did not name the picture, so it could not be placed.",
+            Self::Unsupported => "That picture came back with an address this site will not draw.",
+        }
+    }
+}
+
+/// Decides where an upload's answer can be drawn.
+///
+/// A `202` from a deferred upload carries the attachment's id but no URL yet. The layer's
+/// canonical address is `/media/{id}/compressed` on the instance that answered, and the
+/// media service renders it on first request, so the picture can be placed now instead of
+/// being dropped until the reader uploads it again.
+fn uploaded_picture(
+    id: &str,
+    url: Option<&str>,
+    alt: Option<&str>,
+    base: &Url,
+) -> Result<PlacedUpload, UploadRefusal> {
+    let id = id.trim();
+    let url = url.map(str::trim).filter(|url| !url.is_empty());
+    let (address, processing) = match url {
+        Some(url) => (url.to_owned(), false),
+        // A deferred upload answers `202` with the attachment's id and no address at all.
+        // The layer's canonical address is the one the attach route mints on this instance,
+        // and the media service renders it on first request, so deriving it now places the
+        // picture immediately instead of dropping it until the reader uploads it again.
+        None if !id.is_empty() => {
+            let mut address = base.clone();
+            address.set_query(None);
+            address.set_fragment(None);
+            {
+                let mut segments = address
+                    .path_segments_mut()
+                    .map_err(|()| UploadRefusal::Unsupported)?;
+                segments.clear().push("media").push(id).push("compressed");
+            }
+            (address.to_string(), true)
+        }
+        None => return Err(UploadRefusal::Unnamed),
+    };
+    let Some(slot) = ImageSlot::new(&address, alt, Some(id)) else {
+        return Err(UploadRefusal::Unsupported);
+    };
+    Ok(PlacedUpload { slot, processing })
+}
+
 /// Mint the permanent address a drive picture needs before it can be stored in the style.
 ///
 /// The style stores addresses, not files: attaching gives the picture one on this instance
 /// (`/media/{id}/compressed`) without copying its bytes anywhere.
-async fn attach_drive_picture(id: &str) -> Result<(String, String), String> {
+async fn attach_drive_picture(
+    transport: &BrowserInstance,
+    id: &str,
+) -> Result<(String, String), String> {
     #[derive(Deserialize)]
     struct Attached {
         attachment_id: String,
+        #[serde(default)]
         url: String,
     }
-    let transport =
-        super::instance_transport().ok_or_else(|| "Sign in to place a picture.".to_owned())?;
     let url = transport
         .url_segments(&["api", "v1", "drive", "files", id, "attach"])
         .map_err(|error| error.to_string())?;
@@ -213,21 +282,35 @@ async fn attach_drive_picture(id: &str) -> Result<(String, String), String> {
 /// The browser's half of a collection drop: resolve the file, then let the editor file it.
 fn place_library_picture(picture: LibraryPicture, target: PictureTarget) {
     leptos::task::spawn_local(async move {
-        let (attachment_id, url) = match attach_drive_picture(&picture.id).await {
+        let Some(transport) = super::instance_transport() else {
+            notice().set(Some(String::from("Sign in to place a picture.")));
+            return;
+        };
+        let (attachment_id, url) = match attach_drive_picture(&transport, &picture.id).await {
             Ok(attached) => attached,
             Err(error) => {
                 notice().set(Some(format!("Could not place that picture: {error}")));
                 return;
             }
         };
-        let Some(slot) = ImageSlot::new(&url, None, Some(&attachment_id)) else {
-            notice().set(Some(String::from(
-                "That picture came back with an address this site will not draw.",
-            )));
-            return;
+        let uploaded = match uploaded_picture(
+            &attachment_id,
+            Some(url.as_str()).filter(|url| !url.trim().is_empty()),
+            None,
+            transport.base(),
+        ) {
+            Ok(uploaded) => uploaded,
+            Err(refusal) => {
+                notice().set(Some(refusal.message().to_owned()));
+                return;
+            }
         };
-        editor().place_library_slot(target, slot);
-        notice().set(None);
+        editor().place_library_slot(target, uploaded.slot);
+        notice().set(uploaded.processing.then(|| {
+            String::from(
+                "That picture is still being processed; it will appear when the instance finishes.",
+            )
+        }));
     });
 }
 
@@ -316,6 +399,10 @@ pub fn pick_picture_for(target: PictureTarget) {
 /// session is uploaded and then dropped rather than landing in a draft nobody is looking at.
 fn upload_pictures_into(target: PictureTarget, files: Vec<web_sys::File>, epoch: u64) {
     leptos::task::spawn_local(async move {
+        let Some(base) = super::instance_transport().map(|instance| instance.base().clone()) else {
+            notice().set(Some(String::from("Sign in to place a picture.")));
+            return;
+        };
         for file in files {
             let name = file.name();
             let buffer = match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
@@ -335,19 +422,19 @@ fn upload_pictures_into(target: PictureTarget, files: Vec<web_sys::File>, epoch:
                 .await
             {
                 Ok(attachment) => {
-                    // An upload that is still transcoding has no URL yet; the picture is
-                    // left out of the draft rather than stored as a slot nothing can draw.
-                    let url = attachment.url.as_deref().unwrap_or_default();
-                    let Some(slot) = ImageSlot::new(
-                        url,
+                    let uploaded = match uploaded_picture(
+                        &attachment.id,
+                        attachment.url.as_deref(),
                         attachment.description.as_deref(),
-                        Some(&attachment.id),
-                    ) else {
-                        notice().set(Some(String::from(
-                            "That picture came back with an address this site will not draw.",
-                        )));
-                        continue;
+                        &base,
+                    ) {
+                        Ok(uploaded) => uploaded,
+                        Err(refusal) => {
+                            notice().set(Some(refusal.message().to_owned()));
+                            continue;
+                        }
                     };
+                    let PlacedUpload { slot, processing } = uploaded;
                     if PICK_EPOCH.get() != epoch {
                         return;
                     }
@@ -379,7 +466,13 @@ fn upload_pictures_into(target: PictureTarget, files: Vec<web_sys::File>, epoch:
                             }
                         }
                     };
-                    notice().set(done);
+                    notice().set(done.or_else(|| {
+                        processing.then(|| {
+                            String::from(
+                                "That picture is still being processed; it will appear when the instance finishes.",
+                            )
+                        })
+                    }));
                 }
                 Err(error) => notice().set(Some(format!("Could not upload that picture: {error}"))),
             }
@@ -726,4 +819,139 @@ async fn sync_ssr_style(key: &AccountKey, style: &SessionStyle) {
 pub fn current_account_key() -> Option<String> {
     let _ = revision().get();
     active_cache_key().map(|(host, account_id)| format!("{}::{account_id}", normalized_host(&host)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::rc::Rc;
+    use std::task::Poll;
+
+    use nodus_client_core::Instance;
+    use nodus_client_core::actions::MediaActions;
+    use nodus_client_core::rest::{HttpRequest, HttpResponse, Transport};
+    use nodus_mastodon::rest::RestInstance;
+    use serde_json::json;
+    use url::Url;
+
+    use super::{UploadRefusal, uploaded_picture};
+
+    /// An instance that answers from a queue, in the style of the bridge's other fakes.
+    #[derive(Clone, Default)]
+    struct FakeTransport {
+        answers: Rc<RefCell<VecDeque<HttpResponse>>>,
+    }
+
+    impl FakeTransport {
+        fn with(answers: Vec<HttpResponse>) -> Self {
+            Self {
+                answers: Rc::new(RefCell::new(answers.into())),
+            }
+        }
+    }
+
+    impl Transport for FakeTransport {
+        fn send(
+            &self,
+            _request: HttpRequest,
+        ) -> impl Future<Output = nodus_client_core::Result<HttpResponse>> {
+            let answer = self
+                .answers
+                .borrow_mut()
+                .pop_front()
+                .expect("the test queued one answer per request");
+            core::future::ready(Ok(answer))
+        }
+    }
+
+    fn answer_response(status: u16, body: &str) -> HttpResponse {
+        HttpResponse {
+            status,
+            retry_after_s: None,
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    /// Runs a future the fake transport never pends on to completion.
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = core::pin::pin!(future);
+        let waker = core::task::Waker::noop();
+        let mut context = core::task::Context::from_waker(waker);
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("the fake transport never pends"),
+        }
+    }
+
+    fn instance(answers: Vec<HttpResponse>) -> (RestInstance<FakeTransport>, FakeTransport) {
+        let transport = FakeTransport::with(answers);
+        let base = Instance::parse("https://stub.instance").expect("a valid instance");
+        (
+            RestInstance::with_transport(&base, "token", transport.clone()),
+            transport,
+        )
+    }
+
+    #[test]
+    fn a_pending_upload_is_placed_at_its_compressed_layer() {
+        let answer = json!({
+            "id": "42",
+            "type": "image",
+            "url": null,
+            "preview_url": null,
+            "description": null,
+            "blurhash": null,
+            "meta": {},
+            "processing": "pending"
+        });
+        let (instance, _transport) = instance(vec![answer_response(202, &answer.to_string())]);
+        let attachment = block_on(instance.upload_media(b"png", "image/png", None))
+            .expect("a 202 is an answer, not a refusal");
+
+        let placed = uploaded_picture(
+            &attachment.id,
+            attachment.url.as_deref(),
+            attachment.description.as_deref(),
+            instance.base(),
+        )
+        .expect("a pending upload names an id, so its layer can be derived");
+
+        assert!(
+            placed.processing,
+            "a deferred layer is still being prepared by the instance"
+        );
+        assert_eq!(
+            placed.slot.url, "https://stub.instance/media/42/compressed",
+            "the address is the one the attach route mints on this instance"
+        );
+        assert_eq!(placed.slot.media_id.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn an_address_the_shell_will_not_draw_is_still_refused() {
+        let base = Url::parse("https://stub.instance").expect("a valid instance");
+        let refusal = uploaded_picture("9", Some("javascript:alert(1)"), None, &base)
+            .expect_err("the shell does not draw script addresses");
+
+        assert_eq!(refusal, UploadRefusal::Unsupported);
+        assert_eq!(
+            refusal.message(),
+            "That picture came back with an address this site will not draw."
+        );
+    }
+
+    #[test]
+    fn a_deferred_answer_without_an_id_says_the_picture_was_not_named() {
+        let base = Url::parse("https://stub.instance").expect("a valid instance");
+        let refusal = uploaded_picture("", None, None, &base)
+            .expect_err("without an id there is no layer address to derive");
+
+        assert_eq!(refusal, UploadRefusal::Unnamed);
+        assert_eq!(
+            refusal.message(),
+            "The instance did not name the picture, so it could not be placed."
+        );
+    }
 }
