@@ -44,6 +44,7 @@ pub fn AccountRow(
     let acct = account.acct.clone();
     let handle = format!("@{acct}");
     let avatar = crate::picture::avatar(&account.avatar);
+    let still = crate::picture::avatar_still(&account.avatar);
     let has_avatar = !avatar.is_empty();
     let id = account.id.clone();
     let href = format!("/accounts/{id}");
@@ -68,15 +69,12 @@ pub fn AccountRow(
                         {has_avatar
                             .then(move || {
                                 view! {
-                                    <img
-                                        class="h-10 w-10 rounded-full object-cover"
-                                        width="40"
-                                        height="40"
-                                        decoding="async"
-                                        loading="lazy"
-                                        referrerpolicy="no-referrer"
-                                        alt=""
+                                    <crate::picture::Picture
                                         src=avatar
+                                        still=still
+                                        width=40
+                                        height=40
+                                        class="h-10 w-10 rounded-full object-cover"
                                     />
                                 }
                             })}

@@ -26,6 +26,7 @@ pub fn NotificationCard(
     let profile = format!("/accounts/{}", who.id);
     let created_at = notification.created_at.clone();
     let avatar = crate::picture::avatar(&who.avatar);
+    let still = crate::picture::avatar_still(&who.avatar);
     let body = StoredValue::new(body);
     let extra = StoredValue::new(extra);
 
@@ -35,13 +36,12 @@ pub fn NotificationCard(
                 <div class="flex items-center gap-2">
                     <a class="avatar" href=profile.clone()>
                         <div class="w-8 rounded-full bg-base-300">
-                            <img
-                                width="40"
-                                height="40"
-                                decoding="async"
+                            <crate::picture::Picture
                                 src=avatar
-                                alt=""
-                                referrerpolicy="no-referrer"
+                                still=still
+                                width=40
+                                height=40
+                                class="h-8 w-8 object-cover"
                             />
                         </div>
                     </a>
