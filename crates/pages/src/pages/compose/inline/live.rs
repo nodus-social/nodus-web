@@ -23,8 +23,8 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use nodus_client_core::model::{CustomEmoji, Visibility};
 
-use super::emoji::{self, Suggestions};
 use super::drafts_panel::{Draft, DraftsPanel};
+use super::emoji::{self, Suggestions};
 use super::{ComposerBar, InlineComposer, Posted};
 
 /// What the composer does, as the platform can answer it.
@@ -46,7 +46,7 @@ pub trait ComposerRuntime: Send + Sync + 'static {
     /// Whether the schedule panel is showing.
     fn schedule_open(&self) -> ReadSignal<bool>;
     /// Whether the poll being edited would be accepted.
-    fn poll_ready(&self) -> ReadSignal<bool>;
+    fn poll_ready(&self) -> Signal<bool>;
     /// The instance's emoji catalogue.
     fn catalogue(&self) -> Signal<Vec<CustomEmoji>>;
     /// The unsent drafts, already read and aged.
@@ -200,4 +200,166 @@ pub fn LiveComposer(
         notice: Some(runtime.notice()),
         done: Some(runtime.done()),
     })
+}
+
+/// The host's answers to [`ComposerRuntime`]: the composer's shape, and nothing to do.
+///
+/// A reader with scripting off, or one whose wasm has not arrived yet, sees the same card
+/// a browser will hydrate — the counter, the visibility, the buttons — and none of them
+/// answer. That is what makes the first frame adoptable: the nodes are the composer's, not
+/// a stand-in's.
+#[derive(Debug)]
+pub struct StaticComposerRuntime {
+    limit: usize,
+}
+
+impl StaticComposerRuntime {
+    #[must_use]
+    pub fn new(limit: usize) -> Self {
+        Self { limit }
+    }
+}
+
+impl ComposerRuntime for StaticComposerRuntime {
+    fn text(&self) -> ReadSignal<String> {
+        let (text, _) = signal(String::new());
+        text
+    }
+    fn visibility(&self) -> ReadSignal<Visibility> {
+        let (visibility, _) = signal(Visibility::Public);
+        visibility
+    }
+    fn busy(&self) -> ReadSignal<bool> {
+        let (busy, _) = signal(false);
+        busy
+    }
+    fn limit(&self) -> ReadSignal<usize> {
+        let (limit, _) = signal(self.limit);
+        limit
+    }
+    fn at(&self) -> ReadSignal<String> {
+        let (at, _) = signal(String::new());
+        at
+    }
+    fn schedule_open(&self) -> ReadSignal<bool> {
+        let (open, _) = signal(false);
+        open
+    }
+    fn poll_ready(&self) -> Signal<bool> {
+        Signal::derive(|| false)
+    }
+    fn catalogue(&self) -> Signal<Vec<CustomEmoji>> {
+        Signal::derive(Vec::new)
+    }
+    fn drafts(&self) -> Signal<Vec<Draft>> {
+        Signal::derive(Vec::new)
+    }
+    fn error(&self) -> Signal<Option<String>> {
+        Signal::derive(|| None)
+    }
+    fn notice(&self) -> Signal<Option<String>> {
+        Signal::derive(|| None)
+    }
+    fn done(&self) -> Signal<Option<Posted>> {
+        Signal::derive(|| None)
+    }
+}
+
+/// The home composer as a host paints it: the live composer's tree, an inert runtime, and
+/// the tabs under it. The browser hydrates this into [`LiveComposer`] with its own runtime,
+/// so the first frame and every frame after it are the same nodes.
+#[component]
+pub fn StaticComposer(
+    /// The route whose timeline is showing.
+    #[prop(into)]
+    active: Signal<String>,
+    /// The instance's character limit.
+    #[prop(default = 500)]
+    limit: usize,
+) -> impl IntoView {
+    let runtime: Arc<dyn ComposerRuntime> = Arc::new(StaticComposerRuntime::new(limit));
+    let language_host = NodeRef::<leptos::html::Div>::new();
+    let editor_host = NodeRef::<leptos::html::Div>::new();
+    let emoji_host = NodeRef::<leptos::html::Div>::new();
+
+    // The writing surface is `nodus-editor`'s and cannot be rendered here, so the host draws
+    // the box it boots into: same id, same class, no children. The browser adopts this node
+    // by identity and ProseMirror fills it.
+    let editor: ChildrenFn = Arc::new(move || {
+        view! {
+            <div
+                id="nodus-composer-body"
+                node_ref=editor_host
+                class="min-h-24 w-full cursor-text text-sm leading-relaxed"
+                aria-label="Write a post"
+            ></div>
+        }
+        .into_any()
+    });
+
+    let language: ChildrenFn = Arc::new(move || {
+        view! {
+            <crate::LanguagePicker
+                selected=Signal::derive(String::new)
+                name=Signal::derive(|| "Language".to_owned())
+                open=Signal::derive(|| false)
+                options=Signal::derive(Vec::new)
+                host=language_host
+            />
+        }
+        .into_any()
+    });
+
+    let emoji_picker: ChildrenFn = Arc::new(move || {
+        view! {
+            <crate::Anchor host=emoji_host>
+                <super::emoji_toggle::EmojiToggleButton
+                    open=Signal::derive(|| false)
+                    busy=Signal::derive(|| false)
+                />
+            </crate::Anchor>
+        }
+        .into_any()
+    });
+
+    // The attachment strip is the one sub-tree no inert runtime can supply: the file input
+    // and the drive picker are the browser's own controls and live in the client crate. The
+    // host draws the same nodes they draw, ids included, so the browser adopts them and the
+    // client hangs the behaviour on them.
+    let attachments: ChildrenFn = Arc::new(move || {
+        view! {
+            <crate::pages::compose::attachments::Attachments
+                media=Signal::derive(Vec::new)
+                uploading=Signal::derive(|| false)
+                percent=Signal::derive(|| None)
+                picker=Some(Arc::new(|| {
+                    view! {
+                        <input
+                            id="nodus-attach-input"
+                            class="hidden"
+                            type="file"
+                            accept="image/*,video/*,audio/*"
+                            multiple
+                        />
+                        <button id="nodus-drive-open" class="hidden" type="button"></button>
+                    }
+                    .into_any()
+                }) as ChildrenFn)
+            />
+        }
+        .into_any()
+    });
+
+    view! {
+        <div class="flex flex-col gap-2">
+            <LiveComposer
+                runtime=runtime
+                editor=editor
+                language=Some(language)
+                emoji_picker=Some(emoji_picker)
+                attachments=Some(attachments)
+            />
+            <crate::TimelineTabs active=active/>
+        </div>
+    }
 }

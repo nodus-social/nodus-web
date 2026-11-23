@@ -19,8 +19,6 @@ use crate::state::bridge::actions;
 use leptos::prelude::*;
 use nodus_client_core::model::CustomEmoji;
 
-pub use nodus_pages::pages::compose::inline::emoji::Suggestions;
-
 pub use nodus_pages::pages::compose::inline::emoji::{complete, pending};
 
 /// The catalogue, fetched the first time a composer needs it.
@@ -34,15 +32,4 @@ pub fn catalogue() -> ReadSignal<Vec<CustomEmoji>> {
         set_emojis.set(all);
     });
     emojis
-}
-
-/// Replaces the pending shortcode in `text` with `:shortcode: `, and answers the new text.
-///
-/// The trailing space is deliberate: a writer who picks an emoji has finished that word.
-#[must_use]
-pub fn complete(text: &str, colon: usize, shortcode: &str) -> String {
-    let mut finished = text[..colon].to_owned();
-    finished.push_str(shortcode);
-    finished.push(' ');
-    finished
 }

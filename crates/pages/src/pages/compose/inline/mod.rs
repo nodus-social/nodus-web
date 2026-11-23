@@ -18,14 +18,12 @@ pub mod emoji_toggle;
 pub mod hints;
 pub mod live;
 pub mod poll;
-pub mod preview;
 pub mod schedule;
 
 pub use bar::ComposerBar;
 pub use drafts_panel::{Draft, DraftsPanel};
 pub use emoji::Suggestions;
-pub use live::{ComposerRuntime, LiveComposer};
-pub use preview::{ComposerPreview, ComposerSlot};
+pub use live::{ComposerRuntime, LiveComposer, StaticComposer, StaticComposerRuntime};
 
 /// What a published post says afterwards: the visibility it went out with, and the
 /// language, named the way the composer names it.

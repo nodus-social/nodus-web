@@ -695,7 +695,7 @@ pub fn RouteView(
             let header = header.or_else(|| {
                 let header: ChildrenFn = Arc::new(|| {
                     view! {
-                        <crate::pages::compose::inline::preview::ComposerPreview
+                        <crate::pages::compose::inline::StaticComposer
                             active=Signal::derive(|| "/home/feed".to_owned())
                         />
                     }

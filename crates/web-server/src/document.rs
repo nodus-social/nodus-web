@@ -386,9 +386,10 @@ fn timeline_header(active: &str) -> String {
 
     let here = active.to_owned();
     Owner::new().with(|| {
-        nodus_pages::pages::compose::inline::ComposerPreview(
-            nodus_pages::pages::compose::inline::preview::ComposerPreviewProps {
+        nodus_pages::pages::compose::inline::StaticComposer(
+            nodus_pages::pages::compose::inline::live::StaticComposerProps {
                 active: Signal::derive(move || here.clone()),
+                limit: 500,
             },
         )
         .to_html()
@@ -454,11 +455,8 @@ pub fn home_with_style(
         style: style.cloned(),
         ..nodus_shell::ShellSeed::default()
     };
-    let runtime = crate::runtime::StaticRuntime::page_for(
-        reader,
-        statuses,
-        cursor.map(str::to_owned),
-    );
+    let runtime =
+        crate::runtime::StaticRuntime::page_for(reader, statuses, cursor.map(str::to_owned));
     let body = Owner::new().with(|| {
         use leptos::prelude::*;
 
@@ -468,12 +466,10 @@ pub fn home_with_style(
                     .inner_html(status_card(&status))
                     .into_any()
             });
-        let no_composer: ChildrenFn = std::sync::Arc::new(|| ().into_any());
         let header: ChildrenFn = std::sync::Arc::new(move || {
             view! {
-                <nodus_pages::pages::compose::inline::ComposerSlot
+                <nodus_pages::pages::compose::inline::StaticComposer
                     active=Signal::derive(|| "/home".to_owned())
-                    composer=no_composer.clone()
                 />
             }
             .into_any()
@@ -1233,6 +1229,38 @@ mod tests {
         // The island carries the reader, so a screen that asks the runtime who is signed
         // in gets the same answer the browser's store would give.
         assert!(html.contains("\"acct\":\"ada@misskey.test\""), "{html}");
+    }
+
+    #[test]
+    fn home_server_frame_paints_the_composer_body() {
+        // The composer is the browser's: the editor is wasm-only and arrives with the
+        // client, so the host draws the box it boots into. If that box is missing from the
+        // document, the first frame is a stand-in the browser has to replace wholesale.
+        let reader = Reader {
+            host: "misskey.test".to_owned(),
+            account_id: "9".to_owned(),
+            acct: "ada@misskey.test".to_owned(),
+            display_name: "Ada".to_owned(),
+            avatar: "https://cdn.test/ada.png".to_owned(),
+        };
+        let statuses = [status_by(
+            "ada@misskey.test",
+            "Ada",
+            "<p>first from my own server</p>",
+        )];
+        let html = home_with_style(&test_assets(), &reader, false, &statuses, None, None);
+
+        assert!(
+            html.contains("id=\"nodus-composer-body\""),
+            "the host does not paint the editor's box: {html}"
+        );
+        // The same nodes the browser's composer renders around it, so hydration adopts
+        // them instead of replacing them: the counter's limit and the post button.
+        assert!(html.contains("aria-label=\"Write a post\""), "{html}");
+        assert!(
+            html.contains("What's on your mind?") || html.contains("Post"),
+            "{html}"
+        );
     }
 
     fn has_staff_links(html: &str) -> bool {
