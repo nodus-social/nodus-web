@@ -287,9 +287,17 @@ impl Client {
     }
 
     async fn profile_page_at(&self, reference: &str, limit: u16) -> Result<ProfilePage, String> {
+        // `reference` is one path segment, and `limit` is a query parameter: `url` pushes
+        // each segment through `path_segments_mut().push`, which percent-encodes `?`, so a
+        // query written into the path arrives as `/pages/profile/{id}%3Flimit=20` and the
+        // instance answers 404. `page_url_segments` is the builder that keeps the two
+        // apart and is what every other paginated read in the SDK uses.
         let url = self
             .instance
-            .url(&format!("/api/v1/pages/profile/{reference}?limit={limit}"))
+            .page_url_segments(
+                &["api", "v1", "pages", "profile", reference],
+                &PageParams::first(limit),
+            )
             .map_err(|error| error.to_string())?;
         self.instance
             .fetch(self.instance.get(url))
@@ -525,6 +533,66 @@ mod tests {
                 "staff_role": null
             }))
             .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_profile_page_sends_its_reference_as_a_path_and_its_limit_as_a_query() {
+        use std::sync::{Arc, Mutex};
+
+        // `HttpInstance::url` pushes every path segment through
+        // `path_segments_mut().push`, so a query written into the path arrives
+        // percent-encoded as `{id}%3Flimit=20` and the instance answers 404. The renderer
+        // swallows that failure and paints the chrome shell without an island, so the
+        // shape of this request is the whole difference between a painted profile and a
+        // blank one.
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let app = Router::new().route(
+            "/api/v1/pages/profile/{reference}",
+            get(
+                move |axum::extract::Path(reference): axum::extract::Path<String>,
+                      Query(params): Query<BTreeMap<String, String>>| {
+                    let recorder = Arc::clone(&recorder);
+                    async move {
+                        recorder.lock().unwrap().push(format!(
+                            "{reference}?limit={}",
+                            params.get("limit").cloned().unwrap_or_default()
+                        ));
+                        Json(serde_json::json!({
+                            "account": { "id": reference, "acct": "grace" },
+                            "statuses": [],
+                            "relationship": null,
+                            "page": { "next": null }
+                        }))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = Client::for_test(&format!("http://{addr}"), "test-token");
+        let by_id = client
+            .profile_page("01M7YZM0KN5V1STTJDR6D5EGAW", 20)
+            .await
+            .unwrap();
+        assert_eq!(by_id.account.id, "01M7YZM0KN5V1STTJDR6D5EGAW");
+        let by_handle = client
+            .profile_page_by_handle("grace@nodus.test", 20)
+            .await
+            .unwrap();
+        assert_eq!(by_handle.account.acct, "grace");
+
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            vec![
+                "01M7YZM0KN5V1STTJDR6D5EGAW?limit=20".to_owned(),
+                "grace@nodus.test?limit=20".to_owned(),
+            ]
         );
     }
 
