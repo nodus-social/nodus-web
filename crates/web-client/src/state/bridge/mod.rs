@@ -473,6 +473,7 @@ pub fn install_reactive_root() {
     }
     feed_ui();
     posts::install();
+    profile_media::install();
 }
 
 /// The revision signal: read it inside a view to re-render on SDK changes.

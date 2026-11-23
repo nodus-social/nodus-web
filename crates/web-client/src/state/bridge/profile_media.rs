@@ -27,6 +27,16 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+/// Creates the two app-lifetime signals while no owner exists.
+///
+/// Must run before the first mount, like every other signal in [`super`]: they are written
+/// by an upload that outlives the profile screen which opened it, so a signal owned by that
+/// screen would be disposed mid-flight and the next click would panic before the file dialog.
+pub(crate) fn install() {
+    let _ = busy();
+    let _ = message();
+}
+
 fn busy() -> RwSignal<Option<ProfileImage>> {
     BUSY.with(|cell| *cell.borrow_mut().get_or_insert_with(|| RwSignal::new(None)))
 }

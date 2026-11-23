@@ -101,9 +101,10 @@ test('a profile picture uploads once and patches the credentials once', async ({
   await expect(page.getByRole('status')).toHaveText('Profile picture updated.')
   expect(counts.uploads).toBe(1)
   expect(counts.patches).toBe(1)
-  // The credentials form names the attachment the upload returned.
-  expect(counts.patched[0]).toContain('9001')
-  expect(counts.patched[0]).toContain('name="avatar"')
+  // The credentials form names the attachment the upload returned, as the SDK encodes
+  // it: `avatar=<id>` in an `application/x-www-form-urlencoded` body.
+  const patched = new URLSearchParams(counts.patched[0])
+  expect(patched.get('avatar')).toBe('9001')
 })
 
 test('cancelling the file dialog sends nothing', async ({ page }) => {
