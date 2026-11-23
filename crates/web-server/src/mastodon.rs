@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 
 use nodus_client_core::LocalId;
-use nodus_client_core::actions::{Browse, ScheduleActions, Search as SearchApi};
+use nodus_client_core::actions::ScheduleActions;
 use nodus_client_core::model::{
-    Account, Context, Conversation, List, Notification, PageParams, ScheduledStatus, SearchResults,
-    Status,
+    Account, Context, Conversation, List, Notification, PageParams, Relationship, ScheduledStatus,
+    SearchResults, Status,
 };
 use nodus_client_core::{Instance, InstanceApi};
 use nodus_client_sdk::reads::{Headless, Reads};
@@ -55,6 +55,37 @@ impl Credentials {
             .as_ref()
             .is_some_and(|role| !role.name.trim().is_empty())
     }
+}
+
+/// The `page` half of a profile answer: where the next and previous pages start.
+#[derive(Debug, Deserialize)]
+pub struct PageCursors {
+    pub next: Option<String>,
+    /// Carried because the answer names it; the profile screen pages forward only.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub prev: Option<String>,
+}
+
+/// `GET /api/v1/pages/profile/{id}`.
+#[derive(Debug, Deserialize)]
+pub struct ProfilePage {
+    pub account: Account,
+    #[serde(default)]
+    pub statuses: Vec<Status>,
+    #[serde(default)]
+    pub relationship: Option<Relationship>,
+    pub page: PageCursors,
+}
+
+/// `GET /api/v1/pages/status/{id}`.
+#[derive(Debug, Deserialize)]
+pub struct StatusPage {
+    pub status: Status,
+    #[serde(default)]
+    pub ancestors: Vec<Status>,
+    #[serde(default)]
+    pub descendants: Vec<Status>,
 }
 
 /// A signed-in instance, ready to ask.
@@ -227,6 +258,35 @@ impl Client {
     pub async fn context(&self, id: &str) -> Result<Context, String> {
         self.instance
             .status_context(id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// A profile page, hydrated by the instance in one answer.
+    ///
+    /// The payload is the one `/api/v1/pages/profile/{id}` documents: the account, the
+    /// first page of its posts, the viewer's relationship, and the cursors. The shapes are
+    /// the SDK's own models, so the screen painted here and the screen the browser paints
+    /// read the same fields.
+    pub async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String> {
+        let url = self
+            .instance
+            .url(&format!("/api/v1/pages/profile/{id}?limit={limit}"))
+            .map_err(|error| error.to_string())?;
+        self.instance
+            .fetch(self.instance.get(url))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// One status and its thread, hydrated by the instance in one answer.
+    pub async fn status_page(&self, id: &str) -> Result<StatusPage, String> {
+        let url = self
+            .instance
+            .url(&format!("/api/v1/pages/status/{id}"))
+            .map_err(|error| error.to_string())?;
+        self.instance
+            .fetch(self.instance.get(url))
             .await
             .map_err(|error| error.to_string())
     }

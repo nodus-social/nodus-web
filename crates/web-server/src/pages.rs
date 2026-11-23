@@ -12,7 +12,7 @@ use nodus_ui::session_style::SessionStyle;
 use nodus_web::shared::router::Route;
 use nodus_web::shared::screens::{Screen, ScreenKind};
 
-use crate::mastodon::Client;
+use crate::mastodon::{Client, ProfilePage, StatusPage};
 use crate::{PAGE, document, runtime::StaticRuntime};
 
 /// The server's card painter: it has a status and needs the component's HTML.
@@ -300,7 +300,7 @@ pub fn render_account(
     statuses: &[nodus_client_core::model::Status],
     cursor: Option<&str>,
 ) -> String {
-    render_account_with_style(assets, acct, staff, account, statuses, cursor, None)
+    render_account_with_style(assets, acct, staff, account, None, statuses, cursor, None)
 }
 
 #[must_use]
@@ -309,6 +309,7 @@ pub fn render_account_with_style(
     acct: &str,
     staff: bool,
     account: &nodus_client_core::model::Account,
+    relationship: Option<&nodus_client_core::model::Relationship>,
     statuses: &[nodus_client_core::model::Status],
     cursor: Option<&str>,
     style: Option<&SessionStyle>,
@@ -327,7 +328,7 @@ pub fn render_account_with_style(
     let title = format!("{} · {acct}", account.acct);
     let runtime = StaticRuntime::profile(
         account.clone(),
-        None,
+        relationship.cloned(),
         statuses.clone(),
         cursor.map(std::borrow::ToOwned::to_owned),
     );
@@ -343,6 +344,7 @@ pub fn render_account_with_style(
     let island = serde_json::json!({
         "kind": "account",
         "account": account,
+        "relationship": relationship,
         "statuses": statuses,
         "cursor": cursor,
     });
@@ -464,6 +466,62 @@ fn render_conversations_with_style(
     )
 }
 
+/// The reads the entity routes make.
+///
+/// `Client` is the one production implementation; tests supply a fake that counts calls,
+/// which is how "one request per page" is asserted instead of described.
+#[allow(
+    async_fn_in_trait,
+    reason = "the trait is private to this module and used only as a generic bound"
+)]
+pub(crate) trait EntityReads {
+    async fn search(&self, query: &str) -> Result<nodus_client_core::model::SearchResults, String>;
+    async fn account(&self, id: &str) -> Result<nodus_client_core::model::Account, String>;
+    async fn account_statuses(
+        &self,
+        id: &str,
+        limit: u16,
+    ) -> Result<(Vec<nodus_client_core::model::Status>, Option<String>), String>;
+    async fn status(&self, id: &str) -> Result<nodus_client_core::model::Status, String>;
+    async fn context(&self, id: &str) -> Result<nodus_client_core::model::Context, String>;
+    async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String>;
+    async fn status_page(&self, id: &str) -> Result<StatusPage, String>;
+}
+
+impl EntityReads for Client {
+    async fn search(&self, query: &str) -> Result<nodus_client_core::model::SearchResults, String> {
+        Client::search(self, query).await
+    }
+
+    async fn account(&self, id: &str) -> Result<nodus_client_core::model::Account, String> {
+        Client::account(self, id).await
+    }
+
+    async fn account_statuses(
+        &self,
+        id: &str,
+        limit: u16,
+    ) -> Result<(Vec<nodus_client_core::model::Status>, Option<String>), String> {
+        Client::account_statuses(self, id, limit).await
+    }
+
+    async fn status(&self, id: &str) -> Result<nodus_client_core::model::Status, String> {
+        Client::status(self, id).await
+    }
+
+    async fn context(&self, id: &str) -> Result<nodus_client_core::model::Context, String> {
+        Client::context(self, id).await
+    }
+
+    async fn profile_page(&self, id: &str, limit: u16) -> Result<ProfilePage, String> {
+        Client::profile_page(self, id, limit).await
+    }
+
+    async fn status_page(&self, id: &str) -> Result<StatusPage, String> {
+        Client::status_page(self, id).await
+    }
+}
+
 pub(crate) async fn read_entity(
     client: &Client,
     assets: &document::Assets,
@@ -472,17 +530,34 @@ pub(crate) async fn read_entity(
     path: &str,
     style: Option<&SessionStyle>,
 ) -> Option<String> {
+    read_entity_with(client, assets, acct, staff, path, style).await
+}
+
+/// One account or one thread, read once when the instance hydrates pages itself.
+///
+/// The client is generic over [`EntityReads`] so a test can inject a fake transport and
+/// count the requests a render makes. `pages` is asked once here, from the answer
+/// `capabilities::resolve` already cached for this host.
+async fn read_entity_with<R: EntityReads>(
+    reads: &R,
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    path: &str,
+    style: Option<&SessionStyle>,
+) -> Option<String> {
+    let instance_host = acct.split_once('@').map_or("", |(_, host)| host);
+    let pages = crate::capabilities::serves_pages(instance_host);
     if let Some(rest) = path.strip_prefix("/accounts/") {
         if rest.is_empty() {
             return None;
         }
         // `/accounts/{host}/{name|id}` is the permanent address; `/accounts/{id}` is the
-        // older one. The host has to be the reader's own instance, because `client` speaks
+        // older one. The host has to be the reader's own instance, because `reads` speaks
         // for the session: another instance's profile is a public read, not this page.
         let (host, segment) = rest
             .split_once('/')
             .map_or((None, rest), |(host, segment)| (Some(host), segment));
-        let instance_host = acct.split_once('@').map_or("", |(_, host)| host);
         if let Some(host) = host
             && !host.eq_ignore_ascii_case(instance_host)
         {
@@ -494,7 +569,7 @@ pub(crate) async fn read_entity(
             segment.to_owned()
         } else {
             let wanted = segment.to_owned();
-            client
+            reads
                 .search(&format!("@{segment}@{instance_host}"))
                 .await
                 .ok()?
@@ -509,24 +584,82 @@ pub(crate) async fn read_entity(
                 })?
                 .id
         };
-        let account = client.account(&id).await.ok()?;
-        let (statuses, cursor) = client.account_statuses(&id, PAGE).await.ok()?;
-        return Some(render_account_with_style(
-            assets,
-            acct,
-            staff,
-            &account,
-            &statuses,
-            cursor.as_deref(),
-            style,
-        ));
+        return if pages {
+            let page = reads.profile_page(&id, PAGE).await.ok()?;
+            Some(render_account_with_style(
+                assets,
+                acct,
+                staff,
+                &page.account,
+                page.relationship.as_ref(),
+                &page.statuses,
+                page.page.next.as_deref(),
+                style,
+            ))
+        } else {
+            read_profile_pre_pages(reads, assets, acct, staff, &id, style).await
+        };
     }
     let id = path.strip_prefix("/status/")?;
     if id.is_empty() || id.contains('/') {
         return None;
     }
-    let status = client.status(id).await.ok()?;
-    let context = client.context(id).await.ok()?;
+    if pages {
+        let page = reads.status_page(id).await.ok()?;
+        let context = nodus_client_core::model::Context {
+            ancestors: page.ancestors,
+            descendants: page.descendants,
+        };
+        return Some(document::thread_page_with_style(
+            assets,
+            acct,
+            staff,
+            &page.status,
+            &context,
+            style,
+        ));
+    }
+    read_thread_pre_pages(reads, assets, acct, staff, id, style).await
+}
+
+/// The pre-`pages` path: today's reads, kept for Mastodon, Misskey and older nodus.
+///
+/// This is the only place that assembles a profile or a thread out of more than one call,
+/// and it exists solely for instances that do not advertise `pages`; do not grow it into a
+/// second hydrator.
+async fn read_profile_pre_pages<R: EntityReads>(
+    reads: &R,
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    id: &str,
+    style: Option<&SessionStyle>,
+) -> Option<String> {
+    let account = reads.account(id).await.ok()?;
+    let (statuses, cursor) = reads.account_statuses(id, PAGE).await.ok()?;
+    Some(render_account_with_style(
+        assets,
+        acct,
+        staff,
+        &account,
+        None,
+        &statuses,
+        cursor.as_deref(),
+        style,
+    ))
+}
+
+/// The pre-`pages` thread path, beside [`read_profile_pre_pages`].
+async fn read_thread_pre_pages<R: EntityReads>(
+    reads: &R,
+    assets: &document::Assets,
+    acct: &str,
+    staff: bool,
+    id: &str,
+    style: Option<&SessionStyle>,
+) -> Option<String> {
+    let status = reads.status(id).await.ok()?;
+    let context = reads.context(id).await.ok()?;
     Some(document::thread_page_with_style(
         assets, acct, staff, &status, &context, style,
     ))
@@ -899,6 +1032,279 @@ mod painting {
             !public_thread_html.contains("steal()"),
             "{public_thread_html}"
         );
+    }
+
+
+    fn test_assets() -> crate::document::Assets {
+        crate::document::Assets {
+            script: "/nodus-web.js".to_owned(),
+            wasm: "/nodus-web_bg.wasm".to_owned(),
+            stylesheet: None,
+            stylesheet_css: None,
+        }
+    }
+
+    fn test_account(id: &str, name: &str, bio: &str) -> nodus_client_core::model::Account {
+        nodus_client_core::model::Account {
+            id: id.to_owned(),
+            acct: format!("{name}@pages.example"),
+            display_name: name.to_owned(),
+            note: format!("<p>{bio}</p>"),
+            avatar: String::new(),
+            header: String::new(),
+            bot: false,
+            locked: false,
+            followers_count: 0,
+            following_count: 0,
+            statuses_count: 0,
+            last_status_at: None,
+            fields: Vec::new(),
+            discoverable: None,
+            indexable: None,
+            noindex: None,
+        }
+    }
+
+    fn test_status(
+        id: &str,
+        body: &str,
+        account: &nodus_client_core::model::Account,
+    ) -> nodus_client_core::model::Status {
+        nodus_client_core::model::Status {
+            id: id.to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            content: format!("<p>{body}</p>"),
+            visibility: nodus_client_core::model::Visibility::Public,
+            account: account.clone(),
+            favourites_count: 0,
+            reblogs_count: 0,
+            replies_count: 0,
+            favourited: false,
+            reblogged: false,
+            bookmarked: false,
+            reblog: None,
+            in_reply_to_id: None,
+            emojis: Vec::new(),
+            url: None,
+            sensitive: false,
+            spoiler_text: String::new(),
+            language: None,
+            content_format: None,
+            content_source: None,
+            media_attachments: Vec::new(),
+            mentions: Vec::new(),
+            tags: Vec::new(),
+            poll: None,
+            edited_at: None,
+            pinned: None,
+        }
+    }
+
+    /// A transport with no network: it counts the calls the render makes.
+    struct CountingReads {
+        account: nodus_client_core::model::Account,
+        statuses: Vec<nodus_client_core::model::Status>,
+        relationship: Option<nodus_client_core::model::Relationship>,
+        context: nodus_client_core::model::Context,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl CountingReads {
+        fn new(
+            account: nodus_client_core::model::Account,
+            statuses: Vec<nodus_client_core::model::Status>,
+        ) -> Self {
+            Self {
+                account,
+                statuses,
+                relationship: None,
+                context: nodus_client_core::model::Context::default(),
+                calls: std::cell::Cell::new(0),
+            }
+        }
+
+        fn count(&self) -> usize {
+            self.calls.get()
+        }
+
+        fn hit(&self) {
+            self.calls.set(self.calls.get() + 1);
+        }
+    }
+
+    impl super::EntityReads for CountingReads {
+        async fn search(
+            &self,
+            _query: &str,
+        ) -> Result<nodus_client_core::model::SearchResults, String> {
+            self.hit();
+            Ok(nodus_client_core::model::SearchResults::default())
+        }
+
+        async fn account(
+            &self,
+            _id: &str,
+        ) -> Result<nodus_client_core::model::Account, String> {
+            self.hit();
+            Ok(self.account.clone())
+        }
+
+        async fn account_statuses(
+            &self,
+            _id: &str,
+            _limit: u16,
+        ) -> Result<(Vec<nodus_client_core::model::Status>, Option<String>), String> {
+            self.hit();
+            Ok((self.statuses.clone(), None))
+        }
+
+        async fn status(
+            &self,
+            _id: &str,
+        ) -> Result<nodus_client_core::model::Status, String> {
+            self.hit();
+            self.statuses.first().cloned().ok_or_else(|| "none".to_owned())
+        }
+
+        async fn context(
+            &self,
+            _id: &str,
+        ) -> Result<nodus_client_core::model::Context, String> {
+            self.hit();
+            Ok(self.context.clone())
+        }
+
+        async fn profile_page(
+            &self,
+            _id: &str,
+            _limit: u16,
+        ) -> Result<super::ProfilePage, String> {
+            self.hit();
+            Ok(super::ProfilePage {
+                account: self.account.clone(),
+                statuses: self.statuses.clone(),
+                relationship: self.relationship.clone(),
+                page: crate::mastodon::PageCursors {
+                    next: Some("next-page".to_owned()),
+                    prev: None,
+                },
+            })
+        }
+
+        async fn status_page(&self, _id: &str) -> Result<super::StatusPage, String> {
+            self.hit();
+            let status = self.statuses.first().cloned().ok_or_else(|| "none".to_owned())?;
+            Ok(super::StatusPage {
+                status,
+                ancestors: self.context.ancestors.clone(),
+                descendants: self.context.descendants.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pages_profile_is_one_call_and_paints_name_bio_and_first_post() {
+        crate::capabilities::remember_for_test(
+            "pages.example",
+            nodus_ui::capabilities::Capabilities::from_published(&["pages".to_owned()]),
+        );
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let first = test_status("10", "First post body", &alice);
+        let mut reads = CountingReads::new(alice, vec![first]);
+        reads.relationship = Some(nodus_client_core::model::Relationship {
+            id: nodus_client_core::model::LocalId("viewer".to_owned()),
+            following: true,
+            requested: false,
+            followed_by: false,
+            blocking: false,
+            blocked_by: false,
+            muting: false,
+            muting_notifications: false,
+            domain_blocking: false,
+            endorsed: false,
+        });
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "viewer@pages.example",
+            false,
+            "/accounts/1",
+            None,
+        )
+        .await
+        .expect("the pages profile paints");
+
+        assert_eq!(reads.count(), 1, "one request per profile render");
+        assert!(html.contains("Alice Example"), "{html}");
+        assert!(html.contains("Writer of things"), "{html}");
+        assert!(html.contains("First post body"), "{html}");
+        assert!(html.contains("\"relationship\""), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_pages_thread_is_one_call_and_paints_the_body_and_a_reply() {
+        crate::capabilities::remember_for_test(
+            "thread.example",
+            nodus_ui::capabilities::Capabilities::from_published(&["pages".to_owned()]),
+        );
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let focal = test_status("10", "The post body", &alice);
+        let mut reply = test_status("11", "A reply body", &alice);
+        reply.in_reply_to_id = Some("10".to_owned());
+        let mut reads = CountingReads::new(alice, vec![focal]);
+        reads.context = nodus_client_core::model::Context {
+            ancestors: Vec::new(),
+            descendants: vec![reply],
+        };
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "viewer@thread.example",
+            false,
+            "/status/10",
+            None,
+        )
+        .await
+        .expect("the pages thread paints");
+
+        assert_eq!(reads.count(), 1, "one request per post render");
+        assert!(html.contains("The post body"), "{html}");
+        assert!(html.contains("A reply body"), "{html}");
+    }
+
+    #[tokio::test]
+    async fn a_host_without_pages_keeps_the_pre_pages_reads() {
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let first = test_status("10", "First post body", &alice);
+        let reads = CountingReads::new(alice, vec![first]);
+
+        let html = super::read_entity_with(
+            &reads,
+            &test_assets(),
+            "viewer@legacy.example",
+            false,
+            "/accounts/1",
+            None,
+        )
+        .await
+        .expect("the pre-pages profile paints");
+
+        assert_eq!(reads.count(), 2, "the fallback still reads account and page");
+        assert!(html.contains("Alice Example"), "{html}");
+        assert!(html.contains("First post body"), "{html}");
+    }
+
+    #[test]
+    fn a_public_profile_paints_no_island_and_no_relationship() {
+        let alice = test_account("1", "Alice Example", "Writer of things");
+        let first = test_status("10", "First post body", &alice);
+        let html = super::render_public_account(&test_assets(), "pages.example", "1", alice, vec![first]);
+
+        assert!(!html.contains("nodus-page"), "{html}");
+        assert!(!html.contains("\"relationship\""), "{html}");
+        assert!(html.contains("First post body"), "{html}");
     }
 
     #[test]

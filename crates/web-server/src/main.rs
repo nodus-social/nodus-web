@@ -535,20 +535,39 @@ async fn public_thread(app: &App, path: &str) -> Option<String> {
             return None;
         }
     };
-    let status = match client.status(&id).await {
-        Ok(status) => status,
-        Err(message) => {
-            tracing::warn!(%message, %host, %id, "public post could not be read");
-            return None;
+    let hydrated =
+        capabilities::resolve_host(&host).await.is_some() && capabilities::serves_pages(&host);
+    let (status, context) = if hydrated {
+        match client.status_page(&id).await {
+            Ok(page) => (
+                page.status,
+                nodus_client_core::model::Context {
+                    ancestors: page.ancestors,
+                    descendants: page.descendants,
+                },
+            ),
+            Err(message) => {
+                tracing::warn!(%message, %host, %id, "public post page could not be read");
+                return None;
+            }
         }
+    } else {
+        let status = match client.status(&id).await {
+            Ok(status) => status,
+            Err(message) => {
+                tracing::warn!(%message, %host, %id, "public post could not be read");
+                return None;
+            }
+        };
+        let context = client
+            .context(&id)
+            .await
+            .unwrap_or(nodus_client_core::model::Context {
+                ancestors: Vec::new(),
+                descendants: Vec::new(),
+            });
+        (status, context)
     };
-    let context = client
-        .context(&id)
-        .await
-        .unwrap_or(nodus_client_core::model::Context {
-            ancestors: Vec::new(),
-            descendants: Vec::new(),
-        });
     Some(pages::render_public_thread(
         &app.bundle(),
         &host,
@@ -583,19 +602,32 @@ async fn public_account(app: &App, path: &str) -> Option<String> {
             return None;
         }
     };
-    let account = match client.account(&id).await {
-        Ok(account) => account,
-        Err(message) => {
-            tracing::warn!(%message, %host, %id, "public account could not be read");
-            return None;
+    let hydrated =
+        capabilities::resolve_host(host).await.is_some() && capabilities::serves_pages(host);
+    let (account, statuses) = if hydrated {
+        match client.profile_page(&id, PAGE).await {
+            Ok(page) => (page.account, page.statuses),
+            Err(message) => {
+                tracing::warn!(%message, %host, %id, "public account page could not be read");
+                return None;
+            }
         }
-    };
-    let (statuses, _) = match client.account_statuses(&id, PAGE).await {
-        Ok(page) => page,
-        Err(message) => {
-            tracing::warn!(%message, %host, %id, "public account posts could not be read");
-            return None;
-        }
+    } else {
+        let account = match client.account(&id).await {
+            Ok(account) => account,
+            Err(message) => {
+                tracing::warn!(%message, %host, %id, "public account could not be read");
+                return None;
+            }
+        };
+        let (statuses, _) = match client.account_statuses(&id, PAGE).await {
+            Ok(page) => page,
+            Err(message) => {
+                tracing::warn!(%message, %host, %id, "public account posts could not be read");
+                return None;
+            }
+        };
+        (account, statuses)
     };
     Some(pages::render_public_account(
         &app.bundle(),

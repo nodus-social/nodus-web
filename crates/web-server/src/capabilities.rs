@@ -83,7 +83,7 @@ pub(crate) async fn resolve(session: &Session) -> Option<Capabilities> {
     let (at, names) = match session.protocol {
         Protocol::Mastodon => (Some(Capabilities::mastodon()), None),
         Protocol::Misskey => (Some(Capabilities::misskey()), None),
-        Protocol::Nodus => match read_meta(session).await {
+        Protocol::Nodus => match read_meta(&session.host).await {
             Some((at, names)) => (Some(at), Some(names)),
             None => (None, None),
         },
@@ -101,6 +101,36 @@ pub(crate) async fn resolve(session: &Session) -> Option<Capabilities> {
 /// not inside an async function. The value was put here by [`resolve`] before the paint.
 pub(crate) fn answer_for(host: &str) -> Option<Capabilities> {
     cached(&key(host)).flatten()
+}
+
+/// The answer for a host nobody signed in on, e.g. a shared post's own instance.
+///
+/// Unlike [`resolve`] this has no dialect fact to start from, so every host pays the one
+/// `/api/v1/meta` read (cached like any other answer). A Mastodon host answers `404`,
+/// which is cached as "no answer" and leaves the caller on the pre-`pages` path.
+pub(crate) async fn resolve_host(host: &str) -> Option<Capabilities> {
+    let host = key(host);
+    if let Some(cached) = cached(&host) {
+        return cached;
+    }
+    match read_meta(&host).await {
+        Some((at, names)) => {
+            remember(&host, at.clone(), Some(names));
+            Some(at)
+        }
+        None => None,
+    }
+}
+
+/// Whether this host advertises the backend's hydrated `pages` endpoints.
+///
+/// The SDK's `Feature` enum has no `Pages` variant yet, so the name is looked up where
+/// `Capabilities::from_published` keeps every published name this build cannot spell;
+/// the gate still goes through the SDK's parsed answer rather than the raw meta list.
+/// Once the SDK names it, this becomes `at.supports(Feature::Pages)`.
+pub(crate) fn serves_pages(host: &str) -> bool {
+    const PAGES: &str = "pages";
+    answer_for(host).is_some_and(|at| at.unknown.iter().any(|name| name == PAGES))
 }
 
 /// The names this host published, in its own order.
@@ -177,9 +207,9 @@ fn failed(host: &str, reason: &str) {
     );
 }
 
-async fn read_meta(session: &Session) -> Option<(Capabilities, Vec<String>)> {
-    let host = key(&session.host);
-    let client = match crate::mastodon::Client::new(&session.host, "") {
+async fn read_meta(host: &str) -> Option<(Capabilities, Vec<String>)> {
+    let host = key(host);
+    let client = match crate::mastodon::Client::new(&host, "") {
         Ok(client) => client,
         Err(reason) => {
             failed(&host, &reason);
