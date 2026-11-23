@@ -100,13 +100,13 @@ pub fn ComposerPreview(#[prop(into)] active: Signal<String>) -> impl IntoView {
                 limit=500
                 poll_ready=Signal::derive(|| false)
                 schedule_open=Signal::derive(|| false)
-                on_visibility=noop_visibility
-                on_add_media=noop
-                on_add_poll=noop
-                on_toggle_schedule=noop
-                on_submit=noop
-                language=language
-                emoji_picker=emoji_picker
+                on_visibility=Some(noop_visibility)
+                on_add_media=Some(noop)
+                on_add_poll=Some(noop)
+                on_toggle_schedule=Some(noop)
+                on_submit=Some(noop)
+                language=Some(language)
+                emoji_picker=Some(emoji_picker)
             />
         }
         .into_any()

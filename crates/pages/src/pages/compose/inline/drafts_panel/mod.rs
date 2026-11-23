@@ -28,7 +28,7 @@ pub fn DraftsPanel(
     open: Signal<bool>,
     #[prop(into)] drafts: Signal<Vec<Draft>>,
     /// Called with the index of the chosen draft.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     insert: Option<Callback<usize>>,
 ) -> impl IntoView {
     view! {
