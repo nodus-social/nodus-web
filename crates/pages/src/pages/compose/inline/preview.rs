@@ -13,6 +13,28 @@ use super::{ComposerBar, InlineComposer};
 use crate::pages::compose::inline::emoji_toggle::EmojiToggleButton;
 use crate::{Anchor, LanguagePicker, TimelineTabs};
 
+/// The composer slot both paints render: the preview until the browser has behaviour.
+///
+/// The server passes no `composer`, so the preview is the whole paint. The browser's
+/// first pass has `live` still false, which renders the same tree the document carried;
+/// after hydration an effect turns it true and the real composer replaces the preview.
+#[component]
+pub fn ComposerSlot(
+    #[prop(into)] active: Signal<String>,
+    #[prop(default = Signal::derive(|| false))] live: Signal<bool>,
+    composer: ChildrenFn,
+) -> impl IntoView {
+    let composer = StoredValue::new(composer);
+    view! {
+        <Show
+            when=move || live.get()
+            fallback=move || view! { <ComposerPreview active=active/> }
+        >
+            {move || composer.with_value(|composer| composer())}
+        </Show>
+    }
+}
+
 /// The home composer as the server paints it: same card, same bar, empty editor.
 #[component]
 pub fn ComposerPreview(#[prop(into)] active: Signal<String>) -> impl IntoView {

@@ -423,9 +423,72 @@ pub fn home_with_style(
     cursor: Option<&str>,
     style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
-    feed_with_style(
-        assets, reader, staff, "home", "Home", "/home", statuses, cursor, style,
-    )
+    // The ordinary paint stays the hand-painted chrome. The shell paint is the one the
+    // browser can adopt, and it is opt-in with the same switch that marks the document:
+    // turning hydration on for `/home` must not change the page every other request sees.
+    if hydrate_marker().is_empty() {
+        return feed_with_style(
+            assets, reader, staff, "home", "Home", "/home", statuses, cursor, style,
+        );
+    }
+
+    let statuses: Vec<Status> = statuses
+        .iter()
+        .cloned()
+        .map(|mut status| {
+            nodus_ui::html::sanitize_status(&mut status);
+            status
+        })
+        .collect();
+    let island = serde_json::to_string(&Island {
+        which: "home",
+        statuses: &statuses,
+        cursor,
+        capabilities: capabilities_island(&reader.host),
+    })
+    .unwrap_or_else(|_| "{\"which\":\"home\",\"statuses\":[],\"cursor\":null}".to_owned());
+    let seed = nodus_shell::ShellSeed {
+        signed_in: true,
+        path: "/home".to_owned(),
+        profile: Some(reader.card()),
+        style: style.cloned(),
+        ..nodus_shell::ShellSeed::default()
+    };
+    let runtime = crate::runtime::StaticRuntime::page_for(
+        reader,
+        statuses,
+        cursor.map(str::to_owned),
+    );
+    let body = Owner::new().with(|| {
+        use leptos::prelude::*;
+
+        let card: nodus_ui::components::card_renderer::CardRenderer =
+            std::sync::Arc::new(|status| {
+                leptos::html::div()
+                    .inner_html(status_card(&status))
+                    .into_any()
+            });
+        let no_composer: ChildrenFn = std::sync::Arc::new(|| ().into_any());
+        let header: ChildrenFn = std::sync::Arc::new(move || {
+            view! {
+                <nodus_pages::pages::compose::inline::ComposerSlot
+                    active=Signal::derive(|| "/home".to_owned())
+                    composer=no_composer.clone()
+                />
+            }
+            .into_any()
+        });
+        nodus_shell::ShellPage(nodus_shell::ShellPageProps {
+            seed: seed.clone(),
+            runtime,
+            route: Signal::stored(nodus_web::shared::router::Route::Home),
+            card,
+            header: Some(header),
+            on_home: None,
+        })
+        .to_html()
+    });
+    page_of_shell(assets, reader, "Home", &body, Some(island), style, &seed)
 }
 
 /// A timeline page, painted: the same header, the same cards, the same island.

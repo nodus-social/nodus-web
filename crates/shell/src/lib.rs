@@ -59,6 +59,10 @@ pub fn ShellPage(
     /// A signal, not a value: the rail navigates in place, and the screen must follow.
     route: Signal<Route>,
     card: CardRenderer,
+    /// The block above a timeline's posts. Both paints pass the same slot, so the
+    /// composer's first frame is the one the document already carries.
+    #[prop(optional_no_strip)]
+    header: Option<ChildrenFn>,
     /// Goes home without a document load when the app can answer.
     #[prop(optional_no_strip)]
     on_home: Option<Callback<()>>,
@@ -73,10 +77,18 @@ pub fn ShellPage(
     let inner: ChildrenFn = Arc::new(move || {
         let runtime = Arc::clone(&runtime);
         let card = Arc::clone(&card);
+        let header = header.clone();
         view! {
             {move || {
                 let route = route.get();
-                view! { <RouteView runtime=Arc::clone(&runtime) route=route card=Arc::clone(&card)/> }
+                view! {
+                    <RouteView
+                        runtime=Arc::clone(&runtime)
+                        route=route
+                        card=Arc::clone(&card)
+                        header=header.clone()
+                    />
+                }
             }}
         }
         .into_any()

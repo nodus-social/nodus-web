@@ -23,7 +23,7 @@ pub mod schedule;
 pub use bar::ComposerBar;
 pub use drafts_panel::{Draft, DraftsPanel};
 pub use emoji::Suggestions;
-pub use preview::ComposerPreview;
+pub use preview::{ComposerPreview, ComposerSlot};
 
 /// What a published post says afterwards: the visibility it went out with, and the
 /// language, named the way the composer names it.

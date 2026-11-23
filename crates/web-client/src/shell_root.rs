@@ -35,6 +35,12 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
     let current = router::route();
     let route = Signal::derive(move || current.get());
     let runtime = crate::state::runtime::runtime();
+    // The same header the server painted for a timeline: on `/lists` the route ignores
+    // it, and on `/home` its first frame is the shared preview, which is the tree the
+    // document carried. The live composer arrives after hydration.
+    let header: ChildrenFn = Arc::new(|| {
+        view! { <crate::routes::home::TimelineHeader/> }.into_any()
+    });
 
     view! {
         <nodus_shell::ShellPage
@@ -42,6 +48,7 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
             runtime=runtime
             route=route
             card=card
+            header=Some(header)
             on_home=on_home
         />
     }

@@ -224,6 +224,7 @@ pub(crate) async fn read_page_with_style(
                         runtime,
                         route: leptos::prelude::Signal::stored(Route::Lists),
                         card: card(),
+                        header: None,
                         on_home: None,
                     })
                 });
