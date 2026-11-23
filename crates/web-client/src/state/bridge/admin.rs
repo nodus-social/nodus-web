@@ -222,12 +222,26 @@ pub fn ensure_standing() {
     });
 }
 
+/// Creates the staff counter before any screen can ask for it.
+///
+/// Called from [`super::install_reactive_root`] before the first mount, while no owner
+/// exists. A counter created on first use is owned by whichever screen asks first and is
+/// disposed with that screen; creating one under a detached `Owner::new_root` mid-render is
+/// no better, because `new_root` also makes itself the current owner, so the rest of that
+/// render can no longer see the capability answer provided above it.
+pub fn install() {
+    STANDING_REVISION.with_borrow_mut(|slot| {
+        if slot.is_none() {
+            *slot = Some(RwSignal::new(0_u64));
+        }
+    });
+}
+
 /// Bumped whenever the cached verdict changes, so a signal derived from it repaints.
 fn standing_revision() -> RwSignal<u64> {
-    thread_local! {
-        static REVISION: RwSignal<u64> = RwSignal::new(0);
-    }
-    REVISION.with(|revision| *revision)
+    STANDING_REVISION
+        .with_borrow(|slot| *slot)
+        .expect("install_reactive_root() must run before the staff question")
 }
 
 /// The session and grant this answer belongs to.
@@ -245,6 +259,11 @@ type Signature = (String, String, bool);
 thread_local! {
     /// The last verdict and the session it described.
     static STANDING: std::cell::RefCell<Option<(Signature, Staff)>> =
+        const { std::cell::RefCell::new(None) };
+    /// The counter derived signals watch so a new verdict repaints them. Created by
+    /// [`install`] before the first mount, never on first use: a lazy counter belongs to
+    /// whichever screen asks first and is disposed with it.
+    static STANDING_REVISION: std::cell::RefCell<Option<RwSignal<u64>>> =
         const { std::cell::RefCell::new(None) };
     /// The session whose question is currently being asked.
     static CLAIM: std::cell::RefCell<Option<Signature>> = const { std::cell::RefCell::new(None) };

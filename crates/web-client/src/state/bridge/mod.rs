@@ -59,13 +59,16 @@ thread_local! {
     static FEATURES: RefCell<Option<(String, Vec<String>)>> = const { RefCell::new(None) };
     /// Whether a request for the answer is already in flight.
     static ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The counter derived signals watch so an answer repaints them. Created by
+    /// [`install_reactive_root`] before the first mount, never on first use: a lazy counter
+    /// belongs to whichever screen asks first and is disposed with it.
+    static EXTENSIONS_REVISION: RefCell<Option<RwSignal<u64>>> = const { RefCell::new(None) };
 }
 
 fn extensions_revision() -> RwSignal<u64> {
-    thread_local! {
-        static REVISION: RwSignal<u64> = RwSignal::new(0);
-    }
-    REVISION.with(|revision| *revision)
+    EXTENSIONS_REVISION
+        .with_borrow(|slot| *slot)
+        .expect("install_reactive_root() must run before the extension question")
 }
 
 /// What the extension question answered, as a signal a view can depend on.
@@ -466,11 +469,23 @@ fn schedule_repaint() {
 /// happened to be mounted first — would raise
 /// `reactive_graph … Tried to access a reactive value that has already been disposed`,
 /// panic inside a task poll, and leave the executor unable to resume anything.
+///
+/// The two counters installed here for the same reason must not instead be created under
+/// their own `Owner::new_root`: `new_root` makes itself the current owner and never puts the
+/// previous one back, so a counter first touched mid-render detaches the rest of that render
+/// and the capability answer provided above it falls out of scope — every gated tab is then
+/// drawn as if the instance served it.
 pub fn install_reactive_root() {
     if REVISION.with_borrow(Option::is_none) {
         let revision = RwSignal::new(0_u64);
         REVISION.with_borrow_mut(|slot| *slot = Some(revision));
     }
+    EXTENSIONS_REVISION.with_borrow_mut(|slot| {
+        if slot.is_none() {
+            *slot = Some(RwSignal::new(0_u64));
+        }
+    });
+    admin::install();
     feed_ui();
     posts::install();
     profile_media::install();
