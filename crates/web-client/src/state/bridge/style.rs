@@ -9,7 +9,9 @@ use nodus_client_core::rest::{HttpRequest, Method};
 use nodus_client_sdk::instance_api::Instance;
 use nodus_mastodon::BrowserInstance;
 use nodus_mastodon::rest::Transport as _;
-use nodus_ui::session_style::{ImageSlot, PictureTarget, STYLE_KEYS, SessionStyle, StyleEditor};
+use nodus_ui::session_style::{
+    ImageSlot, LibraryPicture, PictureTarget, STYLE_KEYS, SessionStyle, StyleEditor, UploadRequest,
+};
 use nodus_web::shared::account_state::{AccountCache, AccountKey};
 use serde::Deserialize;
 use wasm_bindgen::JsCast as _;
@@ -26,6 +28,14 @@ thread_local! {
     static NOTICE: RefCell<Option<RwSignal<Option<String>>>> = const { RefCell::new(None) };
     static EDITOR: RefCell<Option<StyleEditor>> = const { RefCell::new(None) };
     static INSTALLED: RefCell<bool> = const { RefCell::new(false) };
+    /// The account's own pictures, as the editor's tray shows them.
+    static LIBRARY: RefCell<Option<RwSignal<Vec<LibraryPicture>>>> = const { RefCell::new(None) };
+    static LIBRARY_STATUS: RefCell<Option<RwSignal<Option<String>>>> = const { RefCell::new(None) };
+    /// Object URLs this page minted for the tray; revoked when the tray is read again.
+    static LIBRARY_URLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Bumped by every read of the collection, so a slow read that lost the race appends
+    /// nothing to the tray the reader is now looking at.
+    static LIBRARY_EPOCH: Cell<u64> = const { Cell::new(0) };
     /// Bumped whenever an editing session starts or ends. A picture upload that spans either
     /// boundary belongs to the editor that is gone, so its result is dropped.
     static PICK_EPOCH: Cell<u64> = const { Cell::new(0) };
@@ -73,12 +83,186 @@ pub fn notice() -> RwSignal<Option<String>> {
     NOTICE.with_borrow_mut(|slot| *slot.get_or_insert_with(|| RwSignal::new(None)))
 }
 
+/// The account's own pictures, the shelf the editor drags from.
+pub fn library() -> RwSignal<Vec<LibraryPicture>> {
+    LIBRARY.with_borrow_mut(|slot| *slot.get_or_insert_with(|| RwSignal::new(Vec::new())))
+}
+
+/// What the tray says while the collection is being read, or why it could not be.
+pub fn library_status() -> RwSignal<Option<String>> {
+    LIBRARY_STATUS.with_borrow_mut(|slot| *slot.get_or_insert_with(|| RwSignal::new(None)))
+}
+
 /// Start editing from the style currently in force.
 pub fn begin_edit() {
     PICK_EPOCH.set(PICK_EPOCH.get() + 1);
     draft().set(active_style_signal().get_untracked());
     notice().set(None);
     editing().set(true);
+    reload_library();
+}
+
+/// Read the account's media into the tray: one listing, then one drawable thumbnail each.
+///
+/// The listing is [`super::drive::all_files`] — three requests plus one per folder, however
+/// deep the drive is. A drive file's contents are behind the account's own credential, so
+/// each thumbnail is fetched through the instance transport and handed to the page as an
+/// object URL; that address lives as long as this editing session and is never stored.
+pub fn reload_library() {
+    let pictures = library();
+    let status = library_status();
+    let epoch = LIBRARY_EPOCH.get() + 1;
+    LIBRARY_EPOCH.set(epoch);
+    for url in LIBRARY_URLS.with_borrow_mut(std::mem::take) {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    }
+    pictures.set(Vec::new());
+    status.set(Some(String::from("Reading your drive…")));
+    leptos::task::spawn_local(async move {
+        let listed = match super::drive::all_files().await {
+            Ok(files) => files,
+            Err(error) => {
+                if LIBRARY_EPOCH.get() == epoch {
+                    status.set(Some(format!("Could not read your drive: {error}")));
+                }
+                return;
+            }
+        };
+        let images: Vec<_> = listed
+            .into_iter()
+            .filter(|file| {
+                file.mime_type.starts_with("image/")
+                    && (file.processing_state.is_empty() || file.processing_state == "ready")
+            })
+            .take(60)
+            .collect();
+        if images.is_empty() {
+            if LIBRARY_EPOCH.get() == epoch {
+                status.set(Some(String::from(
+                    "Your drive holds no pictures yet. Upload one below.",
+                )));
+            }
+            return;
+        }
+        if LIBRARY_EPOCH.get() == epoch {
+            status.set(None);
+        }
+        for file in images {
+            let Some(bytes) = drive_picture_bytes(&file.id).await else {
+                continue;
+            };
+            let Some(thumbnail) = object_url(&bytes) else {
+                continue;
+            };
+            if LIBRARY_EPOCH.get() != epoch {
+                let _ = web_sys::Url::revoke_object_url(&thumbnail);
+                return;
+            }
+            LIBRARY_URLS.with_borrow_mut(|urls| urls.push(thumbnail.clone()));
+            pictures.update(|tray| {
+                tray.push(LibraryPicture {
+                    id: file.id.clone(),
+                    name: file.filename.clone(),
+                    thumbnail,
+                });
+            });
+        }
+    });
+}
+
+/// The bytes of one drive picture, through the signed-in transport.
+async fn drive_picture_bytes(id: &str) -> Option<Vec<u8>> {
+    let transport = super::instance_transport()?;
+    let url = transport
+        .url_segments(&["api", "v1", "drive", "files", id, "content"])
+        .ok()?;
+    transport.fetch_bytes(transport.get(url)).await.ok()
+}
+
+/// A browser-only address for these bytes, good until the tray is read again.
+fn object_url(bytes: &[u8]) -> Option<String> {
+    let part = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&part.buffer());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts).ok()?;
+    web_sys::Url::create_object_url_with_blob(&blob).ok()
+}
+
+/// Mint the permanent address a drive picture needs before it can be stored in the style.
+///
+/// The style stores addresses, not files: attaching gives the picture one on this instance
+/// (`/media/{id}/compressed`) without copying its bytes anywhere.
+async fn attach_drive_picture(id: &str) -> Result<(String, String), String> {
+    #[derive(Deserialize)]
+    struct Attached {
+        attachment_id: String,
+        url: String,
+    }
+    let transport =
+        super::instance_transport().ok_or_else(|| "Sign in to place a picture.".to_owned())?;
+    let url = transport
+        .url_segments(&["api", "v1", "drive", "files", id, "attach"])
+        .map_err(|error| error.to_string())?;
+    let attached: Attached = transport
+        .fetch(transport.post(url))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((attached.attachment_id, attached.url))
+}
+
+/// The browser's half of a collection drop: resolve the file, then let the editor file it.
+fn place_library_picture(picture: LibraryPicture, target: PictureTarget) {
+    leptos::task::spawn_local(async move {
+        let (attachment_id, url) = match attach_drive_picture(&picture.id).await {
+            Ok(attached) => attached,
+            Err(error) => {
+                notice().set(Some(format!("Could not place that picture: {error}")));
+                return;
+            }
+        };
+        let Some(slot) = ImageSlot::new(&url, None, Some(&attachment_id)) else {
+            notice().set(Some(String::from(
+                "That picture came back with an address this site will not draw.",
+            )));
+            return;
+        };
+        editor().place_library_slot(target, slot);
+        notice().set(None);
+    });
+}
+
+/// Put a dropped file into the collection, so it can be dragged from there like the rest.
+pub fn upload_to_library(request: UploadRequest) {
+    leptos::task::spawn_local(async move {
+        let Some(thumbnail) = object_url(&request.bytes) else {
+            notice().set(Some(String::from("Could not read that picture.")));
+            return;
+        };
+        let parts = js_sys::Array::new();
+        parts.push(&js_sys::Uint8Array::from(request.bytes.as_slice()));
+        let options = web_sys::FilePropertyBag::new();
+        options.set_type(&request.mime);
+        let Ok(file) =
+            web_sys::File::new_with_u8_array_sequence_and_options(&parts, &request.name, &options)
+        else {
+            notice().set(Some(String::from("This browser refused that file.")));
+            return;
+        };
+        match super::drive::upload(&file, None, "private", std::rc::Rc::new(|_| {})).await {
+            Ok(stored) => {
+                LIBRARY_URLS.with_borrow_mut(|urls| urls.push(thumbnail.clone()));
+                library().update(|tray| {
+                    tray.push(LibraryPicture {
+                        id: stored.id,
+                        name: request.name,
+                        thumbnail,
+                    });
+                });
+                notice().set(None);
+            }
+            Err(error) => notice().set(Some(format!("Could not upload that picture: {error}"))),
+        }
+    });
 }
 
 /// Asks the browser for a picture and files it where `target` says of the draft.
@@ -238,6 +422,11 @@ pub fn install() {
     // than to whichever component happened to read them first.
     let _ = editing();
     let _ = draft();
+    let _ = library();
+    let _ = library_status();
+    editor().set_library_placer(Callback::new(|(picture, target)| {
+        place_library_picture(picture, target);
+    }));
     let _ = editor();
     let _ = notice();
     let already = INSTALLED.replace(true);

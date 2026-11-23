@@ -304,6 +304,29 @@ pub(crate) fn App() -> impl IntoView {
                                         has_staff=has_staff
                                         editor=Some(crate::state::bridge::style::editor())
                                     />
+                                    <nodus_ui::components::sidebar::MediaTray
+                                        pictures=Signal::derive(move || {
+                                            crate::state::bridge::style::library().get()
+                                        })
+                                        status=Signal::derive(move || {
+                                            crate::state::bridge::style::library_status().get()
+                                        })
+                                        editor=Some(crate::state::bridge::style::editor())
+                                        on_upload=Some(Callback::new(
+                                            |request: nodus_ui::session_style::UploadRequest| {
+                                                crate::state::bridge::style::upload_to_library(
+                                                    request,
+                                                );
+                                            },
+                                        ))
+                                        on_upload_click=Some(Callback::new(|()| {
+                                            crate::state::bridge::style::pick_picture_for(
+                                                nodus_ui::session_style::PictureTarget::Region(
+                                                    nodus_ui::session_style::BannerRegionKind::Top,
+                                                ),
+                                            );
+                                        }))
+                                    />
                                 }
                                 .into_any()
                             }
