@@ -184,6 +184,7 @@ pub fn SidebarModule(
                     key=|item| (item.href.clone(), item.label.clone())
                     children=move |item| {
                         let picture = item.avatar_url.as_deref().map(crate::picture::avatar);
+                        let still = item.avatar_url.as_deref().and_then(crate::picture::avatar_still);
                         let label = item.label.clone();
                         let meta = item.meta.clone();
                         let has_meta = !item.meta.is_empty();
@@ -196,11 +197,13 @@ pub fn SidebarModule(
                                 >
                                     {picture.map(|url| {
                                         view! {
-                                            <img
-                                                class="size-6 shrink-0 rounded-full object-cover"
+                                            <crate::picture::Picture
                                                 src=url
-                                                alt=""
-                                                loading="lazy"
+                                                still=still
+                                                width=24
+                                                height=24
+                                                class="size-6 shrink-0 rounded-full object-cover"
+                                                alt=label.clone()
                                             />
                                         }
                                     })}

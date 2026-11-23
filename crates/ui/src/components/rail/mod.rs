@@ -965,6 +965,8 @@ pub fn ProfileCard(#[prop(into)] profile: Signal<Option<ProfileCardData>>) -> im
                             card.display_name.clone()
                         };
                         let has_avatar = !card.avatar_url.is_empty();
+                        let avatar = crate::picture::avatar(&card.avatar_url);
+                        let still = crate::picture::avatar_still(&card.avatar_url);
                         view! {
                             <a
                                 class="flex items-center gap-2 rounded-box bg-base-100 p-2 shadow-sm transition hover:bg-base-300"
@@ -982,11 +984,15 @@ pub fn ProfileCard(#[prop(into)] profile: Signal<Option<ProfileCardData>>) -> im
                                         }
                                     }
                                 >
-                                    <img
+                                    <crate::picture::Picture
+                                        src=avatar.clone()
+                                        still=still.clone()
+                                        width=36
+                                        height=36
                                         class="size-9 shrink-0 rounded-full object-cover"
-                                        src=crate::picture::avatar(&card.avatar_url)
-                                        alt=""
-                                        loading="lazy"
+                                        // The card's visible name already names this link, so the
+                                        // picture is decorative here.
+                                        alt=String::new()
                                     />
                                 </Show>
                                 <span class="min-w-0">
