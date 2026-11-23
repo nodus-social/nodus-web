@@ -350,22 +350,27 @@ pub fn SessionBanner(
             }
         }
         // The side pictures are columns of the page, outside both rails: they are what makes
-        // the site feel framed rather than padded. They hang off the page's own bounding
-        // width — pinned to the viewport edge — so adding one never narrows the reading
-        // column, and an empty one is a target wide enough to aim at rather than a gap in
-        // the middle of the page.
+        // the site feel framed rather than padded. They are grid tracks in the frame beside
+        // the 72rem reading column, so the gutter between the column and the window edge is
+        // the picture's width — not a fixed strip with empty space beyond it.
+        //
+        // The track is fluid, but the picture stops at 43rem: about 60% of the 72rem centre
+        // (688 / 1152 = 59.7%). Past that a side picture starts competing with the reading
+        // column for attention, and `object-cover` crops a portrait into a wider and wider
+        // band. The cap first bites just above 2560px, where the raw gutter is 704px a side;
+        // the banner is then drawn 688px wide, still at the window edge.
         BannerRegionKind::Left | BannerRegionKind::Right => {
-            let edge = if matches!(kind, BannerRegionKind::Left) {
-                "left-0"
+            let placement = if matches!(kind, BannerRegionKind::Left) {
+                "xl:col-start-1"
             } else {
-                "right-0"
+                // The right column is capped, so it is pinned to its own outer edge rather
+                // than growing inward toward the reading column.
+                "ml-auto xl:col-start-3"
             };
-            // `pointer-events-none` because the column is wider than the page's own gutter
-            // at `xl`: only the picture strip and the controls take clicks, so the banner
-            // never swallows a click meant for the rail beside it.
-            format!(
-                "pointer-events-none fixed inset-y-0 {edge} z-10 hidden xl:flex xl:w-20 xl:flex-col 2xl:w-40"
-            )
+            // No `pointer-events-none`: the banner is its own grid track, so it cannot
+            // overlap the page and swallow a click meant for it. The controls inside still
+            // take their own clicks.
+            format!("hidden h-full w-full min-w-0 max-w-[43rem] {placement} xl:flex xl:flex-col")
         }
     });
     let side_empty = Memo::new(move |_| slots.get().is_empty());

@@ -65,15 +65,18 @@ pub fn Frame(
     let left_region = Signal::derive(move || active_style.get().left);
     let right_region = Signal::derive(move || active_style.get().right);
     let profile = profile.unwrap_or_else(|| Signal::derive(|| None));
-    // One layout in both modes. Editing must not move the page under the reader: the same
-    // wrapper, the same paddings and gaps, so a column sits exactly where it sat a moment
-    // before the editor opened. Only the empty side columns change width, and they do that
-    // in the banner itself.
     // One layout in both modes: the columns sit where they sit whether or not the editor is
-    // open, because the editor edits this page rather than a copy of it. The width is the
-    // bounding width every page uses, so a page does not change measure when the frame
-    // around it changes state.
-    let page_class = "mx-auto flex w-full max-w-6xl flex-col gap-4 px-2 py-4 xl:flex-row";
+    // open, because the editor edits this page rather than a copy of it.
+    //
+    // At `xl` this is a three-column grid: the reading column keeps its 72rem measure and
+    // the side banners take the leftover gutter, so a picture reaches the window edge
+    // instead of sitting in a fixed strip beside an empty gap. Below `xl` it is one column,
+    // exactly as the frame was before the banners became columns.
+    let page_class = "grid w-full grid-cols-1 px-2 py-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,72rem)_minmax(0,1fr)] xl:px-0";
+    // The centre is placed in the middle track explicitly: when one side has no banner its
+    // `Show` paints nothing, and auto-placement would slide the page into the empty first
+    // column. `px-2` lives here rather than on the grid so the banners reach the edge.
+    let centre_class = "mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-4 xl:col-start-2 xl:mx-0 xl:max-w-none xl:flex-row xl:px-2";
     view! {
         <div
             class="relative min-h-screen bg-base-200 text-base-content"
@@ -111,33 +114,35 @@ pub fn Frame(
             </Show>
             <div class=page_class>
                 // The tall pictures are the outer edges of the page: left picture, rail,
-                // column, right rail, right picture. They are drawn here rather than inside
-                // a rail so that they flank the reader's whole window, not one column of it.
+                // column, right rail, right picture. They are real grid columns rather than
+                // fixed strips, so the gutter is the picture's width at every viewport.
                 <Show when=move || signed_in.get()>
                     <SessionBanner region=left_region kind=BannerRegionKind::Left editor=editor on_pick=on_pick/>
                 </Show>
-                <Show when=move || signed_in.get()>
-                    <Rail
-                        active=path
-                        extra=extra.clone()
-                        style=active_style
-                        editor=editor
-                        profile=profile
-                        sidebar=Some(Signal::derive(move || sidebar.get()))
-                        notices=notices
-                    />
-                </Show>
-                <main class="min-w-0 flex-1 pb-[calc(5.5rem+env(safe-area-inset-bottom))] xl:pb-0">
-                    {move || inner.with_value(|inner| inner())}
-                </main>
-                <Show when=move || signed_in.get()>
-                    <RightRail
-                        active=path
-                        style=active_style
-                        editor=editor
-                        sidebar=Some(Signal::derive(move || sidebar.get()))
-                    />
-                </Show>
+                <div class=centre_class>
+                    <Show when=move || signed_in.get()>
+                        <Rail
+                            active=path
+                            extra=extra.clone()
+                            style=active_style
+                            editor=editor
+                            profile=profile
+                            sidebar=Some(Signal::derive(move || sidebar.get()))
+                            notices=notices
+                        />
+                    </Show>
+                    <main class="min-w-0 flex-1 pb-[calc(5.5rem+env(safe-area-inset-bottom))] xl:pb-0">
+                        {move || inner.with_value(|inner| inner())}
+                    </main>
+                    <Show when=move || signed_in.get()>
+                        <RightRail
+                            active=path
+                            style=active_style
+                            editor=editor
+                            sidebar=Some(Signal::derive(move || sidebar.get()))
+                        />
+                    </Show>
+                </div>
                 <Show when=move || signed_in.get()>
                     <SessionBanner region=right_region kind=BannerRegionKind::Right editor=editor on_pick=on_pick/>
                 </Show>
@@ -294,6 +299,34 @@ mod tests {
         assert!(html.contains("@luxuride@nodus.luxuride.eu"));
         assert!(html.contains("https://cdn.example/lux.png"));
         assert!(html.contains(r#"href="/accounts/01EXAMPLE""#));
+    }
+
+    /// The side banners are grid tracks, and the reading column is placed in the middle one.
+    /// A banner on only one side must not shift the page into the empty track.
+    #[test]
+    fn the_page_is_a_three_column_grid_around_a_fixed_measure() {
+        let mut style = SessionStyle::default();
+        style
+            .left
+            .slots
+            .push(ImageSlot::new("https://cdn.example/left.png", Some("Left"), None).unwrap());
+
+        let html = Owner::new().with(|| {
+            view! {
+                <Frame
+                    signed_in=true
+                    path=String::from("/home")
+                    extra=None
+                    style=Signal::stored(style)
+                    inner=Arc::new(|| view! { <p>"Body"</p> }.into_any())
+                />
+            }
+            .to_html()
+        });
+
+        assert!(html.contains("xl:grid-cols-[minmax(0,1fr)_minmax(0,72rem)_minmax(0,1fr)]"));
+        assert!(html.contains("xl:col-start-2"));
+        assert!(html.contains("xl:col-start-1"));
     }
 
     #[test]

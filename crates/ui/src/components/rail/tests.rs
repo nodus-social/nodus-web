@@ -222,8 +222,10 @@ fn a_side_banner_fills_its_column_and_offers_its_picture_to_the_editor() {
         .to_html()
     });
     assert!(
-        editing.contains("xl:w-20"),
-        "the side column has a banner's width"
+        editing.contains("max-w-[43rem]")
+            && editing.contains("xl:col-start-1")
+            && !editing.contains("fixed inset-y-0"),
+        "the side column is a grid track with a reading-measure cap, not a fixed strip"
     );
     assert!(editing.contains("data-style-slot-edit"));
     assert!(editing.contains("data-style-slot-editor"));
