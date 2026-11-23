@@ -115,6 +115,10 @@ impl SettingsSection {
     /// them would remove working forms. A `Some` gate is the name the server must publish;
     /// see [`Self::drawn`] for what a missing name means.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "two `None` arms answer different questions: a form the shell owns, and a name the backend has not published"
+    )]
     pub const fn gate(self) -> Option<Feature> {
         match self {
             Self::Account | Self::Profile | Self::Appearance | Self::Instance => None,

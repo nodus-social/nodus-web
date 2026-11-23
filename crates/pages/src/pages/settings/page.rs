@@ -20,7 +20,6 @@ pub fn SettingsPage(
     let at = crate::capabilities::serves();
     let drawn = move || section.get().drawn(at.as_ref().map(|at| at.get()).as_ref());
     let sentence = move || section.get().absent();
-    let children = children.clone();
     view! {
         <Screen>
             <h1 class="mb-5 text-xl font-semibold tracking-tight">"Settings"</h1>

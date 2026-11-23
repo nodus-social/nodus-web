@@ -12,12 +12,12 @@ use core::future::Future;
 use nodus_client_core::InstanceApi;
 use nodus_client_core::actions::{
     AccountActions, Browse, FilterActions, HighlightActions, InstanceMeta, MediaActions,
-    ScheduleActions, Search, StatusActions, TagActions,
+    ScheduleActions, Search, SettingsActions, StatusActions, TagActions,
 };
 use nodus_client_core::model::{
     Account, Context, Conversation, CustomEmoji, Draft, Filter, FilterDraft, HistoryEntry,
-    Language, List, LocalId, MediaAttachment, Poll, PollDraft, ProfileUpdate, Relationship,
-    SearchResults, Status, Tag,
+    Language, List, LocalId, MediaAttachment, Poll, PollDraft, Preferences, ProfileUpdate,
+    Relationship, SearchResults, Status, Tag,
 };
 use nodus_client_sdk::protocol::Protocol;
 use nodus_mastodon::BrowserInstance;
@@ -556,6 +556,15 @@ pub async fn mute(id: &str, on: bool) -> Result<Relationship, String> {
     } else {
         call(transport.unmute(&id)).await
     }
+}
+
+/// The defaults the instance reports for this account.
+///
+/// Mastodon answers with values the account has stored; a server that does not store
+/// them still has to answer, so the caller must not read this as "what the account
+/// chose". The settings screen says which server it is talking to.
+pub async fn preferences() -> Result<Preferences, String> {
+    call(transport()?.preferences()).await
 }
 
 /// Searches accounts, statuses and hashtags; `resolve` lets the instance fetch remote

@@ -15,6 +15,10 @@ use crate::routes::settings::sync::SyncCard;
 use crate::state::bridge::{revision, style as bridge_style, with_sdk};
 
 mod accounts;
+mod export;
+mod people;
+mod preferences;
+mod refusal;
 
 /// The grant prompt. Moderation shows it in place of its own message when the token lacks
 /// the admin scopes, so it lives here rather than being duplicated — but it only exists in a
@@ -34,10 +38,13 @@ pub(crate) mod tags;
 
 use accounts::AccountsCard;
 use clock::ClockCard;
+use export::ExportCard;
 use feeds::FeedsCard;
 use filters::FiltersCard;
 use instance::InstanceCard;
 use moderation::ModerationLinks;
+use people::{SettingsPeople, Which};
+use preferences::PreferencesCard;
 use profile::ProfileCard;
 use sensitive::SensitiveCard;
 use session::SessionCard;
@@ -109,7 +116,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Preferences>
-                <Note class="text-sm opacity-70">"Reading your posting preferences…"</Note>
+                <PreferencesCard/>
             </Show>
 
             <Show when=move || section == SettingsSection::Filters>
@@ -117,11 +124,11 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Muted>
-                <Note class="text-sm opacity-70">"Reading the mute list…"</Note>
+                <SettingsPeople which=Which::Muted/>
             </Show>
 
             <Show when=move || section == SettingsSection::Blocked>
-                <Note class="text-sm opacity-70">"Reading the block list…"</Note>
+                <SettingsPeople which=Which::Blocked/>
             </Show>
 
             <Show when=move || section == SettingsSection::DomainBlocks>
@@ -153,7 +160,7 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
             </Show>
 
             <Show when=move || section == SettingsSection::Export>
-                <Note class="text-sm opacity-70">"Preparing your export…"</Note>
+                <ExportCard/>
             </Show>
 
             <Show when=move || section == SettingsSection::Instance>

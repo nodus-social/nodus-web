@@ -227,7 +227,9 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                     </Note>
                 }.into_any(),
                 SettingsSection::Export => view! {
-                    <Note class="text-sm opacity-70">"Preparing your export…"</Note>
+                    <Note class="text-sm opacity-70">
+                        "Your export opens as one JSON document once the app is running."
+                    </Note>
                 }.into_any(),
                 SettingsSection::Instance => view! {
                     <div class="flex flex-col gap-4">

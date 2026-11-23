@@ -54,8 +54,8 @@ fn a_section_that_asks_for_nothing_is_drawn_even_on_an_empty_answer() {
     }
 }
 
-/// A name absent from a known answer is a refusal: the six account-list tabs disappear and
-/// the rest of the strip stays, which is the difference between a narrow server and a broken
+/// A name absent from a known answer is a refusal: the six gated tabs disappear and the
+/// rest of the strip stays, which is the difference between a narrow server and a broken
 /// settings page.
 #[test]
 fn a_server_that_omits_the_account_lists_hides_their_tabs() {
@@ -91,6 +91,24 @@ fn a_server_that_omits_the_account_lists_hides_their_tabs() {
 fn a_paint_that_does_not_know_yet_draws_the_gated_tabs() {
     for section in SettingsSection::ALL {
         assert!(section.drawn(None), "{section:?}");
+    }
+}
+
+/// The Mastodon baseline is not the narrow answer: Mastodon really serves its account
+/// lists, sessions, two-factor and data export, so a session it describes draws all six.
+/// A server that serves none of them publishes none of the names, which is the test above.
+#[test]
+fn the_mastodon_baseline_draws_the_six_it_really_serves() {
+    let at = Capabilities::mastodon();
+    for section in [
+        SettingsSection::Muted,
+        SettingsSection::Blocked,
+        SettingsSection::DomainBlocks,
+        SettingsSection::Sessions,
+        SettingsSection::TwoFactor,
+        SettingsSection::Export,
+    ] {
+        assert!(section.drawn(Some(&at)), "{section:?}");
     }
 }
 
