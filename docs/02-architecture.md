@@ -176,6 +176,15 @@ Removed by the SDK split, and staying removed: `api/`, `masto/`, `cache/` and
    disabled control, or nothing. `Handle<Option<T>>` in the SDK is how a value gets
    a third state; `SyncConsent` uses it. Where a value can be known before first
    paint, put it there instead — the stored session is adopted, not re-asked.
+10. **A reactive value lives as long as its owner; an effect run or a lazy initialiser
+    must not own an app-lifetime one.** A `Callback` created inside an `Effect` is
+    disposed when the effect re-runs, so an in-flight read answers into a dead handler
+    ("read by a handler after its owner died"); hoist it into the component and
+    `try_run` (`6bf272e`). A `thread_local!` initialiser that runs mid-render belongs
+    to the screen that asked first, and an `Owner::new_root` there *becomes* the current
+    owner and never restores it — detaching the rest of the render from the App owner so
+    `provide_context` values vanish; create it in an `install()` that `boot.rs` calls
+    before the first mount (`4091f58`).
 
 ## Routing
 

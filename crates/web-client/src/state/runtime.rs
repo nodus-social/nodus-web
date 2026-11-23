@@ -353,7 +353,9 @@ impl Runtime for ClientRuntime {
                 });
                 revision().update(|n| *n += 1);
             }
-            done.run(result);
+            // The screen may be left while the graph read is in flight; its callback is
+            // disposed with it, and calling a disposed callback panics.
+            done.try_run(result);
         });
     }
 
@@ -383,7 +385,8 @@ impl Runtime for ClientRuntime {
                 });
                 revision().update(|n| *n += 1);
             }
-            done.run(result);
+            // Same: a disposed screen cannot receive the answer; `run` would panic.
+            done.try_run(result);
         });
     }
 

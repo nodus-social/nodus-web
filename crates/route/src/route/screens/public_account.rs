@@ -103,38 +103,41 @@ pub fn PublicAccountScreen(
     });
 
     let graph_host = host.clone();
+    // The graph callbacks belong to the screen, not to the effect run that starts the
+    // read: switching tabs re-runs the effect and disposes that run's owner, which would
+    // take an in-flight callback with it and leave the list empty with no error.
+    let followers_done = Callback::new(move |result: Result<Vec<Account>, String>| {
+        alive.if_alive(|| match result {
+            Ok(found) => followers.set(Some(found)),
+            Err(message) => error.set(Some(message)),
+        });
+    });
+    let following_done = Callback::new(move |result: Result<Vec<Account>, String>| {
+        alive.if_alive(|| match result {
+            Ok(found) => following.set(Some(found)),
+            Err(message) => error.set(Some(message)),
+        });
+    });
     Effect::new(move |_| match tab.get() {
         Tab::Posts => {}
         Tab::Followers => {
             if followers.get_untracked().is_some() {
                 return;
             }
-            let done = Callback::new(move |result: Result<Vec<Account>, String>| {
-                alive.if_alive(|| match result {
-                    Ok(found) => followers.set(Some(found)),
-                    Err(message) => error.set(Some(message)),
-                });
-            });
             runtime.get_value().load_public_account_followers(
                 graph_host.clone(),
                 resolved.get_untracked(),
-                done,
+                followers_done,
             );
         }
         Tab::Following => {
             if following.get_untracked().is_some() {
                 return;
             }
-            let done = Callback::new(move |result: Result<Vec<Account>, String>| {
-                alive.if_alive(|| match result {
-                    Ok(found) => following.set(Some(found)),
-                    Err(message) => error.set(Some(message)),
-                });
-            });
             runtime.get_value().load_public_account_following(
                 graph_host.clone(),
                 resolved.get_untracked(),
-                done,
+                following_done,
             );
         }
     });
