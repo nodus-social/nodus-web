@@ -48,6 +48,8 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
 
     let (avatar, set_avatar) = signal(String::new());
     let (header, set_header) = signal(String::new());
+    let (avatar_shape, set_avatar_shape) = signal(None::<(u32, u32)>);
+    let (header_shape, set_header_shape) = signal(None::<(u32, u32)>);
     let (uploading, set_uploading) = signal(None::<ProfileImage>);
     let (percent, set_percent) = signal(None::<u8>);
     let (message, set_message) = signal(None::<String>);
@@ -59,6 +61,8 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
             return;
         }
         if let Some(current) = account() {
+            set_avatar_shape.set(current.avatar_shape());
+            set_header_shape.set(current.header_shape());
             set_avatar.set(current.avatar);
             set_header.set(current.header);
             set_seeded.set(true);
@@ -78,6 +82,8 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
                 set_fetching.set(false);
                 match answer {
                     Ok(current) => {
+                        set_avatar_shape.set(current.avatar_shape());
+                        set_header_shape.set(current.header_shape());
                         set_avatar.set(current.avatar);
                         set_header.set(current.header);
                         set_seeded.set(true);
@@ -135,12 +141,18 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
                                     ProfileImage::Avatar => {
                                         actions::update_profile_images(Some(media.id), None)
                                             .await
-                                            .map(|account| set_avatar.set(account.avatar))
+                                            .map(|account| {
+                                                set_avatar_shape.set(account.avatar_shape());
+                                                set_avatar.set(account.avatar);
+                                            })
                                     }
                                     ProfileImage::Header => {
                                         actions::update_profile_images(None, Some(media.id))
                                             .await
-                                            .map(|account| set_header.set(account.header))
+                                            .map(|account| {
+                                                set_header_shape.set(account.header_shape());
+                                                set_header.set(account.header);
+                                            })
                                     }
                                 };
                                 written.map(|()| format!("{} updated.", kind.label()))
@@ -206,6 +218,8 @@ pub(crate) fn ProfileImagesCard() -> impl IntoView {
             <ProfileImages
                 avatar=Signal::derive(move || avatar.get())
                 header=Signal::derive(move || header.get())
+                avatar_shape=Signal::derive(move || avatar_shape.get())
+                header_shape=Signal::derive(move || header_shape.get())
                 busy=Signal::derive(move || uploading.get().is_some() || fetching.get())
                 progress=Signal::derive(move || percent.get())
                 message=Signal::derive(move || message.get())

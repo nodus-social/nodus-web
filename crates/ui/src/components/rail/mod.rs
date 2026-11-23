@@ -104,6 +104,8 @@ pub struct ProfileCardData {
     pub handle: String,
     /// Avatar URL; empty draws a placeholder.
     pub avatar_url: String,
+    /// The avatar's published shape, when the reader's account carried one.
+    pub avatar_shape: Option<(u32, u32)>,
     /// Where the card goes: the reader's own profile.
     pub href: String,
 }
@@ -969,6 +971,7 @@ pub fn ProfileCard(#[prop(into)] profile: Signal<Option<ProfileCardData>>) -> im
                         let has_avatar = !card.avatar_url.is_empty();
                         let avatar = crate::picture::avatar(&card.avatar_url);
                         let still = crate::picture::avatar_still(&card.avatar_url);
+                        let shape = crate::picture::avatar_box(card.avatar_shape);
                         view! {
                             <a
                                 class="flex items-center gap-2 rounded-box bg-base-100 p-2 shadow-sm transition hover:bg-base-300"
@@ -991,6 +994,7 @@ pub fn ProfileCard(#[prop(into)] profile: Signal<Option<ProfileCardData>>) -> im
                                         still=still.clone()
                                         width=36
                                         height=36
+                                        shape=shape
                                         class="size-9 shrink-0 rounded-full object-cover"
                                         // The card's visible name already names this link, so the
                                         // picture is decorative here.

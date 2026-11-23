@@ -273,6 +273,7 @@ mod tests {
             display_name: "Lux".to_owned(),
             handle: "@luxuride@nodus.luxuride.eu".to_owned(),
             avatar_url: "https://cdn.example/lux.png".to_owned(),
+            avatar_shape: None,
             href: "/accounts/01EXAMPLE".to_owned(),
         };
         let html = Owner::new().with(|| {

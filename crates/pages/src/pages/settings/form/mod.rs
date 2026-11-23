@@ -66,6 +66,12 @@ pub fn ProfileImages(
     /// The banner as the instance currently serves it; empty when there is none.
     #[prop(into)]
     header: Signal<String>,
+    /// The avatar's published shape, when the caller has the account's metadata.
+    #[prop(optional)]
+    avatar_shape: Option<Signal<Option<(u32, u32)>>>,
+    /// The banner's published shape, on the avatar's terms.
+    #[prop(optional)]
+    header_shape: Option<Signal<Option<(u32, u32)>>>,
     /// Whether a picture is already on its way.
     #[prop(into)]
     busy: Signal<bool>,
@@ -94,36 +100,32 @@ pub fn ProfileImages(
             .collect_view()
     };
 
+    let avatar_shape = avatar_shape.unwrap_or_else(|| Signal::derive(|| None));
+    let header_shape = header_shape.unwrap_or_else(|| Signal::derive(|| None));
+
     let avatar_image = move |priority: bool| {
         view! {
             <Show
                 when=move || !avatar.get().is_empty()
                 fallback=|| view! { <div class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-300"></div> }
             >
-                <picture>
-                    {move || {
-                        nodus_ui::picture::avatar_still(&avatar.get())
-                            .map(|still| {
-                                view! {
-                                    <source
-                                        media="(prefers-reduced-motion: reduce)"
-                                        srcset=still
-                                    />
-                                }
-                            })
-                    }}
-                    <img
-                        class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-200 object-cover"
-                        width="64"
-                        height="64"
-                        alt="Profile picture"
-                        loading=if priority { "eager" } else { "lazy" }
-                        fetchpriority=if priority { "high" } else { "auto" }
-                        decoding="async"
-                        referrerpolicy="no-referrer"
-                        src=move || nodus_ui::picture::avatar(&avatar.get())
-                    />
-                </picture>
+                {move || {
+                    let url = nodus_ui::picture::avatar(&avatar.get());
+                    let still = nodus_ui::picture::avatar_still(&url);
+                    let shape = nodus_ui::picture::avatar_box(avatar_shape.get());
+                    view! {
+                        <nodus_ui::picture::Picture
+                            src=url
+                            still=still
+                            width=64
+                            height=64
+                            shape=shape
+                            class="h-16 w-16 rounded-full border-4 border-base-100 bg-base-200 object-cover"
+                            priority=priority
+                            alt="Profile picture".to_owned()
+                        />
+                    }
+                }}
             </Show>
         }
     };
@@ -134,30 +136,28 @@ pub fn ProfileImages(
             // that failed to load, which is a different message from "there is none".
             <Show when=move || !header.get().is_empty()>
                 <div class="relative">
-                    // The banner fills the card's width, so its height is the only
-                    // dimension the layout fixes; there is no width to reserve.
-                    <picture>
-                        {move || {
-                            nodus_ui::picture::banner_still(&header.get())
-                                .map(|still| {
-                                    view! {
-                                        <source
-                                            media="(prefers-reduced-motion: reduce)"
-                                            srcset=still
-                                        />
-                                    }
-                                })
-                        }}
-                        <img
-                            class="h-32 w-full rounded-box border border-base-300 bg-base-200 object-cover"
-                            alt="Banner"
-                            loading="eager"
-                            fetchpriority="high"
-                            decoding="async"
-                            referrerpolicy="no-referrer"
-                            src=move || nodus_ui::picture::banner(&header.get())
-                        />
-                    </picture>
+                    // With a published shape the ratio owns the height; without one the
+                    // card keeps the layout's fixed strip.
+                    {move || {
+                        let url = nodus_ui::picture::banner(&header.get());
+                        let still = nodus_ui::picture::banner_still(&url);
+                        let shape = nodus_ui::picture::banner_box(header_shape.get());
+                        let class = if shape.is_some() {
+                            "w-full rounded-box border border-base-300 bg-base-200 object-cover"
+                        } else {
+                            "h-32 w-full rounded-box border border-base-300 bg-base-200 object-cover"
+                        };
+                        view! {
+                            <nodus_ui::picture::Picture
+                                src=url
+                                still=still
+                                shape=shape
+                                class=class
+                                priority=true
+                                alt="Banner".to_owned()
+                            />
+                        }
+                    }}
                     <div class="absolute -bottom-8 left-4">{avatar_image(false)}</div>
                 </div>
             </Show>
@@ -212,6 +212,8 @@ mod tests {
                 busy: Signal::derive(|| false),
                 progress: Signal::derive(|| None),
                 message: Signal::derive(|| None),
+                avatar_shape: None,
+                header_shape: None,
                 picker: None,
             })
             .to_html()

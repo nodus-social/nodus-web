@@ -39,6 +39,7 @@ pub fn StatusHeader(
     let name = display_name(&status.account.display_name, &status.account.acct);
     let avatar = crate::picture::avatar(&status.account.avatar);
     let still = crate::picture::avatar_still(&status.account.avatar);
+    let shape = crate::picture::avatar_box(status.account.avatar_shape());
     let handle = status.account.acct.clone();
     // The paths also live in stored values, because four click handlers read them: a
     // `String` captured by value would make the first handler `FnOnce`, and a stored value
@@ -59,6 +60,7 @@ pub fn StatusHeader(
                         still=still
                         width=40
                         height=40
+                        shape=shape
                         class="h-10 w-10 rounded-full object-cover"
                     />
                 </div>

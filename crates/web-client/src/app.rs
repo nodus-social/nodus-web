@@ -609,6 +609,7 @@ fn profile_card(
         display_name,
         handle: format!("@{}@{}", account.acct, host),
         avatar_url: account.avatar.clone(),
+        avatar_shape: account.avatar_shape(),
         // The rail outlives a session switch, so it must name the account the way another
         // instance understands it, not by the numbering of whichever instance is open now.
         href: nodus_web::shared::handles::profile_path_for(&account.acct, Some(host)),

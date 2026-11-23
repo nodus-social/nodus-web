@@ -217,6 +217,7 @@ impl Reader {
             },
             handle: format!("@{name}@{host}"),
             avatar_url: self.avatar.clone(),
+            avatar_shape: None,
             // The rail outlives a session switch, so it names the account the way another
             // instance understands it — the browser's own rule.
             href: profile_path_for(&self.acct, Some(&self.host)),
@@ -873,7 +874,9 @@ mod tests {
                 display_name: "Alice".to_owned(),
                 note: "<p>bio</p><script>steal()</script>".to_owned(),
                 avatar: String::new(),
+                avatar_meta: None,
                 header: String::new(),
+                header_meta: None,
                 bot: false,
                 locked: false,
                 followers_count: 0,
@@ -949,7 +952,9 @@ mod tests {
                 display_name: display_name.to_owned(),
                 note: String::new(),
                 avatar: "https://cdn.test/ada.png".to_owned(),
+                avatar_meta: None,
                 header: String::new(),
+                header_meta: None,
                 bot: false,
                 locked: false,
                 followers_count: 0,

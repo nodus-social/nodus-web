@@ -90,8 +90,17 @@ pub fn ProfilePage(
     let has_bio = !bio.is_empty();
     let header = nodus_ui::picture::banner(&account.header);
     let header_still = nodus_ui::picture::banner_still(&account.header);
+    let header_shape = nodus_ui::picture::banner_box(account.header_shape());
+    // With a published shape the ratio owns the height; without one the layout keeps its
+    // shallow strip, exactly as it painted before shapes were read.
+    let header_class = if header_shape.is_some() {
+        "w-full object-cover"
+    } else {
+        "h-32 w-full object-cover"
+    };
     let has_header = !header.is_empty();
     let avatar = nodus_ui::picture::avatar(&account.avatar);
+    let avatar_shape = nodus_ui::picture::avatar_box(account.avatar_shape());
     let has_avatar = !avatar.is_empty();
     let picture = StoredValue::new(avatar.clone());
     // The id is read by three handlers, so it lives in a stored value: a `String` captured
@@ -145,26 +154,20 @@ pub fn ProfilePage(
         <crate::Screen>
             <header class="card overflow-hidden border border-base-300 bg-base-100 shadow-sm">
                 {has_header.then(|| view! {
-                    // The banner fills the header's width, so the layout's `w-full h-32`
-                    // owns the box; there is no intrinsic width to reserve.
-                    <picture>
-                        {header_still.map(|still| view! {
-                            <source media="(prefers-reduced-motion: reduce)" srcset=still/>
-                        })}
-                        <img
-                            class="h-32 w-full object-cover"
-                            src=header
-                            alt=""
-                            loading="eager"
-                            fetchpriority="high"
-                            decoding="async"
-                            referrerpolicy="no-referrer"
-                        />
-                    </picture>
+                    // The banner fills the header's width. Its published shape supplies
+                    // the height through `aspect-ratio`; an unpublished shape leaves the
+                    // layout's fixed strip in place.
+                    <nodus_ui::picture::Picture
+                        src=header
+                        still=header_still
+                        shape=header_shape
+                        class=header_class
+                        priority=true
+                    />
                 })}
                 <div class="card-body gap-3 p-4">
                     <div class="flex items-start gap-3">
-                        {face(has_avatar, avatar, picture, on_avatar, !has_header)}
+                        {face(has_avatar, avatar, avatar_shape, picture, on_avatar, !has_header)}
                         <div class="min-w-0 flex-1">
                             <h1 class="truncate text-lg font-semibold">{name}</h1>
                             <p class="truncate text-sm opacity-60">{handle}</p>
@@ -207,6 +210,7 @@ pub fn ProfilePage(
 fn face(
     has_avatar: bool,
     avatar: String,
+    shape: Option<nodus_ui::picture::PictureBox>,
     source: StoredValue<String>,
     on_avatar: Option<Callback<String>>,
     priority: bool,
@@ -219,6 +223,7 @@ fn face(
                 still=still
                 width=64
                 height=64
+                shape=shape
                 class="h-16 w-16 rounded-full object-cover"
                 priority=priority
             />
@@ -386,7 +391,9 @@ mod tests {
             display_name: "Alice".to_owned(),
             note: note.to_owned(),
             avatar: String::new(),
+            avatar_meta: None,
             header: String::new(),
+            header_meta: None,
             bot: false,
             locked: false,
             followers_count: 0,
@@ -409,7 +416,9 @@ mod tests {
             display_name: "Alice".to_owned(),
             note: String::new(),
             avatar: "https://social.test/media/1/avatar".to_owned(),
+            avatar_meta: None,
             header: "https://social.test/media/2/header".to_owned(),
+            header_meta: None,
             bot: false,
             locked: false,
             followers_count: 0,
