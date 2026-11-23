@@ -37,8 +37,6 @@ test('the instance offers tags, and taking one features it', async ({ page }) =>
 
   await page.locator('[data-tag-suggestion]', { hasText: '#rust' }).click()
 
-  // Known product regression, left red on purpose: `on_added` reloads the section, which
-  // remounts `AddTag` and re-reads the suggestions, undoing the local `suggestions_forget`.
   await expect(page.locator('[data-tag-suggestion]')).toHaveCount(1)
   expect(featured).toEqual([{ name: 'rust' }])
 })

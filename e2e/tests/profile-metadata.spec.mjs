@@ -71,8 +71,6 @@ test('two rows are added, saved, and still on the profile after a reload', async
   await page.getByLabel('Value').nth(1).fill('nodus')
 
   await page.getByRole('button', { name: 'Save profile' }).click()
-  // Known product regression, left red on purpose: the save bumps the settings revision and
-  // re-creates the section, so `ProfileCard` remounts without its `Saved.` message.
   await expect(page.getByText('Saved.')).toBeVisible()
 
   // The body the bridge sent, not a form: name and value per row, in row order. The SDK

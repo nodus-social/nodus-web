@@ -2,12 +2,7 @@
 
 import { expect, test } from '@playwright/test'
 
-import { ACCOUNT_ID, FEATURES, HOST, signedIn, stubApi, hydrated } from '../fixtures.mjs'
-
-// The feed switches live on the instance section beside the background-sync card. Sync is
-// not what these tests are about, and an instance that advertises it remounts the section
-// while its consent is read; leave it out so the feed contract is what the test observes.
-const FEED_INSTANCE_FEATURES = FEATURES.filter((name) => name !== 'sync_token')
+import { ACCOUNT_ID, HOST, signedIn, stubApi, hydrated } from '../fixtures.mjs'
 
 /** The rail's category labels, in the order a reader meets them. */
 async function railLabels(page) {
@@ -101,7 +96,7 @@ test('the composer sits above the feed timeline, open', async ({ page }) => {
 
 test('a feed can be hidden from the home tabs in settings', async ({ page }) => {
   test.skip(test.info().project.name !== 'desktop', 'the rail is hidden on a phone');
-  await stubApi(page, { features: FEED_INSTANCE_FEATURES })
+  await stubApi(page)
   await signedIn(page)
   await page.goto('/')
   await hydrated(page)
@@ -145,7 +140,7 @@ test('the account menu lists the signed-in identity', async ({ page }) => {
 
 test('home stays in the navigation, and the feed can be closed', async ({ page }) => {
   test.skip(test.info().project.name !== 'desktop', 'the rail is hidden on a phone');
-  await stubApi(page, { features: FEED_INSTANCE_FEATURES });
+  await stubApi(page);
   await signedIn(page);
   await page.goto('/settings/instance');
   await hydrated(page)
