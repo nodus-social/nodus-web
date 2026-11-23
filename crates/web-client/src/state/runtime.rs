@@ -393,9 +393,18 @@ impl Runtime for ClientRuntime {
         account: Callback<Result<Account, String>>,
         relationship: Callback<Result<Option<Relationship>, String>>,
     ) {
+        // The screen asks for both halves when either is missing, so a profile whose
+        // island carried the account but no relationship would otherwise re-read the
+        // account it is already painting. The paint is the answer for the account; only
+        // the relationship is healed over the wire.
+        let painted = crate::state::bridge::seed::painted_account(&id);
         let for_account = id.clone();
         spawn_local(async move {
-            account.run(actions::account(&for_account).await);
+            let found = match painted {
+                Some(painted) => Ok(painted),
+                None => actions::account(&for_account).await,
+            };
+            account.run(found);
         });
         spawn_local(async move {
             relationship.run(actions::relationship(&id).await);
@@ -656,7 +665,8 @@ impl Runtime for ClientRuntime {
     }
 
     fn account(&self, id: &str) -> Option<Account> {
-        with_sdk(|sdk| sdk.read_account(id))
+        crate::state::bridge::seed::painted_account(id)
+            .or_else(|| with_sdk(|sdk| sdk.read_account(id)))
     }
 
     fn relationship(&self, id: &str) -> Option<Relationship> {
@@ -684,5 +694,22 @@ fn which(kind: &TimelineKind) -> (Timeline, Option<String>) {
         // The tag travels beside the timeline, not inside it: the SDK keys the store by
         // "tag" and reads the requested name from the request.
         TimelineKind::Tag(name) => (Timeline::Tag, Some(name.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A painted profile is the runtime's answer even though no SDK is installed:
+    /// `with_sdk` panics in that state, so falling through to it would fail the test.
+    #[test]
+    fn a_painted_account_answers_before_the_sdk() {
+        crate::state::bridge::seed::paint_for_test(
+            r#"{"kind":"account","account":{"id":"01PAINTED","acct":"ada"}}"#,
+        );
+        let account = <ClientRuntime as Runtime>::account(&ClientRuntime, "01PAINTED")
+            .expect("the painted account answers");
+        assert_eq!(account.id, "01PAINTED");
     }
 }

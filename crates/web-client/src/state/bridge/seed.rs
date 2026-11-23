@@ -196,6 +196,25 @@ pub fn thread_context(id: &str) -> Option<Context> {
     })
 }
 
+/// The account painted into an `/accounts/{id}` island, when this document painted `id`.
+///
+/// The island is kept as the server wrote it while `adopt` sanitizes the copy it puts in
+/// the store, so the account read from the paint is sanitized here too: both paths render
+/// the same fields.
+#[must_use]
+pub fn painted_account(id: &str) -> Option<Account> {
+    PAINTED.with(|painted| {
+        let painted = painted.borrow();
+        let island = painted.as_ref()?;
+        if island.kind != "account" || island.account.as_ref()?.id != id {
+            return None;
+        }
+        let mut account = island.account.clone()?;
+        nodus_ui::html::sanitize_account(&mut account);
+        Some(account)
+    })
+}
+
 /// The relationship painted into an `/accounts/{id}` island, when this document painted `id`.
 ///
 /// The profile effect asks the runtime for the account and the relationship; answering both
@@ -254,6 +273,12 @@ fn sanitize_page_items(items: &mut PageItems) {
         }
         _ => {}
     }
+}
+
+#[cfg(test)]
+pub(crate) fn paint_for_test(json: &str) {
+    let island = serde_json::from_str::<Island>(json).expect("a test island is valid JSON");
+    PAINTED.with(|painted| *painted.borrow_mut() = Some(island));
 }
 
 fn adopt(mut island: Island) {
