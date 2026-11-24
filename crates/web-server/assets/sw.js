@@ -1,21 +1,25 @@
 // The service worker the browser keeps subscribed to Web Push.
 //
-// The sender (`crates/api/src/webpush.rs`) pushes a small JSON object: `{title, body}`.
-// That is all it sends, so this file must not expect more: a payload that already names a
-// `kind` tags the notification per kind, and every payload without one shares a single tag.
-// Either way five favourites replace each other instead of stacking five banners — a civil
-// instance produces more notifications than a lock screen can hold.
+// The sender pushes a small JSON object: `{title, body, tag, data:{url}, icon}` and, for
+// kinds where a replacement should still make a sound, `renotify: true`. Everything except
+// `title`/`body` is optional, so this file prefers the sender's answer and falls back
+// rather than inventing one — the sender knows whether two notifications are about the
+// same thing; a service worker guessing from `kind` alone would collapse every mention on
+// the instance into one banner.
 //
 // Plain JavaScript on purpose: it is served by the SSR host from `assets/` as one file, and
 // nothing here is worth a bundler's build step.
 
-/// One tag per kind, so a burst of one kind collapses to one banner while a follow is not
-/// replaced by a favourite.
-const tagFor = (payload) => 'nodus-' + (payload.kind || 'notification');
+/// The sender's tag when it names one, so two notifications about the SAME post replace
+/// each other and two about different posts never do. `kind` is only a fallback for a
+/// sender that predates the tag.
+const tagFor = (payload) =>
+  payload.tag || 'nodus-' + (payload.kind || 'notification');
 
-/// Where a click lands: the notification's own URL when the sender names one, else the
-/// notifications column.
-const urlFor = (payload) => payload.url || '/notifications';
+/// Where a click lands: the sender's `data.url`, then a bare `url`, then the notifications
+/// column. The server sends `data.url`; the others keep an older payload working.
+const urlFor = (payload) =>
+  (payload.data && payload.data.url) || payload.url || '/notifications';
 
 self.addEventListener('push', (event) => {
   if (!event.data) {
@@ -30,14 +34,20 @@ self.addEventListener('push', (event) => {
 
   const title = payload.title || 'Nodus';
   const body = payload.body || 'You have a new notification';
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag: tagFor(payload),
-      renotify: true,
-      data: { url: urlFor(payload) },
-    }),
-  );
+  const options = {
+    body,
+    tag: tagFor(payload),
+    // The sender decides whether a replacement should still alert: a second favourite on
+    // the same post is news, a second notification about one follower is not.
+    renotify: payload.renotify === true,
+    data: { url: urlFor(payload) },
+  };
+  if (payload.icon) {
+    // Only when the sender names one: an icon path that does not exist is a broken image
+    // in a place nobody can debug.
+    options.icon = payload.icon;
+  }
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
