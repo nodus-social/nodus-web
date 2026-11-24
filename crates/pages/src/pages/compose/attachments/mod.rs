@@ -36,7 +36,7 @@ pub fn Attachments(
     #[prop(default = Signal::derive(Vec::new))]
     from_drive: Signal<Vec<(String, String)>>,
     /// The hidden file input, which owns the browser's file handling.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     picker: Option<ChildrenFn>,
 ) -> impl IntoView {
     view! {

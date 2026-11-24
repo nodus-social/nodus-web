@@ -20,7 +20,9 @@ path = "src/main.rs"
 default = ["hydrate", "admin"]
 
 # What this artifact is, spelled out so the build is explicit: `trunk build --release`.
-hydrate = ["leptos/csr", "nodus-mastodon/wasm"]
+# The client adopts the markup the SSR host painted instead of building a second tree and
+# swapping it in; `nodus-mastodon/wasm` is the SDK half of "runs in a browser".
+hydrate = ["leptos/hydrate", "nodus-mastodon/wasm"]
 
 # The moderation screens. Same meaning as in the shared vocabulary; the screens themselves
 # live in this crate, so the feature is read here.
@@ -33,8 +35,10 @@ nodus-web = { path = "../web-shared" }
 nodus-ui = { path = "../ui" }
 nodus-pages = { path = "../pages" }
 nodus-route = { path = "../route" }
+# The frame both paints render; the client hydrates the nodes the host painted from it.
+nodus-shell = { path = "../shell" }
 nodus-editor = { path = "../editor" }
-leptos = { version = "0.8.23", features = ["csr"] }
+leptos = { version = "0.8.23" }
 nodus-shared = { workspace = true }
 nodus-client-sdk = { workspace = true }
 nodus-discovery = { workspace = true }

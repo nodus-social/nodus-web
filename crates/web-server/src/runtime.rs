@@ -172,6 +172,18 @@ impl Runtime for StaticRuntime {
         self.lists.clone()
     }
 
+    /// The client's infinite-scroll row, painted but inert.
+    ///
+    /// Hydration walks one tree: `None` here would leave the client's `<div>` with no
+    /// counterpart in the server paint, and the walk would stop at the row. The server has
+    /// no observer, so the row asks for nothing; the client attaches its observer to the
+    /// same element after hydration.
+    fn infinite_more(&self, _active: Signal<bool>, _on_load: Callback<()>) -> Option<ChildrenFn> {
+        Some(std::sync::Arc::new(|| {
+            view! { <div class="h-px w-full"></div> }.into_any()
+        }))
+    }
+
     fn session(&self) -> Option<SessionView> {
         self.session.clone()
     }

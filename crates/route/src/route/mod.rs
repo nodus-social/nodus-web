@@ -709,7 +709,7 @@ pub fn RouteView(
             let header = header.or_else(|| {
                 let header: ChildrenFn = Arc::new(|| {
                     view! {
-                        <crate::pages::compose::inline::preview::ComposerPreview
+                        <crate::pages::compose::inline::StaticComposer
                             active=Signal::derive(|| "/home/feed".to_owned())
                         />
                     }
@@ -811,7 +811,9 @@ pub(crate) fn TimelineScreen(
 ) -> impl IntoView {
     let revision = runtime.revision();
     let initial = runtime.timeline(&kind);
-    let loading = RwSignal::new(!initial.held && !initial.unavailable);
+    // The server paints a held page, so its first frame is not loading. The effect below
+    // turns the spinner on only when the client actually has a first page to fetch.
+    let loading = RwSignal::new(false);
     let in_flight = RwSignal::new(false);
     let error = RwSignal::new(
         initial
@@ -857,7 +859,12 @@ pub(crate) fn TimelineScreen(
     {
         let start = start.clone();
         Effect::new(move |_| {
-            if !data.get_untracked().held && !data.get_untracked().unavailable {
+            let waiting = !data.get_untracked().held && !data.get_untracked().unavailable;
+            // The server paints a held page, so its first frame is not loading. Start the
+            // client from that same frame and only show the spinner once the first fetch
+            // is actually scheduled, or hydration sees two different trees.
+            loading.set(waiting);
+            if waiting {
                 start(None);
             }
         });

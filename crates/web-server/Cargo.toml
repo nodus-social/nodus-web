@@ -29,6 +29,8 @@ nodus-web = { path = "../web-shared", default-features = false }
 nodus-ui = { path = "../ui" }
 nodus-pages = { path = "../pages" }
 nodus-route = { path = "../route" }
+# The frame and the screens, as one tree: the same one the browser adopts.
+nodus-shell = { path = "../shell", features = ["ssr"] }
 # Rendering to a string, never hydrating.
 leptos = { version = "0.8.23", features = ["ssr"] }
 any_spawner = "0.3"

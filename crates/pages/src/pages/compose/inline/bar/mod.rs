@@ -36,13 +36,13 @@ pub fn ComposerBar(
     #[prop(into)]
     schedule_open: Signal<bool>,
     /// Picks who may see the post.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_visibility: Option<Callback<Visibility>>,
     /// Opens the media picker.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_add_media: Option<Callback<()>>,
     /// Opens the drive picker, which attaches a file without uploading it again.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_add_drive: Option<Callback<()>>,
     /// Whether the poll the composer is editing is one the server would accept.
     ///
@@ -51,25 +51,25 @@ pub fn ComposerBar(
     #[prop(into)]
     poll_ready: Signal<bool>,
     /// Turns the post into a poll.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_add_poll: Option<Callback<()>>,
     /// Toggles the schedule panel.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_toggle_schedule: Option<Callback<()>>,
     /// Opens the visual thread editor, where a long draft can be split.
     #[prop(optional_no_strip)]
     on_thread: Option<Callback<()>>,
     /// Sends, or queues, the post.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     on_submit: Option<Callback<()>>,
     /// The language picker, whose list is the instance's.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     language: Option<ChildrenFn>,
     /// The emoticon and the picker it opens: the panel owns a document listener.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     emoji_picker: Option<ChildrenFn>,
     /// The schedule panel: it reads the reader's clock.
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     schedule_panel: Option<ChildrenFn>,
 ) -> impl IntoView {
     let count = move || text.get().chars().count();

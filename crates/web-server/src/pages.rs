@@ -202,32 +202,43 @@ pub(crate) async fn read_page_with_style(
         ScreenKind::Saved { bookmarks } => {
             read_saved(client, assets, acct, staff, path, bookmarks, style).await
         }
+        // The one screen whose whole tree is painted by `nodus-shell`, so the browser can
+        // adopt it instead of swapping the paint out. The seed is the data the document
+        // already knows; the client reads the same seed back and draws the same frame.
         ScreenKind::Lists => client
             .lists()
             .await
             .map(|items| {
+                let reader = document::Reader::of_handle(acct);
+                let seed = nodus_shell::ShellSeed {
+                    signed_in: true,
+                    path: path.to_owned(),
+                    profile: Some(reader.card()),
+                    style: style.cloned(),
+                    ..nodus_shell::ShellSeed::default()
+                };
                 let runtime = StaticRuntime::lists(items.clone());
-                let inner = painted(|| {
-                    nodus_route::route::RouteView(nodus_route::route::RouteViewProps {
+                let body = painted(|| {
+                    nodus_shell::ShellPage(nodus_shell::ShellPageProps {
+                        seed: seed.clone(),
                         runtime,
-                        route: Route::Lists,
+                        route: leptos::prelude::Signal::stored(Route::Lists),
                         card: card(),
                         header: None,
-                        banner: None,
+                        on_home: None,
                     })
                 });
-                document::page_of_with_style(
+                document::page_of_shell(
                     assets,
-                    &document::Reader::of_handle(acct),
-                    staff,
-                    path,
+                    &reader,
                     screen.title,
-                    &inner,
+                    &body,
                     Some(
                         serde_json::json!({ "kind": "lists", "items": items, "cursor": null })
                             .to_string(),
                     ),
                     style,
+                    &seed,
                 )
             })
             .ok(),
@@ -1727,3 +1738,4 @@ mod painting {
         assert!(html.contains("Alice"), "{html}");
     }
 }
+

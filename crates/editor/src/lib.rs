@@ -268,6 +268,7 @@ pub fn RichEditor(
             id="nodus-composer-body"
             node_ref=element
             class="min-h-24 w-full cursor-text text-sm leading-relaxed"
+            aria-label="Write a post"
             on:mousedown=mount_button
             on:click=move |_| {
                 if let Some(editor) = handle.get_value() {
