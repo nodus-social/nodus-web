@@ -12,29 +12,22 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use nodus_client_core::model::{MediaAttachment, Status, Visibility};
 use nodus_pages::pages::compose::inline::Posted;
-use nodus_pages::pages::compose::inline::{
-    InlineComposer as InlineCard, InlineComposerProps as InlineCardProps,
-};
+use nodus_pages::pages::compose::inline::live::{ComposerRuntime, LiveComposer};
 use wasm_bindgen::JsCast as _;
 
 use crate::router::{self, Route};
 use crate::routes::compose::attachments::{self, Attachments};
-use crate::routes::compose::inline::bar::ComposerBar;
 use crate::state::alive::Alive;
 use crate::state::bridge::{actions, limits, timeline};
 
 mod bar;
-mod drafts_panel;
 pub(crate) mod emoji;
 mod emoji_toggle;
 mod poll;
 mod schedule;
 
 use bar::Notice;
-use drafts_panel::DraftsPanel;
-use emoji::Suggestions;
 use poll::PollEditor;
-use schedule::SchedulePanel;
 
 type Unload = wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>;
 
@@ -99,7 +92,6 @@ pub fn InlineComposer(
     // instance once, not once per keystroke and once per open.
     let emoji_catalogue = emoji::catalogue();
     let (picking, set_picking) = signal(false);
-    let (emoji_open, set_emoji_open) = signal(false);
     // `Draft` is not `Copy` (it owns nothing but holds the SDK handle), so the submit
     // handler gets its own copy of the `Copy` half and the rest of the view keeps `draft`.
     let submit = draft.snapshot_of_signals();
@@ -114,108 +106,99 @@ pub fn InlineComposer(
             |(colon, _)| emoji::complete(&text, colon, &label),
         );
         text_field.set(next);
-        set_emoji_open.set(false);
         set_picking.set(false);
         focus_textarea();
     });
 
-    // The shortcode completion follows the caret, which the editor reports as plain text
-    // changes: a token is open exactly while the draft ends in one.
-    Effect::new(move |_| {
-        let Some(text) = draft.text.try_get() else {
-            return;
-        };
-        set_emoji_open.set(emoji::pending(&text).is_some());
-    });
-
     // `:draft` and the kept-text lifecycle, in one place: this component was already at the
     // line limit, and the resume path is a feature of its own.
-    let (draft_token, resume) = draft_controls(&draft);
+    let (_, resume) = draft_controls(&draft);
 
     // The card, its heading and the three confirmation lines are the view's. What is not:
     // the writer itself, the two popups that sit above it, and the bar under it — the editor
     // owns the contenteditable, the emoji picker owns a document listener, and the bar's
     // panels read the clock. Those arrive as the two slots the card leaves open.
-    let body = Arc::new(move || {
-        view! {
-            // The suggestions sit above the box, where the writer is already looking:
-            // a dialog would steal focus and swallow the next keystroke.
-            <Suggestions
-                query=Signal::derive(move || {
-                    emoji::pending(&draft.text.get())
-                        .map(|(_, query)| query)
-                        .unwrap_or_default()
-                })
-                open=emoji_open
-                catalogue=emoji_catalogue
-                insert=emoji_insert
-            />
-            <DraftsPanel open=draft_token insert=resume/>
-            <nodus_ui::Relative>
-                <nodus_editor::RichEditor
-                    text=draft.text.read_only()
-                    set_text=draft.text.write_only()
-                    emoji=emoji_catalogue
-                    placeholder="What's on your mind?"
-                    on_submit=Callback::new(move |()| submit.submit())
-                    query=draft.emoji_query
+    // The schedule panel's visibility is the bar's (the caret toggles it), so it is one
+    // signal the runtime and the slot share.
+    let schedule_open = RwSignal::new(false);
+
+    let editor: ChildrenFn = {
+        let text = draft.text;
+        let query = draft.emoji_query;
+        let submit = submit;
+        Arc::new(move || {
+            view! {
+                <nodus_ui::Relative>
+                    <nodus_editor::RichEditor
+                        text=text.read_only()
+                        set_text=text.write_only()
+                        emoji=emoji_catalogue
+                        placeholder="What's on your mind?"
+                        on_submit=Callback::new(move |()| submit.submit())
+                        query=query
+                    />
+                    <EmojiHints query=query.read_only()/>
+                </nodus_ui::Relative>
+            }
+            .into_any()
+        })
+    };
+
+    let language: ChildrenFn = {
+        let chosen = draft.language;
+        Arc::new(move || {
+            view! {
+                <crate::ui::language::LanguagePicker
+                    language=chosen.read_only()
+                    set_language=chosen.write_only()
                 />
-                <EmojiHints query=draft.emoji_query.read_only()/>
-            </nodus_ui::Relative>
-        }
-        .into_any()
-    }) as ChildrenFn;
+            }
+            .into_any()
+        })
+    };
 
-    let controls = Arc::new(move || {
-        view! {
-            <ComposerBar
-                text=draft.text.read_only()
-                at=draft.custom.read_only()
-                set_at=draft.custom.write_only()
-                visibility=draft.visibility.read_only()
-                set_visibility=draft.visibility.write_only()
-                busy=draft.busy.read_only()
-                limit=draft.limit.read_only().into()
-                on_thread=Some(Callback::new(move |()| {
-                    crate::routes::compose::handoff::put(
-                        draft.text.get_untracked(),
-                        draft.reply_to.map(|id| id.get_value()),
-                        draft.media.get_untracked(),
-                    );
-                    router::navigate(Route::Compose);
-                }))
-                on_add_media=Callback::new(move |()| attachments::request_pick())
-                on_add_drive=Callback::new(move |()| attachments::request_drive())
-                // A toggle, not a latch: with a latch the control is a no-op the moment the
-                // editor is open, which is what made it read as broken.
-                emoji_open=picking
-                set_emoji_open=set_picking
-                poll_ready=Signal::derive(move || {
-                    draft.poll_open.get() && poll::ready(&draft.options.get())
-                })
-                on_add_poll=Callback::new(move |()| {
-                    draft
-                        .poll_open
-                        .update(|open| *open = !*open);
-                })
-                language=draft.language.read_only()
-                set_language=draft.language.write_only()
-                on_submit=Callback::new(move |()| submit.submit())
-            />
+    let emoji_picker: ChildrenFn = {
+        let busy = draft.busy;
+        Arc::new(move || {
+            view! { <emoji_toggle::EmojiToggle open=picking set_open=set_picking busy=busy.read_only()/> }
+                .into_any()
+        })
+    };
 
-            <PollEditor
-                open=draft.poll_open
-                options=draft.options
-                expires_in=draft.expires_in
-                multiple=draft.multiple
-                hide_totals=draft.hide_totals
-                on_add=Some(Callback::new(super::inline::poll::focus_option))
-            />
+    let schedule_panel: ChildrenFn = {
+        let at = draft.custom;
+        Arc::new(move || {
+            view! {
+                <schedule::SchedulePanel at=at.read_only() set_at=at.write_only() open=schedule_open/>
+            }
+            .into_any()
+        })
+    };
 
-            <Attachments media=draft.media set_error=draft.error.write_only() show_button=false/>
-        }
-        .into_any()
-    }) as ChildrenFn;
+    let poll_panel: ChildrenFn = {
+        Arc::new(move || {
+            view! {
+                <PollEditor
+                    open=draft.poll_open
+                    options=draft.options
+                    expires_in=draft.expires_in
+                    multiple=draft.multiple
+                    hide_totals=draft.hide_totals
+                    on_add=Some(Callback::new(super::inline::poll::focus_option))
+                />
+            }
+            .into_any()
+        })
+    };
+
+    let attachment_strip: ChildrenFn = {
+        let media = draft.media;
+        let error = draft.error;
+        Arc::new(move || {
+            view! { <Attachments media=media set_error=error.write_only() show_button=false/> }
+                .into_any()
+        })
+    };
 
     // The confirmation reads as the pickers do: the visibility's own word, and the language
     // the instance would have named, not the code that was sent.
@@ -230,16 +213,182 @@ pub fn InlineComposer(
         })
     });
 
-    // The slots are handed over in the props struct: view syntax can pass an affordance but
-    // not the absence of one, and the card needs both slots filled.
-    InlineCard(InlineCardProps {
-        heading,
-        body,
-        controls,
-        error: Some(draft.error.into()),
-        notice: Some(draft.notice.into()),
-        done: Some(done),
-    })
+    // The `:draft` popup's rows are read from `localStorage` here: the store and the clock
+    // the age column needs are this crate's, and the shared panel only draws them.
+    let drafts_text = draft.text;
+    let drafts = Signal::derive(move || {
+        // The list is only shown while a token is being typed, so the text is the read that
+        // makes this refresh when the popup would appear.
+        let _ = drafts_text.get();
+        crate::ui::drafts::all()
+            .into_iter()
+            .map(
+                |saved| nodus_pages::pages::compose::inline::drafts_panel::Draft {
+                    label: crate::ui::drafts::summary(&saved.text),
+                    visibility: saved.visibility,
+                    language: if saved.language.is_empty() {
+                        "instance default".to_owned()
+                    } else {
+                        saved.language
+                    },
+                    age: crate::routes::format::relative_time(&String::from(
+                        js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(saved.at))
+                            .to_iso_string(),
+                    )),
+                },
+            )
+            .collect()
+    });
+
+    let runtime: Arc<dyn ComposerRuntime> = Arc::new(LiveRuntime {
+        text: draft.text,
+        visibility: draft.visibility,
+        busy: draft.busy,
+        limit: draft.limit,
+        at: draft.custom,
+        schedule_open: schedule_open.read_only(),
+        poll_ready: Signal::derive(move || {
+            draft.poll_open.get() && poll::ready(&draft.options.get())
+        }),
+        catalogue: Signal::derive(move || emoji_catalogue.get()),
+        drafts,
+        error: draft.error.into(),
+        notice: draft.notice.into(),
+        done,
+        actions: Actions {
+            visibility: Callback::new(move |chosen: Visibility| draft.visibility.set(chosen)),
+            add_media: Callback::new(move |()| attachments::request_pick()),
+            add_drive: Callback::new(move |()| attachments::request_drive()),
+            add_poll: Callback::new(move |()| {
+                draft.poll_open.update(|open| *open = !*open);
+            }),
+            toggle_schedule: Callback::new(move |()| {
+                schedule_open.update(|shown| *shown = !*shown);
+            }),
+            thread: Callback::new(move |()| {
+                crate::routes::compose::handoff::put(
+                    draft.text.get_untracked(),
+                    draft.reply_to.map(|id| id.get_value()),
+                    draft.media.get_untracked(),
+                );
+                router::navigate(Route::Compose);
+            }),
+            submit: Callback::new(move |()| submit.submit()),
+            resume,
+            insert_emoji: emoji_insert,
+        },
+    });
+
+    view! {
+        <LiveComposer
+            runtime=runtime
+            editor=editor
+            heading=heading
+            language=Some(language)
+            emoji_picker=Some(emoji_picker)
+            schedule=Some(schedule_panel)
+            poll=Some(poll_panel)
+            attachments=Some(attachment_strip)
+        />
+    }
+}
+
+/// The browser's answers to the shared composer: the draft it is editing, and what the
+/// controls do. The host answers the same trait with empty signals and no callbacks.
+struct LiveRuntime {
+    text: RwSignal<String>,
+    visibility: RwSignal<Visibility>,
+    busy: RwSignal<bool>,
+    limit: RwSignal<usize>,
+    at: RwSignal<String>,
+    schedule_open: ReadSignal<bool>,
+    poll_ready: Signal<bool>,
+    catalogue: Signal<Vec<nodus_client_core::model::CustomEmoji>>,
+    drafts: Signal<Vec<nodus_pages::pages::compose::inline::drafts_panel::Draft>>,
+    error: Signal<Option<String>>,
+    notice: Signal<Option<String>>,
+    done: Signal<Option<Posted>>,
+    actions: Actions,
+}
+
+/// The callbacks the shared composer runs.
+#[derive(Clone)]
+struct Actions {
+    visibility: Callback<Visibility>,
+    add_media: Callback<()>,
+    add_drive: Callback<()>,
+    add_poll: Callback<()>,
+    toggle_schedule: Callback<()>,
+    thread: Callback<()>,
+    submit: Callback<()>,
+    resume: Callback<usize>,
+    insert_emoji: Callback<String>,
+}
+
+impl ComposerRuntime for LiveRuntime {
+    fn text(&self) -> ReadSignal<String> {
+        self.text.read_only()
+    }
+    fn visibility(&self) -> ReadSignal<Visibility> {
+        self.visibility.read_only()
+    }
+    fn busy(&self) -> ReadSignal<bool> {
+        self.busy.read_only()
+    }
+    fn limit(&self) -> ReadSignal<usize> {
+        self.limit.read_only()
+    }
+    fn at(&self) -> ReadSignal<String> {
+        self.at.read_only()
+    }
+    fn schedule_open(&self) -> ReadSignal<bool> {
+        self.schedule_open
+    }
+    fn poll_ready(&self) -> Signal<bool> {
+        self.poll_ready
+    }
+    fn catalogue(&self) -> Signal<Vec<nodus_client_core::model::CustomEmoji>> {
+        self.catalogue
+    }
+    fn drafts(&self) -> Signal<Vec<nodus_pages::pages::compose::inline::drafts_panel::Draft>> {
+        self.drafts
+    }
+    fn error(&self) -> Signal<Option<String>> {
+        self.error
+    }
+    fn notice(&self) -> Signal<Option<String>> {
+        self.notice
+    }
+    fn done(&self) -> Signal<Option<Posted>> {
+        self.done
+    }
+    fn on_visibility(&self) -> Option<Callback<Visibility>> {
+        Some(self.actions.visibility)
+    }
+    fn on_add_media(&self) -> Option<Callback<()>> {
+        Some(self.actions.add_media)
+    }
+    fn on_add_drive(&self) -> Option<Callback<()>> {
+        Some(self.actions.add_drive)
+    }
+    fn on_add_poll(&self) -> Option<Callback<()>> {
+        Some(self.actions.add_poll)
+    }
+    fn on_toggle_schedule(&self) -> Option<Callback<()>> {
+        Some(self.actions.toggle_schedule)
+    }
+    fn on_thread(&self) -> Option<Callback<()>> {
+        Some(self.actions.thread)
+    }
+    fn on_submit(&self) -> Option<Callback<()>> {
+        Some(self.actions.submit)
+    }
+    fn on_resume(&self) -> Option<Callback<usize>> {
+        Some(self.actions.resume)
+    }
+    fn on_insert_emoji(&self) -> Option<Callback<String>> {
+        Some(self.actions.insert_emoji)
+    }
 }
 
 /// True for a body that is only the `:draft` token, which is a command rather than writing.

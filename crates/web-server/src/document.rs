@@ -386,9 +386,10 @@ fn timeline_header(active: &str) -> String {
 
     let here = active.to_owned();
     Owner::new().with(|| {
-        nodus_pages::pages::compose::inline::ComposerPreview(
-            nodus_pages::pages::compose::inline::preview::ComposerPreviewProps {
+        nodus_pages::pages::compose::inline::StaticComposer(
+            nodus_pages::pages::compose::inline::live::StaticComposerProps {
                 active: Signal::derive(move || here.clone()),
+                limit: 500,
             },
         )
         .to_html()
@@ -423,9 +424,67 @@ pub fn home_with_style(
     cursor: Option<&str>,
     style: Option<&nodus_ui::session_style::SessionStyle>,
 ) -> String {
-    feed_with_style(
-        assets, reader, staff, "home", "Home", "/home", statuses, cursor, style,
-    )
+    // The ordinary paint stays the hand-painted chrome. The shell paint is the one the
+    // browser can adopt, and it is opt-in with the same switch that marks the document:
+    // turning hydration on for `/home` must not change the page every other request sees.
+    if hydrate_marker().is_empty() {
+        return feed_with_style(
+            assets, reader, staff, "home", "Home", "/home", statuses, cursor, style,
+        );
+    }
+
+    let statuses: Vec<Status> = statuses
+        .iter()
+        .cloned()
+        .map(|mut status| {
+            nodus_ui::html::sanitize_status(&mut status);
+            status
+        })
+        .collect();
+    let island = serde_json::to_string(&Island {
+        which: "home",
+        statuses: &statuses,
+        cursor,
+        capabilities: capabilities_island(&reader.host),
+    })
+    .unwrap_or_else(|_| "{\"which\":\"home\",\"statuses\":[],\"cursor\":null}".to_owned());
+    let seed = nodus_shell::ShellSeed {
+        signed_in: true,
+        path: "/home".to_owned(),
+        profile: Some(reader.card()),
+        style: style.cloned(),
+        ..nodus_shell::ShellSeed::default()
+    };
+    let runtime =
+        crate::runtime::StaticRuntime::page_for(reader, statuses, cursor.map(str::to_owned));
+    let body = Owner::new().with(|| {
+        use leptos::prelude::*;
+
+        let card: nodus_ui::components::card_renderer::CardRenderer =
+            std::sync::Arc::new(|status| {
+                leptos::html::div()
+                    .inner_html(status_card(&status))
+                    .into_any()
+            });
+        let header: ChildrenFn = std::sync::Arc::new(move || {
+            view! {
+                <nodus_pages::pages::compose::inline::StaticComposer
+                    active=Signal::derive(|| "/home".to_owned())
+                />
+            }
+            .into_any()
+        });
+        nodus_shell::ShellPage(nodus_shell::ShellPageProps {
+            seed: seed.clone(),
+            runtime,
+            route: Signal::stored(nodus_web::shared::router::Route::Home),
+            card,
+            header: Some(header),
+            on_home: None,
+        })
+        .to_html()
+    });
+    page_of_shell(assets, reader, "Home", &body, Some(island), style, &seed)
 }
 
 /// A timeline page, painted: the same header, the same cards, the same island.
@@ -614,6 +673,39 @@ pub fn page_of_with_style(
     )
 }
 
+/// A signed-in page whose body is already the shell's own tree.
+///
+/// Unlike [`page_of_with_style`] this does not wrap the body in the hand-painted `Frame`:
+/// the caller rendered [`nodus_shell::ShellPage`], so the string *is* the tree the browser
+/// will adopt. The seed the tree was built from goes into `#nodus-shell`, which is what lets
+/// the client's first pass start from the same values; `#app` also carries `data-shell` so
+/// the client knows which root to hydrate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "document envelope takes asset manifest, session state, route metadata, and style"
+)]
+pub fn page_of_shell(
+    assets: &Assets,
+    reader: &Reader,
+    title: &str,
+    body: &str,
+    island: Option<String>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+    seed: &nodus_shell::ShellSeed,
+) -> String {
+    let island = island.map(|json| with_capabilities(json, &reader.host));
+    let seed = serde_json::to_string(seed).ok();
+    page_marked(
+        assets,
+        &format!("{title} · {}", reader.acct),
+        body,
+        island.as_deref(),
+        style,
+        false,
+        seed.as_deref(),
+    )
+}
+
 /// A public page: the reader has no account, so the rail shows no signed-in doors.
 pub fn page_of_public(
     assets: &Assets,
@@ -735,6 +827,21 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
     page_with_style(assets, title, body, island, None, noindex)
 }
 
+/// Whether this document claims to be a Leptos tree the client may adopt.
+///
+/// `data-hydrate` is a promise: `#app`'s children are the node sequence the client's own
+/// view renders, including Leptos' branch markers (`<!--bo-…-->` / `<!--bc-…-->`) and its
+/// empty-view placeholders. Only `leptos::ssr::render_to_string` of that exact tree keeps
+/// the promise; the hand-painted shell below does not, because it writes `inner_html` blobs
+/// and plain markup. The switch exists so a spike can measure the failure; a deploy only
+/// sets it once the paint comes from that render.
+fn hydrate_marker() -> &'static str {
+    match std::env::var("NODUS_TRY_HYDRATE") {
+        Ok(value) if value.trim() == "1" => " data-hydrate",
+        _ => "",
+    }
+}
+
 fn page_with_style(
     assets: &Assets,
     title: &str,
@@ -742,6 +849,24 @@ fn page_with_style(
     island: Option<&str>,
     style: Option<&nodus_ui::session_style::SessionStyle>,
     noindex: bool,
+) -> String {
+    page_marked(assets, title, body, island, style, noindex, None)
+}
+
+/// The document envelope. `shell` is the shell seed when the body is a shell tree: it emits
+/// `#nodus-shell` and marks `#app` so the client hydrates the root the body came from.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the envelope takes the manifest, the document strings, and the two islands"
+)]
+fn page_marked(
+    assets: &Assets,
+    title: &str,
+    body: &str,
+    island: Option<&str>,
+    style: Option<&nodus_ui::session_style::SessionStyle>,
+    noindex: bool,
+    shell: Option<&str>,
 ) -> String {
     let stylesheet = match (&assets.stylesheet_css, &assets.stylesheet) {
         (Some(css), _) => format!("<style>{}</style>", css.replace("</style", "<\\/style")),
@@ -752,6 +877,14 @@ fn page_with_style(
         .map(|json| {
             format!(
                 "<script id=\"nodus-page\" type=\"application/json\">{}</script>",
+                json.replace("</", "<\\/")
+            )
+        })
+        .unwrap_or_default();
+    let shell_island = shell
+        .map(|json| {
+            format!(
+                "<script id=\"nodus-shell\" type=\"application/json\">{}</script>",
                 json.replace("</", "<\\/")
             )
         })
@@ -794,8 +927,9 @@ fn page_with_style(
              </script>\
            </head>\
            <body class=\"min-h-screen bg-base-200\">\
-             <div id=\"app\">{body}</div>\
+             <div id=\"app\"{hydrate}{shell_marker}>{body}</div>\
              {island}\
+             {shell_island}\
              {style_island}\
            </body>\
          </html>",
@@ -809,6 +943,16 @@ fn page_with_style(
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
         preload = preload,
+        hydrate = hydrate_marker(),
+        // Only a body that really is the shell tree may claim the shell root. The env gate
+        // still turns hydration off entirely: with no `data-hydrate`, the client swaps the
+        // paint out as it always did.
+        shell_marker = if shell.is_some() && !hydrate_marker().is_empty() {
+            " data-shell"
+        } else {
+            ""
+        },
+        shell_island = shell_island,
     )
 }
 
@@ -1085,6 +1229,38 @@ mod tests {
         // The island carries the reader, so a screen that asks the runtime who is signed
         // in gets the same answer the browser's store would give.
         assert!(html.contains("\"acct\":\"ada@misskey.test\""), "{html}");
+    }
+
+    #[test]
+    fn home_server_frame_paints_the_composer_body() {
+        // The composer is the browser's: the editor is wasm-only and arrives with the
+        // client, so the host draws the box it boots into. If that box is missing from the
+        // document, the first frame is a stand-in the browser has to replace wholesale.
+        let reader = Reader {
+            host: "misskey.test".to_owned(),
+            account_id: "9".to_owned(),
+            acct: "ada@misskey.test".to_owned(),
+            display_name: "Ada".to_owned(),
+            avatar: "https://cdn.test/ada.png".to_owned(),
+        };
+        let statuses = [status_by(
+            "ada@misskey.test",
+            "Ada",
+            "<p>first from my own server</p>",
+        )];
+        let html = home_with_style(&test_assets(), &reader, false, &statuses, None, None);
+
+        assert!(
+            html.contains("id=\"nodus-composer-body\""),
+            "the host does not paint the editor's box: {html}"
+        );
+        // The same nodes the browser's composer renders around it, so hydration adopts
+        // them instead of replacing them: the counter's limit and the post button.
+        assert!(html.contains("aria-label=\"Write a post\""), "{html}");
+        assert!(
+            html.contains("What's on your mind?") || html.contains("Post"),
+            "{html}"
+        );
     }
 
     fn has_staff_links(html: &str) -> bool {

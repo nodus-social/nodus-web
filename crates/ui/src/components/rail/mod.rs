@@ -96,7 +96,7 @@ impl std::fmt::Debug for ExtraDoors {
 ///
 /// Plain data rather than an SDK type: the view crate draws what it is handed, and the
 /// server, which has no SDK, hands it whatever the page already knew.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProfileCardData {
     /// What the account calls itself.
     pub display_name: String,
@@ -137,7 +137,7 @@ pub struct Group {
 /// such endpoint, so it cannot be evidence that a destination does not exist. Only a count
 /// turns the entry into a bell; every other answer leaves the layout's ordinary door in
 /// place, and the capability answer is the only thing allowed to remove it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NoticeDoor {
     /// Not asked yet, or no session: draw the ordinary entry.
     #[default]

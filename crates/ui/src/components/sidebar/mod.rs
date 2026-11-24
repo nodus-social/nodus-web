@@ -17,7 +17,7 @@ use crate::session_style::{
 };
 
 /// One line inside a card: a tag, a person, a post, a notification.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SidebarItem {
     /// The row's text, already plain (never HTML from a remote author).
     pub label: String,
@@ -55,7 +55,7 @@ impl SidebarItem {
 /// Empty is a legitimate answer and each card says so in its own words: an instance with
 /// nothing trending, a reader with no notifications, or a browser that has not fetched yet
 /// are three different silences, and the caption is what tells them apart.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SidebarData {
     /// The public timeline.
     pub live_feed: Vec<SidebarItem>,
