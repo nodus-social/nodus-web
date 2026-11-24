@@ -489,6 +489,9 @@ pub fn install_reactive_root() {
     feed_ui();
     posts::install();
     profile_media::install();
+    // The banner reader carries ProfilePage's "one read per account" guard, so minting it
+    // per render minted a fresh guard and a fresh request; one reader, created here.
+    profile_banners::install();
 }
 
 /// The revision signal: read it inside a view to re-render on SDK changes.

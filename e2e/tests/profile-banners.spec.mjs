@@ -105,3 +105,27 @@ test('a never-published account draws no banners and no error', async ({ page })
   await expect(page.locator('[data-profile-banner]')).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
 })
+
+test('the profile reads the published style once per load', async ({ page }) => {
+  // One document, one read. The page minted a fresh reader per render, so every render
+  // started with an empty "already asked for this account" guard and issued its own copy of
+  // this request (4, 3 and 4 across three loads); the reader is app-lifetime now and a
+  // second caller joins the read in flight.
+  const reads = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === `/api/v1/accounts/${account.id}/style_public`) {
+      reads.push(request.url())
+    }
+  })
+  await profileWithBanners(page, { json: published() })
+  await expect(page.locator('[data-profile-banner="left"]')).toBeVisible()
+  expect(reads, 'the published style is read once on the first load').toHaveLength(1)
+
+  // Three loads in one run: a count that holds once is not a count that holds.
+  for (const load of [2, 3]) {
+    await page.reload()
+    await hydrated(page)
+    await expect(page.locator('[data-profile-banner="left"]')).toBeVisible()
+    expect(reads, `the published style is read once on load ${load}`).toHaveLength(load)
+  }
+})
