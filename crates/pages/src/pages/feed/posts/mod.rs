@@ -90,6 +90,11 @@ fn status_of(item: &PostItem, body: String) -> Status {
             following_count: 0,
             statuses_count: 0,
             last_status_at: None,
+            // A recommendation never carries a move: the feed ranks posts, not
+            // account migrations, and offering a redirect here would point at an
+            // account the reader was not looking at.
+            moved_to: None,
+            also_known_as: Vec::new(),
         },
         favourites_count: u64::try_from(item.favourites_count).unwrap_or(0),
         reblogs_count: u64::try_from(item.reblogs_count).unwrap_or(0),
