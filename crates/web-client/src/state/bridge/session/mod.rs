@@ -407,28 +407,12 @@ const SSR_RELOADED: &str = "nodus-ssr-announced";
 /// invisible to this code — the point. If the deployment has no SSR host, the request
 /// 404s and nothing changes.
 fn announce_to_server(host: &str, token: &str) {
-    let body = serde_json::json!({ "host": host, "token": token }).to_string();
+    let (host, token) = (host.to_owned(), token.to_owned());
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
             return;
         };
-        let init = web_sys::RequestInit::new();
-        init.set_method("POST");
-        init.set_credentials(web_sys::RequestCredentials::SameOrigin);
-        init.set_body(&wasm_bindgen::JsValue::from_str(&body));
-        let Ok(request) = web_sys::Request::new_with_str_and_init("/api/session", &init) else {
-            return;
-        };
-        let _ = request.headers().set("content-type", "application/json");
-        let Ok(response) =
-            wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request)).await
-        else {
-            return;
-        };
-        let Ok(response) = response.dyn_into::<web_sys::Response>() else {
-            return;
-        };
-        if !response.ok() {
+        if !ensure_announced(&host, &token).await {
             return;
         }
         // Only reload when the client has not already adopted a session; otherwise
@@ -445,6 +429,35 @@ fn announce_to_server(host: &str, token: &str) {
         let _ = storage.set_item(SSR_RELOADED, "1");
         let _ = window.location().reload();
     });
+}
+
+/// Hands the session to the SSR host, and says whether the host accepted it.
+///
+/// [`announce_to_server`] is the boot-time verb: it spawns and may reload the page.
+/// This is the same request without either, for a caller that has to run another
+/// request after it — the style sync uses it to recover from a 401 that raced the
+/// sign-in's own announcement.
+pub(crate) async fn ensure_announced(host: &str, token: &str) -> bool {
+    let body = serde_json::json!({ "host": host, "token": token }).to_string();
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+    init.set_body(&wasm_bindgen::JsValue::from_str(&body));
+    let Ok(request) = web_sys::Request::new_with_str_and_init("/api/session", &init) else {
+        return false;
+    };
+    let _ = request.headers().set("content-type", "application/json");
+    let Ok(response) =
+        wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request)).await
+    else {
+        return false;
+    };
+    response
+        .dyn_into::<web_sys::Response>()
+        .is_ok_and(|response| response.ok())
 }
 
 /// Tells the SSR host to forget this browser's session.

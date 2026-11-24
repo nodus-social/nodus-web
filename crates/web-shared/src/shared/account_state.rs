@@ -56,6 +56,38 @@ pub const fn announce_should_reload(has_session: bool, already_reloaded: bool) -
     !has_session && !already_reloaded
 }
 
+/// What one `POST /api/session/style` answer asks the client to do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleSyncStep {
+    /// 2xx: the SSR host now holds the style.
+    Done,
+    /// 401 on the first answer: the host had not adopted this browser's session yet
+    /// (the announcement sent at sign-in was still in flight), so announce it again
+    /// and repeat the post exactly once.
+    AnnounceAndRetry,
+    /// Any other status, or a 401 that survived the announcement: the host's copy was
+    /// not saved, and repeating the post would not change that.
+    Failed,
+}
+
+/// The one sentence the editor shows when the host's copy stayed stale.
+pub const STYLE_NOT_ON_SITE: &str = "Your style is in this tab, but the site's copy was not \
+     saved, so other readers and the first paint still show the previous one.";
+
+/// Decides the single retry the style sync performs.
+///
+/// `attempt` counts the answers already given: 0 for the first post, 1 for the repeat.
+/// Only a 401 can earn the repeat, because that is the one status that means the session
+/// announcement has not reached the host yet; anything else is a refusal.
+#[must_use]
+pub const fn style_sync_step(attempt: u8, status: u16) -> StyleSyncStep {
+    match status {
+        200..=299 => StyleSyncStep::Done,
+        401 if attempt == 0 => StyleSyncStep::AnnounceAndRetry,
+        _ => StyleSyncStep::Failed,
+    }
+}
+
 /// Persisted identity metadata for one switchable account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountMeta {
@@ -335,5 +367,25 @@ mod tests {
         assert!(!announce_should_reload(true, true));
         assert!(announce_should_reload(false, false));
         assert!(!announce_should_reload(false, true));
+    }
+
+    #[test]
+    fn a_401_from_the_announcement_race_earns_exactly_one_retry() {
+        assert_eq!(style_sync_step(0, 401), StyleSyncStep::AnnounceAndRetry);
+        assert_eq!(style_sync_step(1, 200), StyleSyncStep::Done);
+    }
+
+    #[test]
+    fn a_second_401_is_a_failure_and_says_the_site_copy_was_not_saved() {
+        assert_eq!(style_sync_step(0, 401), StyleSyncStep::AnnounceAndRetry);
+        assert_eq!(style_sync_step(1, 401), StyleSyncStep::Failed);
+        assert!(STYLE_NOT_ON_SITE.contains("the site's copy was not saved"));
+        assert!(STYLE_NOT_ON_SITE.contains("first paint still show the previous one"));
+    }
+
+    #[test]
+    fn a_refusal_other_than_401_is_not_retried() {
+        assert_eq!(style_sync_step(0, 500), StyleSyncStep::Failed);
+        assert_eq!(style_sync_step(0, 403), StyleSyncStep::Failed);
     }
 }

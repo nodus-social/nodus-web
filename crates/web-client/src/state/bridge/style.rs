@@ -3,6 +3,7 @@
 //! and local fallback persistence).
 
 use std::cell::{Cell, RefCell};
+use std::future::Future;
 
 use leptos::prelude::*;
 use nodus_client_core::rest::{HttpRequest, Method};
@@ -12,12 +13,14 @@ use nodus_mastodon::rest::Transport as _;
 use nodus_ui::session_style::{
     ImageSlot, LibraryPicture, PictureTarget, STYLE_KEYS, SessionStyle, StyleEditor, UploadRequest,
 };
-use nodus_web::shared::account_state::{AccountCache, AccountKey};
+use nodus_web::shared::account_state::{
+    AccountCache, AccountKey, STYLE_NOT_ON_SITE, StyleSyncStep, style_sync_step,
+};
 use serde::Deserialize;
 use url::Url;
 use wasm_bindgen::JsCast as _;
 
-use super::{accounts, active_cache_key, instance_transport, revision};
+use super::{accounts, active_cache_key, instance_transport, revision, session_token};
 
 const STYLE_STORAGE_PREFIX: &str = "nodus.session_style.";
 
@@ -637,7 +640,7 @@ pub async fn refresh_active() -> Result<SessionStyle, String> {
     cache_put(&key, &fetched);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(fetched.clone());
-        sync_ssr_style(&key, &fetched).await;
+        let _ = sync_ssr_style(&key, &fetched).await;
     }
     Ok(fetched)
 }
@@ -716,7 +719,7 @@ pub async fn save_style(style: SessionStyle) -> Result<SessionStyle, String> {
     cache_put(&key, &clean);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(clean.clone());
-        sync_ssr_style(&key, &clean).await;
+        let _ = sync_ssr_style(&key, &clean).await;
     }
     // The account's own save has landed, so a refused publish must not throw it away: the
     // reader keeps their arrangement and the sentence says what is still missing.
@@ -755,7 +758,7 @@ pub async fn reset_style() -> Result<(), String> {
     cache_put(&key, &default);
     if active_cache_key().as_ref() == Some(&key) {
         style_rw().set(default.clone());
-        sync_ssr_style(&key, &default).await;
+        let _ = sync_ssr_style(&key, &default).await;
     }
     Ok(())
 }
@@ -795,29 +798,91 @@ fn normalized_host(host: &str) -> String {
     )
 }
 
-async fn sync_ssr_style(key: &AccountKey, style: &SessionStyle) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Ok(body) = serde_json::to_string(style) else {
-        return;
-    };
+/// Posts the style once, repeating it once when the answer is a 401.
+///
+/// A 401 means the SSR host has not adopted this browser's session yet — exactly the
+/// first call after sign-in, when the sign-in's own announcement is still in flight.
+/// Announcing again and repeating the post closes that race; a second 401, or any
+/// other non-2xx, is a real refusal and is reported as one.
+async fn sync_ssr_style_with<P, PF, A, AF>(mut post: P, mut announce: A) -> Result<(), String>
+where
+    P: FnMut() -> PF,
+    PF: Future<Output = Option<u16>>,
+    A: FnMut() -> AF,
+    AF: Future<Output = bool>,
+{
+    match post().await.map(|status| style_sync_step(0, status)) {
+        Some(StyleSyncStep::Done) => return Ok(()),
+        Some(StyleSyncStep::AnnounceAndRetry) => {}
+        None | Some(StyleSyncStep::Failed) => return Err(STYLE_NOT_ON_SITE.to_owned()),
+    }
+    if !announce().await {
+        return Err(STYLE_NOT_ON_SITE.to_owned());
+    }
+    match post().await.map(|status| style_sync_step(1, status)) {
+        Some(StyleSyncStep::Done) => Ok(()),
+        _ => Err(STYLE_NOT_ON_SITE.to_owned()),
+    }
+}
+
+/// One POST to the SSR host, or `None` when the browser could not make it at all.
+async fn post_style(body: &str, host: &str, account_id: &str) -> Option<u16> {
+    let window = web_sys::window()?;
     let init = web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_credentials(web_sys::RequestCredentials::SameOrigin);
-    init.set_body(&wasm_bindgen::JsValue::from_str(&body));
-    let Ok(request) = web_sys::Request::new_with_str_and_init("/api/session/style", &init) else {
-        return;
-    };
+    init.set_body(&wasm_bindgen::JsValue::from_str(body));
+    let request = web_sys::Request::new_with_str_and_init("/api/session/style", &init).ok()?;
     let headers = request.headers();
     let _ = headers.set("content-type", "application/json");
-    let _ = headers.set("x-nodus-host", &normalized_host(&key.0));
-    let _ = headers.set("x-nodus-account-id", &key.1);
-    if let Ok(response) =
-        wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request)).await
-    {
-        let _ = response.dyn_into::<web_sys::Response>();
+    let _ = headers.set("x-nodus-host", host);
+    let _ = headers.set("x-nodus-account-id", account_id);
+    let answer = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .ok()?;
+    let response = answer.dyn_into::<web_sys::Response>().ok()?;
+    Some(response.status())
+}
+
+/// Hands the active style to the SSR host, and tells the editor when it did not land.
+///
+/// The local copy is already in force, so a failed sync is not an error the caller
+/// should undo: it is one sentence in the notice channel saying that other readers and
+/// the next document load still see the previous style. The `Err` carries the same
+/// sentence for a caller that has to say something itself.
+async fn sync_ssr_style(key: &AccountKey, style: &SessionStyle) -> Result<(), String> {
+    let result = post_style_to_host(key, style).await;
+    if let Err(sentence) = &result {
+        notice().set(Some(sentence.clone()));
     }
+    result
+}
+
+async fn post_style_to_host(key: &AccountKey, style: &SessionStyle) -> Result<(), String> {
+    let Ok(body) = serde_json::to_string(style) else {
+        return Err(STYLE_NOT_ON_SITE.to_owned());
+    };
+    let host = normalized_host(&key.0);
+    let account_id = key.1.clone();
+    sync_ssr_style_with(
+        || {
+            let body = body.clone();
+            let host = host.clone();
+            let account_id = account_id.clone();
+            async move { post_style(&body, &host, &account_id).await }
+        },
+        || {
+            let host = host.clone();
+            let token = session_token();
+            async move {
+                let Some(token) = token else {
+                    return false;
+                };
+                super::session::ensure_announced(&host, &token).await
+            }
+        },
+    )
+    .await
 }
 
 /// Active account key helper exposed for UI editors that reset draft state on account switch.
@@ -832,7 +897,7 @@ pub fn current_account_key() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::future::Future;
     use std::rc::Rc;
@@ -845,7 +910,7 @@ mod tests {
     use serde_json::json;
     use url::Url;
 
-    use super::{UploadRefusal, uploaded_picture};
+    use super::{STYLE_NOT_ON_SITE, UploadRefusal, sync_ssr_style_with, uploaded_picture};
 
     /// An instance that answers from a queue, in the style of the bridge's other fakes.
     #[derive(Clone, Default)]
@@ -962,5 +1027,66 @@ mod tests {
             refusal.message(),
             "The instance did not name the picture, so it could not be placed."
         );
+    }
+
+    /// Runs the retry decision with a queued status per post, as the browser would read
+    /// them from the response.
+    fn sync_with_answers(
+        answers: Vec<Option<u16>>,
+        announce_succeeds: bool,
+    ) -> (Result<(), String>, u32, u32) {
+        let posts = Rc::new(Cell::new(0_u32));
+        let announcements = Rc::new(Cell::new(0_u32));
+        let answers: Rc<RefCell<VecDeque<Option<u16>>>> = Rc::new(RefCell::new(answers.into()));
+        let (post_calls, announce_calls) = (Rc::clone(&posts), Rc::clone(&announcements));
+        let result = block_on(sync_ssr_style_with(
+            || {
+                post_calls.set(post_calls.get() + 1);
+                core::future::ready(
+                    answers
+                        .borrow_mut()
+                        .pop_front()
+                        .expect("the test queued one answer per post"),
+                )
+            },
+            || {
+                announce_calls.set(announce_calls.get() + 1);
+                core::future::ready(announce_succeeds)
+            },
+        ));
+        (result, posts.get(), announcements.get())
+    }
+
+    #[test]
+    fn a_401_is_announced_once_and_the_post_repeated_once() {
+        let (result, posts, announcements) = sync_with_answers(vec![Some(401), Some(200)], true);
+
+        assert_eq!(result, Ok(()), "the second post is what saved the style");
+        assert_eq!(posts, 2, "the post is repeated exactly once");
+        assert_eq!(announcements, 1, "the session is announced exactly once");
+    }
+
+    #[test]
+    fn two_401s_leave_the_site_copy_unsaved_and_say_so() {
+        let (result, posts, announcements) = sync_with_answers(vec![Some(401), Some(401)], true);
+
+        assert_eq!(result, Err(STYLE_NOT_ON_SITE.to_owned()));
+        assert_eq!(posts, 2, "the retry is not a loop");
+        assert_eq!(announcements, 1, "the session is announced exactly once");
+        let sentence = result.expect_err("both answers refused the style");
+        assert!(
+            sentence.contains("the site's copy was not saved")
+                && sentence.contains("first paint still show the previous one"),
+            "the sentence names what did not happen: {sentence}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_other_than_401_is_not_retried() {
+        let (result, posts, announcements) = sync_with_answers(vec![Some(500)], true);
+
+        assert_eq!(result, Err(STYLE_NOT_ON_SITE.to_owned()));
+        assert_eq!(posts, 1, "only a 401 means the session is missing");
+        assert_eq!(announcements, 0, "nothing to announce for a real refusal");
     }
 }
