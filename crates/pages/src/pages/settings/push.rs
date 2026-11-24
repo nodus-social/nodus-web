@@ -175,22 +175,28 @@ pub fn BrowserPushCard(
 mod tests {
     use super::*;
 
+    /// A `<For>` inside the card needs a reactive owner, and a test that builds the view
+    /// outside one panics in `for_loop` with "no reactive owner" — the same rule the shell
+    /// documents: a reactive value needs something that outlives it.
     fn painted(supported: bool, keyed: bool, subscribed: bool, error: Option<&str>) -> String {
-        view! {
-            <BrowserPushCard
-                supported=Signal::stored(supported)
-                keyed=Signal::stored(keyed)
-                subscribed=Signal::stored(subscribed)
-                working=Signal::stored(false)
-                alerts=Signal::stored(
-                    PushKind::ALL.iter().map(|kind| (*kind, true)).collect::<Vec<_>>(),
-                )
-                error=Signal::stored(error.map(str::to_owned))
-                on_toggle=Some(Callback::new(|_| {}))
-                on_alert_change=Some(Callback::new(|_| {}))
-            />
-        }
-        .to_html()
+        let owner = Owner::new();
+        owner.with(|| {
+            view! {
+                <BrowserPushCard
+                    supported=Signal::stored(supported)
+                    keyed=Signal::stored(keyed)
+                    subscribed=Signal::stored(subscribed)
+                    working=Signal::stored(false)
+                    alerts=Signal::stored(
+                        PushKind::ALL.iter().map(|kind| (*kind, true)).collect::<Vec<_>>(),
+                    )
+                    error=Signal::stored(error.map(str::to_owned))
+                    on_toggle=Some(Callback::new(|_| {}))
+                    on_alert_change=Some(Callback::new(|_| {}))
+                />
+            }
+            .to_html()
+        })
     }
 
     #[test]
@@ -203,8 +209,14 @@ mod tests {
     #[test]
     fn a_supported_browser_is_offered_the_toggle() {
         let html = painted(true, true, false, None);
-        assert!(!html.contains("cannot receive push notifications"), "{html}");
-        assert!(html.contains("Push notifications in this browser"), "{html}");
+        assert!(
+            !html.contains("cannot receive push notifications"),
+            "{html}"
+        );
+        assert!(
+            html.contains("Push notifications in this browser"),
+            "{html}"
+        );
         assert!(!html.contains("Notify me about"), "{html}");
     }
 
@@ -212,7 +224,10 @@ mod tests {
     fn a_client_with_no_push_key_is_told_so_and_offered_no_toggle() {
         let html = painted(true, false, false, None);
         assert!(html.contains("did not publish a push key"), "{html}");
-        assert!(!html.contains("Push notifications in this browser"), "{html}");
+        assert!(
+            !html.contains("Push notifications in this browser"),
+            "{html}"
+        );
         assert!(!html.contains("Notify me about"), "{html}");
     }
 
