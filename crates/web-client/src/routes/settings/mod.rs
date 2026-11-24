@@ -18,6 +18,7 @@ use crate::state::bridge::{revision, style as bridge_style, with_sdk};
 
 mod accounts;
 mod export;
+mod media;
 mod people;
 mod preferences;
 mod refusal;
@@ -46,6 +47,7 @@ use export::ExportCard;
 use feeds::FeedsCard;
 use filters::FiltersCard;
 use instance::InstanceCard;
+use media::MediaLibraryScreen;
 use moderation::ModerationLinks;
 use people::{SettingsPeople, Which};
 use preferences::PreferencesCard;
@@ -160,6 +162,10 @@ pub fn SettingsBody(section: SettingsSection) -> impl IntoView {
 
             <Show when=move || section == SettingsSection::Export>
                 <ExportCard/>
+            </Show>
+
+            <Show when=move || section == SettingsSection::Media>
+                <MediaLibraryScreen/>
             </Show>
 
             <Show when=move || section == SettingsSection::Instance>

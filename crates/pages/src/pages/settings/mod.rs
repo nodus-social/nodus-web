@@ -15,6 +15,7 @@ pub mod form;
 pub mod instance;
 pub mod instance_card;
 pub mod lists;
+pub mod media;
 pub mod nav;
 pub mod notifications;
 pub mod page;

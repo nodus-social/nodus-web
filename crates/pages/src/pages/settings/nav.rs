@@ -25,11 +25,12 @@ pub enum SettingsSection {
     Sessions,
     TwoFactor,
     Export,
+    Media,
     Instance,
 }
 
 impl SettingsSection {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Account,
         Self::Profile,
         Self::Appearance,
@@ -44,6 +45,7 @@ impl SettingsSection {
         Self::Sessions,
         Self::TwoFactor,
         Self::Export,
+        Self::Media,
         Self::Instance,
     ];
 
@@ -63,6 +65,7 @@ impl SettingsSection {
             Self::Sessions => "sessions",
             Self::TwoFactor => "two-factor",
             Self::Export => "export",
+            Self::Media => "media",
             Self::Instance => "instance",
         }
     }
@@ -83,6 +86,7 @@ impl SettingsSection {
             Self::Sessions => "Sessions",
             Self::TwoFactor => "Two-factor",
             Self::Export => "Export",
+            Self::Media => "Media",
             Self::Instance => "Instance",
         }
     }
@@ -103,6 +107,7 @@ impl SettingsSection {
             Self::Sessions => "Browsers and apps signed in to your account.",
             Self::TwoFactor => "A second proof when you sign in.",
             Self::Export => "A copy of what this instance holds about you.",
+            Self::Media => "Every picture you uploaded, and what still holds each one.",
             Self::Instance => "What this server says about itself, and this app's sync and feeds.",
         }
     }
@@ -134,7 +139,26 @@ impl SettingsSection {
             Self::Sessions => Some(Feature::Sessions),
             Self::TwoFactor => Some(Feature::TwoFactor),
             Self::Export => Some(Feature::Exports),
+            // The media library is served (`GET|DELETE /api/v1/media/library`) and the
+            // handshake publishes no name for it: the 73 in
+            // `nodus-backend/crates/api/src/meta.rs` include `drive` and `moderation_media`
+            // and neither describes this screen. There is nothing to gate on, so the
+            // section claims no name — and [`Self::offered`] keeps it out of the strip
+            // until one is published, rather than promising a page no server announced.
+            Self::Media => None,
         }
+    }
+
+    /// Whether the strip offers this section as a tab.
+    ///
+    /// The mirror of [`Self::drawn`], for a section with no published gate: a tab is a
+    /// promise that the page behind it works on this server, and the media library's page
+    /// asks `/api/v1/media/library`, which no capability name announces. The section keeps
+    /// its address — a settings section is a link, and the screen itself is written and
+    /// tested — but the strip does not draw it until the name exists.
+    #[must_use]
+    pub const fn offered(self) -> bool {
+        !matches!(self, Self::Media)
     }
 
     /// Whether a paint with this answer should draw the section.
@@ -168,6 +192,7 @@ impl SettingsSection {
             Self::Sessions => "This instance does not serve a list of signed-in sessions.",
             Self::TwoFactor => "This instance does not serve two-factor authentication.",
             Self::Export => "This instance does not export account data.",
+            Self::Media => "This instance does not serve a media library.",
         }
     }
 
@@ -193,7 +218,8 @@ pub fn SettingsTabs(
                     SettingsSection::ALL
                         .into_iter()
                         .filter(|item| {
-                            item.drawn(at.as_ref().map(|at| at.get()).as_ref())
+                            item.offered()
+                                && item.drawn(at.as_ref().map(|at| at.get()).as_ref())
                         })
                         .collect::<Vec<_>>()
                 }

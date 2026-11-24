@@ -230,6 +230,11 @@ pub fn SettingsScreen(runtime: Arc<dyn Runtime>, section: SettingsSection) -> im
                         "Your export opens as one JSON document once the app is running."
                     </Note>
                 }.into_any(),
+                SettingsSection::Media => view! {
+                    <Note class="text-sm opacity-70">
+                        "Your uploaded pictures are read in the app, once it is running."
+                    </Note>
+                }.into_any(),
                 SettingsSection::Instance => view! {
                     <div class="flex flex-col gap-4">
                         <InstanceCard info=no_info failed=Signal::derive(|| false)/>

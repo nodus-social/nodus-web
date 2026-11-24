@@ -126,6 +126,27 @@ fn the_mastodon_baseline_draws_the_six_it_really_serves() {
     }
 }
 
+/// The media library has an address and no tab: the handshake publishes no name for
+/// `/api/v1/media/library`, so a tab would promise a page no server announced. A direct
+/// visit still reaches the screen, which is why the section keeps its slug.
+#[test]
+fn the_media_library_is_reached_by_its_address_and_not_offered_as_a_tab() {
+    assert_eq!(SettingsSection::of("media"), SettingsSection::Media);
+    assert!(
+        !SettingsSection::Media.offered(),
+        "no published name to gate a tab"
+    );
+    assert!(
+        SettingsSection::Media.drawn(None),
+        "a direct visit still paints the page"
+    );
+    for section in SettingsSection::ALL {
+        if section != SettingsSection::Media {
+            assert!(section.offered(), "{section:?}");
+        }
+    }
+}
+
 #[test]
 fn every_section_has_a_slug_that_round_trips() {
     for section in SettingsSection::ALL {
