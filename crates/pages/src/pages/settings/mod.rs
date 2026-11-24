@@ -20,6 +20,7 @@ pub mod nav;
 pub mod notifications;
 pub mod page;
 pub mod preferences;
+pub mod push;
 pub mod profile;
 pub mod sessions;
 pub mod sync;

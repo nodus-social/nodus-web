@@ -162,6 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/sw.js", get(service_worker))
         .route("/api/session", get(whoami).post(sign_in).delete(sign_out))
         .route("/api/session/style", post(update_session_style))
         .route("/public-api/status/{host}/{id}", get(public_api::status))
@@ -332,6 +333,21 @@ async fn shutdown() {
 
 async fn healthz() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
+}
+
+/// Serves the service worker for browser push notifications.
+///
+/// The worker must be served at `/sw.js` with scope `/` and the correct headers to allow
+/// registration. It handles `push` events from the backend and `notificationclick` events.
+async fn service_worker() -> impl IntoResponse {
+    const SW_CONTENT: &str = include_str!("../assets/sw.js");
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript"),
+            (header::HeaderName::from_static("service-worker-allowed"), "/"),
+        ],
+        SW_CONTENT,
+    )
 }
 
 /// The session cookie from a request, if it carries one.

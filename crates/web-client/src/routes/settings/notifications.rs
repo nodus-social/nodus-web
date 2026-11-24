@@ -8,17 +8,114 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use nodus_pages::Feature;
 use nodus_pages::Note;
 use nodus_pages::pages::settings::notifications::{
     NotificationPolicyCard, PolicyKind, PolicyRow, PolicyValue,
 };
+use nodus_pages::pages::settings::push::{BrowserPushCard, PushKind};
 
 use crate::state::alive::Alive;
-use crate::state::bridge::{self, settings as policy};
+use crate::state::bridge::{self, capabilities, settings as policy};
 
-/// What this instance does with each kind of notification, edited in place.
+/// Browser push notifications and notification policy settings.
 #[component]
 pub fn NotificationsCard() -> impl IntoView {
+    let at = capabilities::serves();
+    let push_feature = Signal::derive(move || at.get().supports(Feature::Push));
+
+    let (push_supported, set_push_supported) = signal(bridge::push::supported());
+    let (push_subscribed, set_push_subscribed) = signal(false);
+    let (push_working, set_push_working) = signal(false);
+    let (push_alerts, set_push_alerts) = signal(
+        PushKind::ALL
+            .into_iter()
+            .map(|kind| (kind, true))
+            .collect::<Vec<_>>(),
+    );
+    let (push_error, set_push_error) = signal(None::<String>);
+
+    // The server's row decides what the card says: it is the side that delivers, and a
+    // browser subscription the server has no row for receives nothing. One read, once the
+    // capability answer has landed.
+    Effect::new(move |_| {
+        if !push_feature.get() {
+            return;
+        }
+        let supported = bridge::push::supported();
+        set_push_supported.set(supported);
+        if !supported {
+            return;
+        }
+        spawn_local(async move {
+            match bridge::push::read().await {
+                Ok(Some(subscription)) => {
+                    set_push_subscribed.set(true);
+                    set_push_alerts.set(
+                        PushKind::ALL
+                            .into_iter()
+                            .map(|kind| (kind, subscription.alerts.get(kind.wire())))
+                            .collect(),
+                    );
+                }
+                Ok(None) => set_push_subscribed.set(false),
+                // A read that failed says nothing about the subscription: leave the card off
+                // rather than offering a toggle whose first request would repeat the failure.
+                Err(message) => set_push_error.set(Some(message)),
+            }
+        });
+    });
+
+    let on_push_toggle = Callback::new(move |enabled: bool| {
+        set_push_working.set(true);
+        set_push_error.set(None);
+        spawn_local(async move {
+            let outcome = if enabled {
+                bridge::push::subscribe(bridge::push::Alerts::default()).await
+            } else {
+                bridge::push::unsubscribe().await
+            };
+            match outcome {
+                Ok(()) => {
+                    set_push_subscribed.set(enabled);
+                    set_push_alerts.set(
+                        PushKind::ALL
+                            .into_iter()
+                            .map(|kind| (kind, enabled))
+                            .collect(),
+                    );
+                }
+                // The browser's refusal and the server's sentence both land here, in place.
+                Err(message) => set_push_error.set(Some(message)),
+            }
+            set_push_working.set(false);
+        });
+    });
+
+    let on_push_alert_change = Callback::new(move |(kind, enabled): (PushKind, bool)| {
+        let mut next = bridge::push::Alerts::default();
+        for (other, value) in push_alerts.get_untracked() {
+            next.set(other.wire(), value);
+        }
+        next.set(kind.wire(), enabled);
+        set_push_alerts.update(|rows| {
+            if let Some(row) = rows.iter_mut().find(|(other, _)| *other == kind) {
+                row.1 = enabled;
+            }
+        });
+        spawn_local(async move {
+            if let Err(message) = bridge::push::update(next).await {
+                set_push_error.set(Some(message));
+                set_push_alerts.update(|rows| {
+                    if let Some(row) = rows.iter_mut().find(|(other, _)| *other == kind) {
+                        row.1 = !enabled;
+                    }
+                });
+            }
+        });
+    });
+
+    // Notification policy state
     let advertised = bridge::feature("notification_settings");
     let alive = Alive::new();
     let (rows, set_rows) = signal(Vec::<PolicyRow>::new());
@@ -96,10 +193,23 @@ pub fn NotificationsCard() -> impl IntoView {
         );
     });
 
+    let push_error_text: Signal<Option<String>> = push_error.into();
     let policy_rows: Signal<Vec<PolicyRow>> = rows.into();
     let policy_saved: Signal<bool> = saved.into();
 
     view! {
+        <Show when=move || push_feature.get()>
+            <BrowserPushCard
+                supported=Signal::from(push_supported)
+                subscribed=Signal::from(push_subscribed)
+                working=Signal::from(push_working)
+                alerts=Signal::from(push_alerts)
+                error=push_error_text
+                on_toggle=Some(on_push_toggle)
+                on_alert_change=Some(on_push_alert_change)
+            />
+        </Show>
+
         <Show when=move || !advertised.get() || missing.get()>
             <Note class="text-sm opacity-70">
                 "This instance does not publish notification settings."
