@@ -168,7 +168,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
     // is derived from the revision signal rather than read once at construction. A profile
     // opened by a visitor never grows the reader's controls when a later session arrives
     // for a different account.
-    let own_fields = Signal::derive(move || {
+    let own_profile = Signal::derive(move || {
         runtime.get_value().revision().get();
         runtime
             .get_value()
@@ -176,7 +176,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
             .is_some_and(|session| session.account_id == page_id.get_value())
     });
     let fields = Signal::derive(move || {
-        if !own_fields.get() {
+        if !own_profile.get() {
             return Vec::new();
         }
         account
@@ -206,7 +206,7 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
     view! {
         {move || account.get().map(|profile| {
             let id = profile.id.clone();
-            let editor = own_fields
+            let editor = own_profile
                 .get()
                 .then_some(available_editor)
                 .flatten()
@@ -220,7 +220,9 @@ pub fn AccountScreen(runtime: Arc<dyn Runtime>, id: String, card: CardRenderer) 
                     relationship=relationship.get()
                     statuses=statuses
                     show_statuses=tab.get() == Tab::Posts
-                    show_verbs=relationship.get().is_some()
+                    // Nobody follows, mutes or blocks themselves: the instance's answer
+                    // about a relationship with one's own account is not an offer to act.
+                    show_verbs=relationship.get().is_some() && !own_profile.get()
                     tabs=tabs.clone()
                     after=after.clone()
                     card=card.get_value()
@@ -317,7 +319,7 @@ mod tests {
     use std::sync::Arc;
 
     use leptos::prelude::{Callback, IntoAny as _, Owner, RenderHtml as _, Signal};
-    use nodus_client_core::model::{Account, Status};
+    use nodus_client_core::model::{Account, Relationship, Status};
     use nodus_ui::session_style::BannerRegionKind;
 
     use super::{AccountScreen, AccountScreenProps};
@@ -421,6 +423,9 @@ mod tests {
     struct OwnProfileRuntime {
         fields: Vec<SdkField>,
         message: Option<Result<String, String>>,
+        relationship: Option<Relationship>,
+        /// The account the session belongs to; `42` is the profile the screen opens.
+        viewer: &'static str,
     }
 
     impl Runtime for OwnProfileRuntime {
@@ -452,9 +457,13 @@ mod tests {
         fn session(&self) -> Option<SessionView> {
             Some(SessionView {
                 host: "stub.instance".to_owned(),
-                account_id: "42".to_owned(),
+                account_id: self.viewer.to_owned(),
                 acct: "alice".to_owned(),
             })
+        }
+
+        fn relationship(&self, id: &str) -> Option<Relationship> {
+            (id == "42").then(|| self.relationship.clone()).flatten()
         }
 
         fn profile_editor(&self) -> Option<ProfileEditor> {
@@ -486,18 +495,44 @@ mod tests {
     }
 
     fn render_own_profile(fields: Vec<SdkField>) -> String {
+        render_own_profile_with(fields, None)
+    }
+
+    fn render_own_profile_with(
+        fields: Vec<SdkField>,
+        relationship: Option<Relationship>,
+    ) -> String {
         let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
         Owner::new().with(|| {
             AccountScreen(AccountScreenProps {
                 runtime: Arc::new(OwnProfileRuntime {
                     fields,
                     message: None,
+                    relationship,
+                    viewer: "42",
                 }),
                 id: "42".to_owned(),
                 card,
             })
             .to_html()
         })
+    }
+
+    /// A relationship the instance reports without any flag set: the state in which every
+    /// verb would offer to follow, mute or block.
+    fn plain_relationship() -> Relationship {
+        Relationship {
+            id: nodus_client_core::model::LocalId("42".to_owned()),
+            following: false,
+            requested: false,
+            followed_by: false,
+            blocking: false,
+            blocked_by: false,
+            muting: false,
+            muting_notifications: false,
+            domain_blocking: false,
+            endorsed: false,
+        }
     }
 
     #[test]
@@ -558,6 +593,8 @@ mod tests {
                 runtime: Arc::new(OwnProfileRuntime {
                     fields: Vec::new(),
                     message,
+                    relationship: None,
+                    viewer: "42",
                 }),
                 id: "42".to_owned(),
                 card,
@@ -569,6 +606,45 @@ mod tests {
             html.contains("The instance refused that picture."),
             "{html}"
         );
+    }
+
+    #[test]
+    fn the_owner_sees_no_relationship_verbs_on_their_own_profile() {
+        // The instance answers a relationship for one's own account like any other, and
+        // every flag is false, so an ungated header would offer Follow, Mute and Block.
+        let html = render_own_profile_with(Vec::new(), Some(plain_relationship()));
+        for label in ["Follow", "Mute", "Block"] {
+            assert!(
+                !html.contains(&format!(">{label}</button>")),
+                "the owner must not be offered {label} on themselves: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_accounts_profile_still_offers_its_verbs() {
+        // The same relationship, viewed by someone who is not that account: the gate hides
+        // the owner's own verbs and nothing else.
+        let card: CardRenderer = Arc::new(|_status: Status| ().into_any());
+        let html = Owner::new().with(|| {
+            AccountScreen(AccountScreenProps {
+                runtime: Arc::new(OwnProfileRuntime {
+                    fields: Vec::new(),
+                    message: None,
+                    relationship: Some(plain_relationship()),
+                    viewer: "7",
+                }),
+                id: "42".to_owned(),
+                card,
+            })
+            .to_html()
+        });
+        for label in ["Follow", "Mute", "Block"] {
+            assert!(
+                html.contains(&format!(">{label}</button>")),
+                "a signed-in reader must be offered {label}: {html}"
+            );
+        }
     }
 
     #[test]
