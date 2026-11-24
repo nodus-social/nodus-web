@@ -835,6 +835,24 @@ fn page(assets: &Assets, title: &str, body: &str, island: Option<&str>, noindex:
 /// the promise; the hand-painted shell below does not, because it writes `inner_html` blobs
 /// and plain markup. The switch exists so a spike can measure the failure; a deploy only
 /// sets it once the paint comes from that render.
+/// The two attributes `#app` may carry, and the reason they are decided together.
+///
+/// `data-hydrate` is a promise about `#app`'s CHILDREN: that they are the node sequence the
+/// client's own view renders. So it follows the body that produced them (`shell`), not the
+/// environment switch — a hand-painted document under the same switch keeps it off, because
+/// the client would otherwise walk markup no Leptos tree ever rendered and fail to adopt a
+/// page that used to work. `data-shell` names the root the seed belongs to, so it can only
+/// appear beside `data-hydrate`.
+///
+/// Pure on purpose: the switch is read at the call site, so this can be tested without
+/// mutating the process environment.
+fn hydration_attributes(from_shell: bool, gated: bool) -> (&'static str, &'static str) {
+    match (from_shell, gated) {
+        (true, true) => (" data-hydrate", " data-shell"),
+        _ => ("", ""),
+    }
+}
+
 fn hydrate_marker() -> &'static str {
     match std::env::var("NODUS_TRY_HYDRATE") {
         Ok(value) if value.trim() == "1" => " data-hydrate",
@@ -943,21 +961,28 @@ fn page_marked(
         script = escape(&assets.script),
         wasm = escape(&assets.wasm),
         preload = preload,
-        hydrate = hydrate_marker(),
-        // Only a body that really is the shell tree may claim the shell root. The env gate
-        // still turns hydration off entirely: with no `data-hydrate`, the client swaps the
-        // paint out as it always did.
-        shell_marker = if shell.is_some() && !hydrate_marker().is_empty() {
-            " data-shell"
-        } else {
-            ""
-        },
+        hydrate = hydration_attributes(shell.is_some(), !hydrate_marker().is_empty()).0,
+        shell_marker = hydration_attributes(shell.is_some(), !hydrate_marker().is_empty()).1,
         shell_island = shell_island,
     )
 }
 
 #[cfg(test)]
 mod tests {
+    /// The marker is a promise about `#app`'s children, so a body the shell did not render
+    /// never claims it — even when the switch that turns hydration on is set.
+    #[test]
+    fn a_hand_painted_document_never_claims_hydration() {
+        assert_eq!(hydration_attributes(false, true), ("", ""));
+        assert_eq!(hydration_attributes(false, false), ("", ""));
+        // And the shell body only claims it when the switch allows hydration at all.
+        assert_eq!(hydration_attributes(true, false), ("", ""));
+        assert_eq!(
+            hydration_attributes(true, true),
+            (" data-hydrate", " data-shell")
+        );
+    }
+
     use nodus_client_core::model::{Account, CustomEmoji, Status, Visibility};
 
     use super::*;
