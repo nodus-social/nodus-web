@@ -210,11 +210,14 @@ pub(crate) async fn read_page_with_style(
             .await
             .map(|items| {
                 let reader = document::Reader::of_handle(acct);
+                let (staff, notices) = document::shell_answers(&reader, staff);
                 let seed = nodus_shell::ShellSeed {
                     signed_in: true,
                     path: path.to_owned(),
                     profile: Some(reader.card()),
                     style: style.cloned(),
+                    staff,
+                    notices,
                     ..nodus_shell::ShellSeed::default()
                 };
                 let runtime = StaticRuntime::lists(items.clone());
@@ -226,6 +229,8 @@ pub(crate) async fn read_page_with_style(
                         card: card(),
                         header: None,
                         on_home: None,
+                        staff: None,
+                        notices: None,
                     })
                 });
                 document::page_of_shell(

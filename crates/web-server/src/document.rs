@@ -252,47 +252,44 @@ fn staff_door_served(
     at.is_none_or(|at| at.knows_extensions() && admits(Some(at), surface))
 }
 
+/// The staff and notice answers a shell seed carries for `reader`.
+///
+/// The capability answer is the one the hand-painted chrome reads, gated the same way, and
+/// `staff` is the role answer the caller already resolved — so the adopted tree draws exactly
+/// the doors the paint drew, and the browser's own probes then take the same three inputs
+/// over. Notices are seeded as "not asked yet": the unread count is a browser read, and that
+/// is the state both paints draw the same way.
+pub(crate) fn shell_answers(
+    reader: &Reader,
+    staff: bool,
+) -> (nodus_shell::StaffDoors, Option<nodus_ui::NoticeDoor>) {
+    use nodus_ui::capabilities::Surface;
+
+    let at = crate::capabilities::answer_for(&reader.host);
+    (
+        nodus_shell::StaffDoors {
+            moderation: staff_door_served(at.as_ref(), Surface::Moderation),
+            administration: staff_door_served(at.as_ref(), Surface::Admin),
+            eligible: staff,
+        },
+        Some(nodus_ui::NoticeDoor::Unknown),
+    )
+}
+
 /// The two doors a moderator has, each already filtered by the capability answer.
 ///
 /// The booleans are the same ones that decided whether the card is drawn at all, so the
-/// heading and the rows below it cannot disagree about which doors survived the gate.
+/// heading and the rows below it cannot disagree about which doors survived the gate. The
+/// rows themselves come from `nodus_shell::staff_doors`, the one the adopted shell tree
+/// draws, so the painted card and the hydrated one are the same nodes.
 fn staff_doors(path: &str, moderation: bool, administration: bool) -> leptos::prelude::AnyView {
-    imperative::rail_rows(path, moderation, administration)
-}
+    use leptos::prelude::Signal;
 
-/// Markup for the extra rail rows, kept beside the frame so both come from one place.
-mod imperative {
-    use leptos::prelude::*;
-
-    /// The moderation and administration rows, each only when its surface is served.
-    #[must_use]
-    pub fn rail_rows(path: &str, moderation: bool, administration: bool) -> AnyView {
-        let path = path.to_owned();
-        view! {
-            {moderation.then(|| view! {
-                <nodus_ui::RailEntry
-                    label="Moderation"
-                    href="/moderation"
-                    hint="The queue, the accounts and what the server allows"
-                    icon=nodus_ui::icons::Icon::Shield
-                    active=Signal::derive({
-                        let path = path.clone();
-                        move || nodus_ui::within("/moderation", &path)
-                    })
-                />
-            })}
-            {administration.then(|| view! {
-                <nodus_ui::RailEntry
-                    label="Administration"
-                    href="/admin"
-                    hint="What this instance publishes and allows"
-                    icon=nodus_ui::icons::Icon::Globe
-                    active=Signal::derive(move || nodus_ui::within("/admin", &path))
-                />
-            })}
-        }
-        .into_any()
-    }
+    nodus_shell::staff_doors(
+        path,
+        Signal::stored(moderation),
+        Signal::stored(administration),
+    )
 }
 
 #[expect(
@@ -448,11 +445,14 @@ pub fn home_with_style(
         capabilities: capabilities_island(&reader.host),
     })
     .unwrap_or_else(|_| "{\"which\":\"home\",\"statuses\":[],\"cursor\":null}".to_owned());
+    let (staff, notices) = shell_answers(reader, staff);
     let seed = nodus_shell::ShellSeed {
         signed_in: true,
         path: "/home".to_owned(),
         profile: Some(reader.card()),
         style: style.cloned(),
+        staff,
+        notices,
         ..nodus_shell::ShellSeed::default()
     };
     let runtime =
@@ -481,6 +481,8 @@ pub fn home_with_style(
             card,
             header: Some(header),
             on_home: None,
+            staff: None,
+            notices: None,
         })
         .to_html()
     });
@@ -1350,6 +1352,57 @@ mod tests {
         assert!(both.contains("data-nav-rail-doors"), "{both}");
         assert!(both.contains("href=\"/moderation\""), "{both}");
         assert!(both.contains("href=\"/admin\""), "{both}");
+    }
+
+    #[test]
+    fn the_shell_seed_carries_the_staff_answer_the_paint_used() {
+        // The adopted tree is handed `#nodus-shell`, and the door it draws comes from that
+        // seed until the browser's own probes answer. So the seed has to carry the same
+        // answer the hand-painted chrome applies: the capability row decides whether the
+        // surface is served at all, the resolved role decides whether this account sees it.
+        use nodus_ui::components::rail::NoticeDoor;
+
+        let host = "seeded-staff.test";
+        crate::capabilities::remember_for_test(
+            host,
+            nodus_ui::capabilities::Capabilities::from_parts(
+                "0.1.0",
+                &["admin".to_owned(), "moderation".to_owned()],
+            ),
+        );
+        let reader = Reader::of_handle(&format!("mod@{host}"));
+
+        let (doors, notices) = shell_answers(&reader, true);
+        assert!(doors.moderation_door(), "{doors:?}");
+        assert!(doors.administration_door(), "{doors:?}");
+        assert_eq!(notices, Some(NoticeDoor::Unknown));
+
+        // The role is the account's fact, not the instance's.
+        let (without_role, _) = shell_answers(&reader, false);
+        assert!(!without_role.drawn(), "{without_role:?}");
+
+        // And a surface the answer omits is not a door, whatever the role says.
+        let absent_host = "seeded-no-surfaces.test";
+        crate::capabilities::remember_for_test(
+            absent_host,
+            nodus_ui::capabilities::Capabilities::from_parts("0.1.0", &["drive".to_owned()]),
+        );
+        let (absent, _) = shell_answers(&Reader::of_handle(&format!("mod@{absent_host}")), true);
+        assert!(!absent.drawn(), "{absent:?}");
+
+        // The document is the only channel: whatever the seed holds is what the browser
+        // reads back, so the answer has to survive the `#nodus-shell` JSON.
+        let seed = nodus_shell::ShellSeed {
+            signed_in: true,
+            path: "/home".to_owned(),
+            staff: doors,
+            notices,
+            ..nodus_shell::ShellSeed::default()
+        };
+        let json = serde_json::to_string(&seed).expect("seed");
+        let read_back: nodus_shell::ShellSeed = serde_json::from_str(&json).expect("seed");
+        assert_eq!(read_back.staff, doors);
+        assert_eq!(read_back.notices, notices);
     }
 
     #[test]

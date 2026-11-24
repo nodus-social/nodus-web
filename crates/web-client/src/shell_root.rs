@@ -42,6 +42,47 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
         view! { <crate::routes::home::TimelineHeader/> }.into_any()
     });
 
+    // The document answered the staff and notice questions so its paint could draw them; the
+    // browser asks the same questions itself, and only its answers may change the adopted
+    // tree. Both start at the seed's value, so the first render is the paint's, and an effect
+    // (which runs after the mount) hands them to the live answer — which is how a refused
+    // role read still closes the doors and a capability row that omits a surface still takes
+    // it away.
+    let staff = RwSignal::new(seed.staff);
+    let notices = RwSignal::new(seed.notices);
+    #[cfg(feature = "admin")]
+    {
+        use nodus_ui::capabilities::{Surface, staff_door};
+
+        // The same probe `App` asks for: without it nothing on `/home` would ever read the
+        // role, and the seed's answer would stand for the life of the page.
+        crate::state::bridge::admin::ensure_standing();
+        let extensions = crate::state::bridge::supports_extensions();
+        let eligible = crate::state::bridge::admin::may_enter();
+        let moderation_served = crate::state::bridge::capabilities::served(Surface::Moderation);
+        let administration_served = crate::state::bridge::capabilities::served(Surface::Admin);
+        let live = Signal::derive(move || nodus_shell::StaffDoors {
+            moderation: staff_door(extensions.get(), moderation_served.get(), eligible.get()),
+            administration: staff_door(
+                extensions.get(),
+                administration_served.get(),
+                eligible.get(),
+            ),
+            eligible: eligible.get(),
+        });
+        Effect::new(move |_| staff.set(live.get()));
+    }
+    let live_notices = Signal::derive(
+        move || match crate::state::bridge::notifications::available().get() {
+            None => Some(nodus_ui::NoticeDoor::Unknown),
+            Some(false) => Some(nodus_ui::NoticeDoor::Absent),
+            Some(true) => Some(nodus_ui::NoticeDoor::Unread(
+                crate::state::bridge::notifications::unread().get(),
+            )),
+        },
+    );
+    Effect::new(move |_| notices.set(live_notices.get()));
+
     view! {
         <nodus_shell::ShellPage
             seed=seed
@@ -50,6 +91,8 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
             card=card
             header=Some(header)
             on_home=on_home
+            staff=Some(Signal::derive(move || staff.get()))
+            notices=Some(Signal::derive(move || notices.get()))
         />
     }
 }
