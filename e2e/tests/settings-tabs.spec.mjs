@@ -11,7 +11,7 @@ import { expect, test } from '@playwright/test'
 
 import { FEATURES, hydrated, signedIn, stubApi } from '../fixtures.mjs'
 
-/** The ten sections this app gates on a published name. */
+/** The eleven sections this app gates on a published name. */
 const GATED = [
   'notifications',
   'preferences',
@@ -23,6 +23,7 @@ const GATED = [
   'sessions',
   'two-factor',
   'export',
+  'media',
 ]
 
 /** Every name this app's settings strip knows how to read. */

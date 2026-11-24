@@ -139,26 +139,22 @@ impl SettingsSection {
             Self::Sessions => Some(Feature::Sessions),
             Self::TwoFactor => Some(Feature::TwoFactor),
             Self::Export => Some(Feature::Exports),
-            // The media library is served (`GET|DELETE /api/v1/media/library`) and the
-            // handshake publishes no name for it: the 73 in
-            // `nodus-backend/crates/api/src/meta.rs` include `drive` and `moderation_media`
-            // and neither describes this screen. There is nothing to gate on, so the
-            // section claims no name — and [`Self::offered`] keeps it out of the strip
-            // until one is published, rather than promising a page no server announced.
-            Self::Media => None,
+            // The media library is a Nodus extension: it asks `GET|DELETE
+            // /api/v1/media/library`, which Nodus publishes as `media_library`. Mastodon
+            // and Misskey publish no such name, so the tab is drawn only where the
+            // handshake names it.
+            Self::Media => Some(Feature::MediaLibrary),
         }
     }
 
     /// Whether the strip offers this section as a tab.
     ///
-    /// The mirror of [`Self::drawn`], for a section with no published gate: a tab is a
-    /// promise that the page behind it works on this server, and the media library's page
-    /// asks `/api/v1/media/library`, which no capability name announces. The section keeps
-    /// its address — a settings section is a link, and the screen itself is written and
-    /// tested — but the strip does not draw it until the name exists.
+    /// Every section is offered: each one either names its gate or is a form this shell
+    /// owns, and [`Self::drawn`] is the only filter left — a known answer that omits the
+    /// name withholds the tab while the section keeps its address.
     #[must_use]
     pub const fn offered(self) -> bool {
-        !matches!(self, Self::Media)
+        true
     }
 
     /// Whether a paint with this answer should draw the section.

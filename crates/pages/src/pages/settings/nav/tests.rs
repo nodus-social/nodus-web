@@ -23,6 +23,7 @@ fn every_gate() -> Capabilities {
         "sessions",
         "two_factor",
         "exports",
+        "media_library",
     ])
 }
 
@@ -126,25 +127,32 @@ fn the_mastodon_baseline_draws_the_six_it_really_serves() {
     }
 }
 
-/// The media library has an address and no tab: the handshake publishes no name for
-/// `/api/v1/media/library`, so a tab would promise a page no server announced. A direct
-/// visit still reaches the screen, which is why the section keeps its slug.
+/// The media library is a real gate now that Nodus publishes `media_library`: the tab is
+/// drawn where the handshake names it, withheld where the published list omits it, and the
+/// section's sentence is what a direct visit gets on such a server.
 #[test]
-fn the_media_library_is_reached_by_its_address_and_not_offered_as_a_tab() {
-    assert_eq!(SettingsSection::of("media"), SettingsSection::Media);
-    assert!(
-        !SettingsSection::Media.offered(),
-        "no published name to gate a tab"
+fn the_media_tab_follows_the_published_name() {
+    assert_eq!(SettingsSection::Media.gate(), Some(Feature::MediaLibrary));
+    assert!(SettingsSection::Media.offered());
+
+    let served = answer(&["media_library"]);
+    assert!(SettingsSection::Media.drawn(Some(&served)));
+
+    let narrow = answer(&["preferences"]);
+    assert!(!SettingsSection::Media.drawn(Some(&narrow)));
+    assert_eq!(
+        SettingsSection::Media.absent(),
+        "This instance does not serve a media library."
     );
-    assert!(
-        SettingsSection::Media.drawn(None),
-        "a direct visit still paints the page"
-    );
-    for section in SettingsSection::ALL {
-        if section != SettingsSection::Media {
-            assert!(section.offered(), "{section:?}");
-        }
-    }
+}
+
+/// The library is a Nodus extension, so the baseline a Mastodon session gets answers
+/// `media_library` false: no tab, even though the address still explains itself.
+#[test]
+fn the_mastodon_baseline_hides_the_nodus_media_library() {
+    let at = Capabilities::mastodon();
+    assert!(!SettingsSection::Media.drawn(Some(&at)));
+    assert!(SettingsSection::Media.drawn(None));
 }
 
 #[test]

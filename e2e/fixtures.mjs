@@ -177,6 +177,9 @@ export const FEATURES = [
   'notification_settings',
   'pages',
   'style_public',
+  // The media library's name: Nodus publishes it, so the settings strip draws the tab
+  // exactly where the handshake names it.
+  'media_library',
 ]
 
 /**

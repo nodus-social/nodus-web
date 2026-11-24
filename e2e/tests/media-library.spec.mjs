@@ -6,12 +6,13 @@
 //! click — and assert that the button exists exactly where the server would accept it and
 //! that the refusal lands in the row it happened to.
 //!
-//! The screen has no tab (the handshake publishes no name for `/api/v1/media/library`), so
-//! every test opens it by its address, which is how the screen is reached at all.
+//! The screen is a tab wherever the handshake publishes `media_library`, and every test
+//! here also reaches it by its address — a settings section is always a link, and the direct
+//! visit is what a server without the name answers with a sentence instead of a blank page.
 
 import { expect, test } from '@playwright/test'
 
-import { hydrated, signedIn, stubApi } from '../fixtures.mjs'
+import { FEATURES, hydrated, signedIn, stubApi } from '../fixtures.mjs'
 
 /** When a picture uploaded three and a half hours ago reads as. */
 const UPLOADED = new Date(Date.now() - (3 * 60 + 30) * 60_000).toISOString()
@@ -57,15 +58,14 @@ function library() {
 }
 
 /**
- * Open the screen with the three rows stubbed.
+ * Answer the library routes with the three rows, and record every delete they send.
  *
- * The library routes are registered after `stubApi`, so they win over its catch-all: the
- * stub's last word answers `/api/**` with `[]`, which would silently empty the screen.
+ * Registered after `stubApi`, so they win over its catch-all: the stub's last word answers
+ * `/api/**` with `[]`, which would silently empty the screen.
  */
-async function open(page) {
+async function stubLibrary(page) {
   const { unused, used, stale } = library()
   const deletes = []
-  await stubApi(page)
   await page.route('**/api/v1/media/library**', (route) => {
     const request = route.request()
     if (request.method() === 'DELETE') {
@@ -87,6 +87,13 @@ async function open(page) {
       json: [unused, used, stale],
     })
   })
+  return deletes
+}
+
+/** Open the screen by its address, with the three rows stubbed. */
+async function open(page) {
+  await stubApi(page)
+  const deletes = await stubLibrary(page)
   await signedIn(page)
   await page.goto('/settings/media')
   await hydrated(page)
@@ -155,8 +162,28 @@ test('a delete the server refuses is shown in that row, not as a toast', async (
   expect(deletes).toEqual(['/api/v1/media/library/9'])
 })
 
-test('the settings strip offers no media tab, and a direct visit works', async ({ page }) => {
-  await open(page)
+test('the settings strip offers the media tab, and it opens the library', async ({ page }) => {
+  await stubApi(page)
+  await stubLibrary(page)
+  await signedIn(page)
+  await page.goto('/settings/account')
+  await hydrated(page)
+
+  const media = page.locator('a[role="tab"][href="/settings/media"]')
+  await expect(media).toBeVisible()
+  await media.click()
+  await hydrated(page)
+
+  await expect(page).toHaveURL(/\/settings\/media$/)
+  await expect(page.getByText('3 pictures, 2 unused')).toBeVisible()
+})
+
+test('a session that does not publish media_library offers no media tab', async ({ page }) => {
+  const features = FEATURES.filter((name) => name !== 'media_library')
+  await stubApi(page, { features })
+  await signedIn(page)
+  await page.goto('/settings/account')
+  await hydrated(page)
 
   await expect(page.locator('a[role="tab"][href="/settings/media"]')).toHaveCount(0)
   await expect(page.locator('a[role="tab"]').first()).toBeVisible()
