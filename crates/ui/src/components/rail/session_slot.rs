@@ -69,6 +69,8 @@ pub(super) fn banner_slot(
     let Some(edit) = editor else {
         return image;
     };
+    // Both live on this row alone, and every write to them gates on the row still being
+    // owned: a write that lands after the row went away is dropped instead of panicking.
     let text: RwSignal<Option<String>> = RwSignal::new(None);
     let problem: RwSignal<Option<String>> = RwSignal::new(None);
     let verbs = match kind {
@@ -107,8 +109,8 @@ pub(super) fn banner_slot(
                     title="Edit this picture: replace it or describe it"
                     data-style-slot-edit=""
                     on:click=move |_| {
-                        text.set(None);
-                        problem.set(None);
+                        text.try_set(None);
+                        problem.try_set(None);
                         open.update(|open| {
                             *open = if *open == Some(index) { None } else { Some(index) };
                         });
@@ -179,8 +181,8 @@ fn slot_editor(
                     class="btn btn-ghost btn-xs ml-auto"
                     title="Close this panel; changes stay in the draft until Save"
                     on:click=move |_| {
-                        text.set(None);
-                        problem.set(None);
+                        text.try_set(None);
+                        problem.try_set(None);
                         open.set(None);
                     }
                 >
@@ -219,10 +221,14 @@ fn slot_editor(
                 }
                 on:input=move |event| {
                     let typed = event_target_value(&event);
-                    text.set(Some(typed.clone()));
+                    text.try_set(Some(typed.clone()));
                     match edit.set_slot_alt(kind, index, &typed) {
-                        Ok(()) => problem.set(None),
-                        Err(message) => problem.set(Some(message)),
+                        Ok(()) => {
+                            problem.try_set(None);
+                        }
+                        Err(message) => {
+                            problem.try_set(Some(message));
+                        }
                     }
                 }
             />

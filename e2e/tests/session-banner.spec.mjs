@@ -219,3 +219,62 @@ test('the banner verbs still work in the wider column', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Replace picture' }).first()).toBeVisible()
   await expect(page.locator('[data-style-slot-alt]').first()).toBeVisible()
 })
+
+/**
+ * A route change the app performs itself: `pushState` plus the `popstate` the router already
+ * listens for. A `page.goto` would load a new document and discard the app's own state, which
+ * is exactly what this test is trying to keep.
+ */
+async function goInApp(page, path) {
+  await page.evaluate((to) => {
+    history.pushState({}, '', to)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }, path)
+}
+
+/**
+ * Opens the row's panel, unless it is already open: the frame owns the banner for the life of
+ * the app, so `open` survives a trip through another screen.
+ */
+async function openPanel(page, edit, alt) {
+  if (!(await alt.isVisible())) await edit.click()
+  await expect(alt).toBeVisible()
+}
+
+test('the slot alt field survives leaving the editor and coming back', async ({ page }) => {
+  test.skip(test.info().project.name !== 'desktop', 'the side banners only exist at xl and up')
+  const crashes = []
+  page.on('pageerror', (error) => crashes.push(String(error)))
+  await bannersOnBothSides(page)
+  await page.goto('/settings/styling/editor')
+  await hydrated(page)
+  await page.setViewportSize({ width: 2560, height: 900 })
+
+  const banner = page.locator('[data-session-banner="left"]')
+  const edit = banner.locator('[data-style-slot-edit]').first()
+  const alt = banner.locator('[data-style-slot-alt]')
+  await expect(edit).toBeVisible()
+  await openPanel(page, edit, alt)
+  // Focused, so its handler is the live one that a rebuild of the row replaces.
+  await alt.click()
+
+  // The frame owns the banner, so the row and its panel outlive the screen; what changes
+  // under a focused input is the screen's editor state, not the page.
+  await goInApp(page, '/home')
+  await expect(page.locator('[data-session-banner="left"] img')).toBeVisible()
+  await goInApp(page, '/settings/styling/editor')
+  await expect(edit).toBeVisible()
+
+  await openPanel(page, edit, alt)
+  await alt.fill('Left banner, described after a round trip')
+  await expect(alt).toHaveValue('Left banner, described after a round trip')
+
+  // And once more, with an unsaved description in the draft this time.
+  await goInApp(page, '/home')
+  await expect(page.locator('[data-session-banner="left"] img')).toBeVisible()
+  await goInApp(page, '/settings/styling/editor')
+  await expect(edit).toBeVisible()
+  await openPanel(page, edit, alt)
+  await expect(alt).toHaveValue('Left banner, described after a round trip')
+  expect(crashes).toEqual([])
+})
