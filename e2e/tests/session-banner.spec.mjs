@@ -96,6 +96,10 @@ async function measured(page) {
 test('the side banners fill the gutter at every desktop width', async ({ page }) => {
   test.skip(test.info().project.name !== 'desktop', 'the side banners only exist at xl and up')
   test.setTimeout(120_000)
+  // Freeze the page's clock. Ages are rendered in words ("16d"), so a baseline recorded
+  // today would start failing tomorrow for a reason that has nothing to do with the
+  // layout. A fixed instant makes the pictures comparable forever.
+  await page.clock.install({ time: new Date('2026-11-20T12:00:00Z') })
   await bannersOnBothSides(page)
 
   const widths = [1400, 1536, 1920, 2560]
