@@ -344,7 +344,10 @@ async fn service_worker() -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "text/javascript"),
-            (header::HeaderName::from_static("service-worker-allowed"), "/"),
+            (
+                header::HeaderName::from_static("service-worker-allowed"),
+                "/",
+            ),
         ],
         SW_CONTENT,
     )

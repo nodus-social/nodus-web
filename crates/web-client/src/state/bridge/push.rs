@@ -24,11 +24,6 @@ pub const SCRIPT: &str = "/sw.js";
 pub const UNSUPPORTED: &str =
     "This browser cannot receive push notifications: it has no PushManager or no service worker.";
 
-/// The alert kinds this instance delivers, in the order the card lists them.
-///
-/// The sender in `crates/api/src/webpush.rs` filters on exactly these four names.
-pub const KINDS: [&str; 4] = ["mention", "favourite", "reblog", "follow"];
-
 /// Which kinds to deliver, as the wire spells them.
 ///
 /// Every kind starts on, matching the server's own default for a new subscription. Kinds the
@@ -87,9 +82,12 @@ impl Alerts {
 }
 
 /// What `GET /api/v1/push/subscription` answers while subscribed.
+///
+/// The answer also carries the row's `id` and `endpoint`, which this client reads from the
+/// browser's own subscription instead: the row is the server's copy, the browser's is the one
+/// that can actually be unsubscribed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Subscription {
-    pub endpoint: String,
     /// base64url of an uncompressed P-256 point: the VAPID public key.
     pub server_key: String,
     pub alerts: Alerts,
@@ -197,26 +195,6 @@ async fn registered() -> Result<Option<ServiceWorkerRegistration>, String> {
         .map_err(|_| String::from("the browser answered with something other than a registration"))
 }
 
-/// The subscription the browser currently holds, if any.
-pub async fn subscribed() -> bool {
-    if !supported() {
-        return false;
-    }
-    let Ok(Some(registration)) = registered().await else {
-        return false;
-    };
-    let Ok(manager) = registration.push_manager() else {
-        return false;
-    };
-    let Ok(promise) = manager.get_subscription() else {
-        return false;
-    };
-    let Ok(answer) = resolved(promise).await else {
-        return false;
-    };
-    !answer.is_null() && !answer.is_undefined()
-}
-
 fn keys(subscription: &PushSubscription) -> Result<(String, String), String> {
     let key = |name| -> Result<String, String> {
         let buffer = subscription
@@ -253,19 +231,85 @@ pub async fn read() -> Result<Option<Subscription>, String> {
     }
 }
 
+/// The sentence a client with no push key is shown, in place of the toggle.
+pub const NO_KEY: &str =
+    "This instance did not publish a push key to this client, so this browser cannot subscribe.";
+
+/// `configuration.vapid.public_key` from the instance document.
+///
+/// The public key belongs to the instance, not to the account, and Mastodon publishes it in
+/// the instance document — which the shell fetches for every visitor, signed in or not. That
+/// makes it the one source that answers before any subscription exists.
+///
+/// Nothing here treats absence as a failure: the document omits `configuration.vapid`
+/// entirely when the instance has no key, and the app-registration answer carries
+/// `vapid_key: null` in the same situation. Both mean "ask the next source".
+async fn instance_key() -> Option<String> {
+    let transport = super::instance_transport()?;
+    let url = transport.url("/api/v2/instance").ok()?;
+    let bytes = transport.fetch_bytes(transport.get(url)).await.ok()?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    document
+        .get("configuration")?
+        .get("vapid")?
+        .get("public_key")?
+        .as_str()
+        .map(str::to_owned)
+        .filter(|key| !key.trim().is_empty())
+}
+
+/// The key this browser must subscribe against, from the first source that has one.
+///
+/// The instance document answers first, and it is the primary path: it is public, the shell
+/// already has it, and it exists before the account has any subscription. `server_key` on
+/// `GET /api/v1/push/subscription` is the fallback for an account that subscribed on another
+/// device, and it can only be the fallback, because that read 404s exactly when the key is
+/// still needed. The app-registration answer also carries `vapid_key`, but this client does
+/// not keep that response, so there is nothing to read it from.
+///
+/// No key from any source is a fact worth printing rather than passing a guess to
+/// `pushManager.subscribe`.
+pub async fn application_server_key() -> Result<Vec<u8>, String> {
+    let encoded = match instance_key().await {
+        Some(key) => key,
+        None => match read().await? {
+            Some(subscription) => subscription.server_key,
+            None => return Err(String::from(NO_KEY)),
+        },
+    };
+    decode_base64url(&encoded)
+        .ok_or_else(|| String::from("The instance sent a push key that is not base64url"))
+}
+
+/// What the card needs to know: whether a push key exists, and the server's row if there is
+/// one.
+///
+/// The instance document is only asked when there is no row: a subscribed account names its
+/// own key through `server_key`, and one fewer request on the settings tab is one fewer thing
+/// the page waits on.
+pub async fn state() -> Result<State, String> {
+    let subscription = read().await?;
+    let keyed = subscription.is_some() || instance_key().await.is_some();
+    Ok(State { keyed, subscription })
+}
+
+/// Whether this client can subscribe at all, and the row the server holds if it has one.
+pub struct State {
+    /// Whether the instance gave this client a push key, from either source.
+    pub keyed: bool,
+    /// The server's subscription row, when the account has one.
+    pub subscription: Option<Subscription>,
+}
+
 /// Registers the worker, subscribes, and records the subscription on the server.
 ///
-/// The server is asked for its key first: a subscription built against the wrong key is
-/// useless, and the sentence saying push is off belongs here rather than after the browser
-/// has already been handed a subscription nobody can deliver to.
+/// The key is resolved first: a subscription built against the wrong key is useless, and the
+/// sentence saying this client has no key belongs here rather than after the browser has
+/// already been handed a subscription nobody can deliver to.
 pub async fn subscribe(alerts: Alerts) -> Result<(), String> {
     let transport =
         super::instance_transport().ok_or_else(|| String::from("No active instance connection"))?;
-    let known = read()
-        .await?
-        .ok_or_else(|| String::from("This instance does not offer push notifications"))?;
-    let key = decode_base64url(&known.server_key)
-        .ok_or_else(|| String::from("The instance sent a server key that is not base64url"))?;
+    let key = application_server_key().await?;
 
     let registration = resolved(container()?.register(SCRIPT))
         .await?

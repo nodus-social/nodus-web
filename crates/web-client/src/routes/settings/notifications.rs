@@ -25,6 +25,7 @@ pub fn NotificationsCard() -> impl IntoView {
     let push_feature = Signal::derive(move || at.get().supports(Feature::Push));
 
     let (push_supported, set_push_supported) = signal(bridge::push::supported());
+    let (push_keyed, set_push_keyed) = signal(true);
     let (push_subscribed, set_push_subscribed) = signal(false);
     let (push_working, set_push_working) = signal(false);
     let (push_alerts, set_push_alerts) = signal(
@@ -36,8 +37,9 @@ pub fn NotificationsCard() -> impl IntoView {
     let (push_error, set_push_error) = signal(None::<String>);
 
     // The server's row decides what the card says: it is the side that delivers, and a
-    // browser subscription the server has no row for receives nothing. One read, once the
-    // capability answer has landed.
+    // browser subscription the server has no row for receives nothing. What the card may
+    // offer is a separate fact — a subscription needs a key, and an instance that published
+    // none to this client is told so instead of being shown a toggle that cannot work.
     Effect::new(move |_| {
         if !push_feature.get() {
             return;
@@ -48,19 +50,21 @@ pub fn NotificationsCard() -> impl IntoView {
             return;
         }
         spawn_local(async move {
-            match bridge::push::read().await {
-                Ok(Some(subscription)) => {
-                    set_push_subscribed.set(true);
-                    set_push_alerts.set(
-                        PushKind::ALL
-                            .into_iter()
-                            .map(|kind| (kind, subscription.alerts.get(kind.wire())))
-                            .collect(),
-                    );
+            match bridge::push::state().await {
+                Ok(state) => {
+                    set_push_keyed.set(state.keyed);
+                    set_push_subscribed.set(state.subscription.is_some());
+                    if let Some(subscription) = state.subscription {
+                        set_push_alerts.set(
+                            PushKind::ALL
+                                .into_iter()
+                                .map(|kind| (kind, subscription.alerts.get(kind.wire())))
+                                .collect(),
+                        );
+                    }
                 }
-                Ok(None) => set_push_subscribed.set(false),
-                // A read that failed says nothing about the subscription: leave the card off
-                // rather than offering a toggle whose first request would repeat the failure.
+                // A read that failed says nothing about the subscription: print it where the
+                // card is rather than offering a toggle whose first request would repeat it.
                 Err(message) => set_push_error.set(Some(message)),
             }
         });
@@ -69,6 +73,10 @@ pub fn NotificationsCard() -> impl IntoView {
     let on_push_toggle = Callback::new(move |enabled: bool| {
         set_push_working.set(true);
         set_push_error.set(None);
+        // The checkbox has already moved in the DOM; the signal moving with it is what makes
+        // a refusal able to put it back. Without this the browser's own click state and the
+        // card's state disagree until the next reload.
+        set_push_subscribed.set(enabled);
         spawn_local(async move {
             let outcome = if enabled {
                 bridge::push::subscribe(bridge::push::Alerts::default()).await
@@ -77,7 +85,6 @@ pub fn NotificationsCard() -> impl IntoView {
             };
             match outcome {
                 Ok(()) => {
-                    set_push_subscribed.set(enabled);
                     set_push_alerts.set(
                         PushKind::ALL
                             .into_iter()
@@ -85,8 +92,12 @@ pub fn NotificationsCard() -> impl IntoView {
                             .collect(),
                     );
                 }
-                // The browser's refusal and the server's sentence both land here, in place.
-                Err(message) => set_push_error.set(Some(message)),
+                // The browser's refusal and the server's sentence both land here, in place,
+                // and the toggle goes back to what is actually true.
+                Err(message) => {
+                    set_push_subscribed.set(!enabled);
+                    set_push_error.set(Some(message));
+                }
             }
             set_push_working.set(false);
         });
@@ -201,6 +212,7 @@ pub fn NotificationsCard() -> impl IntoView {
         <Show when=move || push_feature.get()>
             <BrowserPushCard
                 supported=Signal::from(push_supported)
+                keyed=Signal::from(push_keyed)
                 subscribed=Signal::from(push_subscribed)
                 working=Signal::from(push_working)
                 alerts=Signal::from(push_alerts)

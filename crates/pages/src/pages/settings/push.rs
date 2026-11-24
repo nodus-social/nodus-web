@@ -18,6 +18,13 @@ use crate::components::panel::Panel;
 pub const UNSUPPORTED: &str =
     "This browser cannot receive push notifications: it has no PushManager or no service worker.";
 
+/// The sentence a client the instance gave no push key is shown. Without a key the browser
+/// cannot subscribe, so the card offers no toggle. Spelled the same in
+/// `web_client::state::bridge::push::NO_KEY`, which is what a subscribe that raced the card
+/// answers with — one sentence reaches the reader either way.
+pub const NO_KEY: &str =
+    "This instance did not publish a push key to this client, so this browser cannot subscribe.";
+
 /// The kinds of push notification this instance delivers, in the order the card lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
@@ -60,6 +67,9 @@ pub fn BrowserPushCard(
     /// Whether this browser has a `PushManager` and a service worker.
     #[prop(into)]
     supported: Signal<bool>,
+    /// Whether the instance gave this client a push key at all.
+    #[prop(into)]
+    keyed: Signal<bool>,
     /// Whether the browser currently holds a subscription.
     #[prop(into)]
     subscribed: Signal<bool>,
@@ -89,14 +99,23 @@ pub fn BrowserPushCard(
                 <p class="text-sm opacity-70">{UNSUPPORTED}</p>
             </Show>
 
-            <div class="flex flex-col gap-4" class:hidden=move || !supported.get()>
+            <Show when=move || supported.get() && !keyed.get()>
+                <p class="text-sm opacity-70">{NO_KEY}</p>
+            </Show>
+
+            // Nothing at all when either fact is missing: a disabled toggle invites a click
+            // that cannot do anything, and the sentence above already said why.
+            <Show when=move || supported.get() && keyed.get()>
+            <div class="flex flex-col gap-4">
                 <div class="flex items-center justify-between">
                     <span class="text-sm font-medium">"Push notifications in this browser"</span>
                     <input
                         type="checkbox"
                         class="toggle"
                         aria-label="Push notifications in this browser"
-                        checked=move || subscribed.get()
+                        // A PROPERTY, not an attribute: a refusal puts the value back, and an
+                        // attribute write does not move the DOM property the reader sees.
+                        prop:checked=move || subscribed.get()
                         disabled=move || working.get()
                         on:change=move |event| {
                             if let Some(on_toggle) = on_toggle {
@@ -147,6 +166,7 @@ pub fn BrowserPushCard(
                     </div>
                 </Show>
             </div>
+            </Show>
         </Panel>
     }
 }
@@ -155,10 +175,11 @@ pub fn BrowserPushCard(
 mod tests {
     use super::*;
 
-    fn painted(supported: bool, subscribed: bool, error: Option<&str>) -> String {
+    fn painted(supported: bool, keyed: bool, subscribed: bool, error: Option<&str>) -> String {
         view! {
             <BrowserPushCard
                 supported=Signal::stored(supported)
+                keyed=Signal::stored(keyed)
                 subscribed=Signal::stored(subscribed)
                 working=Signal::stored(false)
                 alerts=Signal::stored(
@@ -174,22 +195,30 @@ mod tests {
 
     #[test]
     fn a_browser_without_push_is_told_so_in_one_sentence() {
-        let html = painted(false, false, None);
+        let html = painted(false, false, false, None);
         assert!(html.contains("cannot receive push notifications"), "{html}");
         assert!(!html.contains("Notify me about"), "{html}");
     }
 
     #[test]
     fn a_supported_browser_is_offered_the_toggle() {
-        let html = painted(true, false, None);
+        let html = painted(true, true, false, None);
         assert!(!html.contains("cannot receive push notifications"), "{html}");
         assert!(html.contains("Push notifications in this browser"), "{html}");
         assert!(!html.contains("Notify me about"), "{html}");
     }
 
     #[test]
+    fn a_client_with_no_push_key_is_told_so_and_offered_no_toggle() {
+        let html = painted(true, false, false, None);
+        assert!(html.contains("did not publish a push key"), "{html}");
+        assert!(!html.contains("Push notifications in this browser"), "{html}");
+        assert!(!html.contains("Notify me about"), "{html}");
+    }
+
+    #[test]
     fn a_subscription_offers_the_four_kinds() {
-        let html = painted(true, true, None);
+        let html = painted(true, true, true, None);
         assert!(html.contains("Notify me about"), "{html}");
         assert!(html.contains("Mentions"), "{html}");
         assert!(html.contains("Favourites"), "{html}");
@@ -199,7 +228,7 @@ mod tests {
 
     #[test]
     fn a_refusal_is_printed_where_the_card_is() {
-        let html = painted(true, false, Some("permission was denied"));
+        let html = painted(true, true, false, Some("permission was denied"));
         assert!(html.contains("permission was denied"), "{html}");
     }
 
