@@ -22,6 +22,13 @@ use nodus_ui::session_style::SessionStyle;
 use nodus_web::shared::router::Route;
 use serde::{Deserialize, Serialize};
 
+/// The browser's own screens, keyed by route.
+///
+/// `None` means "this document already carries that route's screen": the frame then draws
+/// the paint's [`RouteView`] instead. That is what keeps the first render identical to the
+/// document the host wrote, while every route a click reaches is drawn by the dispatcher.
+pub type ScreenFn = Arc<dyn Fn(Route) -> Option<AnyView> + Send + Sync>;
+
 /// The staff answer the document already holds, so the adopted tree draws the doors the
 /// paint drew.
 ///
@@ -157,6 +164,12 @@ pub fn ShellPage(
     /// The notice state the browser took over after its first pass. Absent on the host.
     #[prop(optional_no_strip)]
     notices: Option<Signal<Option<NoticeDoor>>>,
+    /// The browser's own route table — the screens a click can reach without a document
+    /// load. Absent on the host, which has no navigation to answer: the paint is the only
+    /// screen there is. A browser passes it and returns `None` for the route this document
+    /// already carries, so its first render stays the paint's, node for node.
+    #[prop(optional_no_strip)]
+    screen: Option<ScreenFn>,
 ) -> impl IntoView {
     let signed_in = seed.signed_in;
     let path = seed.path.clone();
@@ -187,16 +200,23 @@ pub fn ShellPage(
         let runtime = Arc::clone(&runtime);
         let card = Arc::clone(&card);
         let header = header.clone();
+        let screen = screen.clone();
         view! {
             {move || {
                 let route = route.get();
-                view! {
-                    <RouteView
-                        runtime=Arc::clone(&runtime)
-                        route=route
-                        card=Arc::clone(&card)
-                        header=header.clone()
-                    />
+                match screen.clone().and_then(|screen| screen(route.clone())) {
+                    Some(drawn) => drawn,
+                    // No dispatcher, or one that declined this route: the shell draws the
+                    // paint's own screen, which is the tree the document carries.
+                    None => view! {
+                        <RouteView
+                            runtime=Arc::clone(&runtime)
+                            route=route
+                            card=Arc::clone(&card)
+                            header=header.clone()
+                        />
+                    }
+                    .into_any(),
                 }
             }}
         }

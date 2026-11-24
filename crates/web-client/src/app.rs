@@ -5,10 +5,6 @@
 //! or `crate::shell`.
 
 use crate::router::{self, Route};
-use crate::routes::callback::Callback;
-use crate::routes::home::{FederatedTimeline, HomeTimeline, LocalTimeline};
-use crate::routes::notifications::NotificationsView;
-use crate::routes::sign_in::SignIn;
 use crate::shell;
 use crate::state::bridge::{init, revision, with_sdk};
 use nodus_web::shared::screens::Screen;
@@ -51,44 +47,15 @@ pub(crate) fn App() -> impl IntoView {
     });
     let route = router::route();
     Effect::new(move |_| crate::state::runtime::remember_path(&route.get().path()));
-    // A `Memo`, not a closure: the screen match below reads this, and a plain closure
-    // would re-run it on every state notification — rebuilding the current screen
-    // (disposing its owner, dropping its state, re-firing its effects) each time the
-    // background tick or any SDK write bumped `revision`. A memo only notifies when the
-    // *value* changes, which is exactly when the screen has to change too.
-    let signed_in = Memo::new(move |_| {
-        revision.get();
-        with_sdk(|sdk| sdk.state().session.get().is_some())
+    let card: CardRenderer = std::sync::Arc::new(|status| {
+        view! { <crate::routes::status::StatusCard status/> }.into_any()
     });
-    // The recommendation, styling and staff surfaces are ours; a Mastodon account has no
-    // server behind them. The route arms below and the rail read the same answer.
+    // The route table, taken once: the adopted root calls the same function, so a screen a
+    // click reaches is the same one in both roots. `signed_in` and `extensions` are read out
+    // again because the effects below use them too.
+    let screens = crate::dispatch::Screens::current(card);
+    let signed_in = screens.signed_in;
     let extensions = crate::state::bridge::supports_extensions();
-    // The staff card is not painted until a door survives its gate, and a component that is
-    // not painted cannot run the probe that would open one. Asking here, in the shell that
-    // every screen paints, is what keeps the question from depending on its own answer.
-    #[cfg(feature = "admin")]
-    crate::state::bridge::admin::ensure_standing();
-    // The negotiated answer, put in scope for the shared screens: the rail, the screens and
-    // their explanations all read this one value instead of a per-call argument, so the
-    // browser and the server paint from the same rule (the server simply has none to read).
-    let serves = crate::state::bridge::capabilities::serves();
-    nodus_ui::capabilities::provide_serves(serves);
-    // Each surface this build draws, answered by the SDK rather than by the raw list: a
-    // Mastodon or Misskey server publishes no `features` at all, and its baseline is what
-    // says it serves administration, moderation and the drive.
-    use nodus_ui::capabilities::Surface;
-    let feed_accounts = crate::state::bridge::capabilities::served(Surface::Feed);
-    let admin_on = crate::state::bridge::capabilities::served(Surface::Admin);
-    let moderation_on = crate::state::bridge::capabilities::served(Surface::Moderation);
-    // `/api/v1/meta` does publish a `drive` feature (`drive`, and beside it `drive_share` and
-    // `drive_attach`), so the door follows that name and falls back to the grant the session
-    // already carries — an older instance, or one whose answer has not arrived yet, still has
-    // the user's scopes to go on. The stored session is `read write follow` (see
-    // `session::scopes`), so `read` is the wider grant a drive-readable token carries; a token
-    // without `read:drive` still gets the server's 403, which the screen shows rather than hides.
-    let drive_feature = crate::state::bridge::capabilities::served(Surface::Drive);
-    let drive_on =
-        Memo::new(move |_| drive_feature.get() || crate::state::bridge::drive::may_read());
 
     // Who is signed in, as the rail card shows them. Held here rather than read from the
     // store, because the store only holds accounts some page has already drawn: the reader's
@@ -127,10 +94,6 @@ pub(crate) fn App() -> impl IntoView {
             });
             profile.set(Some(profile_card(&account, &host)));
         });
-    });
-
-    let card: CardRenderer = std::sync::Arc::new(|status| {
-        view! { <crate::routes::status::StatusCard status/> }.into_any()
     });
 
     // The cards are a read, so they fill once per document and then only on refresh: a rail
@@ -245,206 +208,9 @@ pub(crate) fn App() -> impl IntoView {
             notice=Some(Signal::derive(move || crate::state::bridge::style::notice().get()))
             notices=Some(notice_door)
             inner=std::sync::Arc::new(move || {
-                        // The callback comes first, before the signed-in gate: the
-                        // instance redirects here while the app is still signed out, and
-                        // this screen is what turns the code into a session.
-                        //
-                        // Everything the API serves needs a token, so a signed-out
-                        // visitor gets the same answer on every gated route: what the
-                        // click was for, or the rail reads as broken.
-                        let signed_in = signed_in.get();
-                        match route.get() {
-                            Route::OauthCallback => view! { <Callback/> }.into_any(),
-                            Route::Feed if signed_in && extensions.get() && feed_accounts.get() => {
-                                let header: ChildrenFn = std::sync::Arc::new(|| {
-                                    view! { <crate::routes::home::TimelineHeader/> }.into_any()
-                                });
-                                view! {
-                                    <nodus_route::route::RouteView
-                                        runtime=crate::state::runtime::runtime()
-                                        route=Route::Feed
-                                        card=card.clone()
-                                        header=Some(header)
-                                    />
-                                }.into_any()
-                            },
-                            Route::Feed if signed_in => unavailable(
-                                "Recommended posts",
-                                "This instance has no recommendation engine, so there is nothing \
-                                 to rank here. Your home timeline still works.",
-                            ),
-                            Route::Home if signed_in => view! { <HomeTimeline/> }.into_any(),
-                            // Local and Federated are the same screen as Home: the store, the
-                            // paging cursor and the caption all come from the timeline kind. Their
-                            // own arms exist because the screen is also the header block — the
-                            // composer and the switch between timelines — and the shared route view
-                            // takes that as a slot the client fills. Without these arms the reader
-                            // who clicks Local lands on a page with no tab strip and cannot leave.
-                            Route::Local if signed_in => view! { <LocalTimeline/> }.into_any(),
-                            Route::Federated if signed_in => {
-                                view! { <FederatedTimeline/> }.into_any()
-                            }
-                            // The middle of the editor is not being edited: the rail and the
-                            // banners are. So it is the dumping ground — every card that
-                            // exists, with the ones on the rail marked, one click from either
-                            // side.
-                            Route::StyleEditor if signed_in && extensions.get() => {
-                                let has_staff = extra_doors().is_some();
-                                view! {
-                                    <nodus_ui::components::sidebar::ModuleTray
-                                        layout=Signal::derive(move || {
-                                            crate::state::bridge::style::draft().get().modules
-                                        })
-                                        nav=Signal::derive(move || {
-                                            crate::state::bridge::style::draft().get().nav
-                                        })
-                                        staff_rail=Signal::derive(move || {
-                                            crate::state::bridge::style::draft().get().staff_rail
-                                        })
-                                        has_staff=has_staff
-                                        editor=Some(crate::state::bridge::style::editor())
-                                    />
-                                    <nodus_ui::components::sidebar::MediaTray
-                                        pictures=Signal::derive(move || {
-                                            crate::state::bridge::style::library().get()
-                                        })
-                                        status=Signal::derive(move || {
-                                            crate::state::bridge::style::library_status().get()
-                                        })
-                                        editor=Some(crate::state::bridge::style::editor())
-                                        on_upload=Some(Callback::new(
-                                            |request: nodus_ui::session_style::UploadRequest| {
-                                                crate::state::bridge::style::upload_to_library(
-                                                    request,
-                                                );
-                                            },
-                                        ))
-                                        on_upload_click=Some(Callback::new(|()| {
-                                            crate::state::bridge::style::pick_picture_for(
-                                                nodus_ui::session_style::PictureTarget::Region(
-                                                    nodus_ui::session_style::BannerRegionKind::Top,
-                                                ),
-                                            );
-                                        }))
-                                    />
-                                }
-                                .into_any()
-                            }
-                            Route::StyleEditor if signed_in => unavailable(
-                                "Session styling",
-                                "Styling is served by Nodus, and this instance does not offer \
-                                 it. The rest of your settings still work.",
-                            ),
-                            Route::StyleEditor => {
-                                view! { <SignIn note="Sign in to arrange your page."/> }
-                                    .into_any()
-                            }
-                            // The drive is the account's own storage: it needs a session to
-                            // name whose drive it is, and a grant that can read it.
-                            Route::Drive if !signed_in => {
-                                view! { <SignIn note="Sign in to use the drive."/> }.into_any()
-                            }
-                            Route::Drive if !drive_on.get() => unavailable(
-                                "Drive",
-                                "The drive is served by Nodus, and this session's grant does not \
-                                 include it. Signing in again asks the instance for the drive \
-                                 scopes.",
-                            ),
-                            Route::Drive => {
-                                view! { <crate::routes::drive::DriveScreen/> }.into_any()
-                            }
-                            // The console itself is drawn by `RouteView`, which knows each
-                            // section; only a signed-out visitor is sent to sign in.
-                            Route::Admin(_) | Route::Moderation(_) if !signed_in => {
-                                view! { <SignIn note="Sign in to moderate."/> }.into_any()
-                            }
-                            Route::Admin(_) if !extensions.get() || !admin_on.get() => {
-                                unavailable(
-                                    "Administration",
-                                    "The console is served by Nodus, and this instance's \
-                                     /api/v1/meta answer does not name the admin capability. On \
-                                     Mastodon it lives in the instance's own web interface.",
-                                )
-                            }
-                            Route::Moderation(_) if !extensions.get() || !moderation_on.get() => {
-                                unavailable(
-                                    "Moderation",
-                                    "Moderation is served by Nodus, and this instance's \
-                                     /api/v1/meta answer does not name the moderation \
-                                     capability. On Mastodon it lives in the instance's own web \
-                                     interface.",
-                                )
-                            }
-                            // The reader's own notifications, drawn by the client because
-                            // half of a row is this instance's moderation payload and not
-                            // anything the SDK's `Notification` knows about.
-                            Route::Notifications if signed_in => {
-                                view! { <NotificationsView/> }.into_any()
-                            }
-                            // A shared link works without a session: the address names the
-                            // host, so the post is read from there anonymously. A legacy
-                            // `/status/{id}` link falls back to the instance this browser
-                            // already used, or asks which one.
-                            Route::Thread { host, id } => {
-                                let host = if host.is_empty() {
-                                    crate::state::bridge::session::remembered_host()
-                                        .unwrap_or_default()
-                                } else {
-                                    host
-                                };
-                                view! {
-                                    <nodus_route::route::RouteView
-                                        runtime=crate::state::runtime::runtime()
-                                        route=Route::Thread { host, id }
-                                        card=card.clone()
-                                    />
-                                }.into_any()
-                            }
-                            Route::Account(id) if id.contains('/') => view! {
-                                <nodus_route::route::RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=Route::Account(id)
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            // A bare handle means "here": the instance the reader is signed
-                            // in at, then the one this deployment names, then the address
-                            // they typed. An id alone cannot be read without knowing which
-                            // instance minted it, so signing in is the honest fallback.
-                            Route::Account(id) => match crate::state::bridge::session::remembered_host()
-                                .or_else(|| crate::state::runtime::runtime().public_host())
-                                .or_else(|| {
-                                    web_sys::window()
-                                        .and_then(|window| window.location().host().ok())
-                                        .filter(|host| !host.trim().is_empty())
-                                })
-                            {
-                                Some(host) => view! {
-                                    <nodus_route::route::RouteView
-                                        runtime=crate::state::runtime::runtime()
-                                        route=Route::Account(format!("{host}/{id}"))
-                                        card=card.clone()
-                                    />
-                                }
-                                .into_any(),
-                                None => {
-                                    view! { <SignIn note="Sign in to read this."/> }.into_any()
-                                }
-                            }
-                            // Every remaining screen is the shared route view, which already
-                            // knows its own title, header and paging. Signing in is the only
-                            // thing it cannot do for itself.
-                            route if signed_in => view! {
-                                <nodus_route::route::RouteView
-                                    runtime=crate::state::runtime::runtime()
-                                    route=route
-                                    card=card.clone()
-                                />
-                            }
-                            .into_any(),
-                            _ => view! { <SignIn note="Sign in to read this."/> }.into_any(),
-                        }
+                // One match, in `crate::dispatch`: the adopted shell root draws the same
+                // arms once the reader navigates off the screen the document painted.
+                screens.draw(route.get())
             })/>
         <Show when=move || signed_in.get()>
             <shell::MobileBar/>
@@ -458,25 +224,6 @@ pub(crate) fn App() -> impl IntoView {
     }
 }
 
-/// A route the account's instance cannot serve.
-///
-/// Named rather than blank: a reader arriving from a link needs to know which screen they
-/// asked for, why it is not here, and where they can go instead — the same shape the shared
-/// route view paints for a screen the stateless render cannot serve.
-fn unavailable(title: &'static str, note: &'static str) -> AnyView {
-    view! {
-        <nodus_ui::Screen>
-            <nodus_ui::PageHeader title=title description=note/>
-            <nodus_ui::Note>
-                <a class="link link-hover" href=Route::Home.path()>
-                    "Go to the home timeline"
-                </a>
-            </nodus_ui::Note>
-        </nodus_ui::Screen>
-    }
-    .into_any()
-}
-
 /// The doors only a moderator build draws, as the shared frame wants them.
 ///
 /// The three facts a staff door needs — this protocol's extensions, the instance's answer
@@ -488,7 +235,7 @@ fn unavailable(title: &'static str, note: &'static str) -> AnyView {
     clippy::unnecessary_wraps,
     reason = "the lean build returns nothing, and one call site serves both"
 )]
-fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
+pub(crate) fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
     use nodus_ui::capabilities::{Surface, staff_door};
 
     let extensions = crate::state::bridge::supports_extensions();
@@ -513,7 +260,7 @@ fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
 
 /// The lean build has no moderation screens, so the rail has no extra doors.
 #[cfg(not(feature = "admin"))]
-fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
+pub(crate) fn extra_doors() -> Option<nodus_ui::ExtraDoors> {
     None
 }
 

@@ -34,12 +34,45 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
     // it, panicking on the next navigation.
     let current = router::route();
     let route = Signal::derive(move || current.get());
+    // The same route table `App` draws from, and the same capability answers behind it, so a
+    // screen reached by a click is the one the mounted root would render — including the
+    // consoles, which `RouteView` refuses without the capability row that `Screens` provides.
+    let screens = crate::dispatch::Screens::current(card.clone());
+    // The screen the document carries: the address the host painted. Until the reader leaves
+    // it, the frame draws that paint and nothing else, because hydration compares the first
+    // render against those nodes.
+    let painted = Route::from_path(&seed.path);
+    let left = RwSignal::new(false);
+    let watched = painted.clone();
+    Effect::new(move |_| {
+        if route.get() != watched {
+            // One way: coming back to the painted address is a navigation like any other, and
+            // the mounted root's screen is what it lands on.
+            left.set(true);
+        }
+    });
+    let screen: nodus_shell::ScreenFn = Arc::new(move |target: Route| {
+        if target == painted && !left.get() {
+            return None;
+        }
+        Some(screens.draw(target))
+    });
     let runtime = crate::state::runtime::runtime();
-    // The same header the server painted for a timeline: on `/lists` the route ignores
-    // it, and on `/home` its first frame is the shared preview, which is the tree the
-    // document carried. The live composer arrives after hydration.
-    let header: ChildrenFn = Arc::new(|| {
-        view! { <crate::routes::home::TimelineHeader/> }.into_any()
+    // What the host painted above a timeline: the shared static composer, and only that — the
+    // live composer and its tab strip arrive with the dispatched screen after a navigation.
+    // On a route that has no header slot (`/lists`) the frame ignores this, exactly as the
+    // paint did.
+    let painted_path = seed.path.clone();
+    let header: ChildrenFn = Arc::new(move || {
+        view! {
+            <nodus_pages::pages::compose::inline::StaticComposer
+                active=Signal::derive({
+                    let path = painted_path.clone();
+                    move || path.clone()
+                })
+            />
+        }
+        .into_any()
     });
 
     // The document answered the staff and notice questions so its paint could draw them; the
@@ -91,6 +124,7 @@ pub fn ShellRoot(seed: nodus_shell::ShellSeed) -> impl IntoView {
             card=card
             header=Some(header)
             on_home=on_home
+            screen=Some(screen)
             staff=Some(Signal::derive(move || staff.get()))
             notices=Some(Signal::derive(move || notices.get()))
         />

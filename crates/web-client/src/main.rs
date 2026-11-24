@@ -17,6 +17,7 @@ pub(crate) use nodus_web::shared;
 
 mod app;
 mod boot;
+mod dispatch;
 mod media;
 mod platform;
 mod public;

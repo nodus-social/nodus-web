@@ -483,6 +483,8 @@ pub fn home_with_style(
             on_home: None,
             staff: None,
             notices: None,
+            // The host has no navigation to answer: the paint is the only screen.
+            screen: None,
         })
         .to_html()
     });
