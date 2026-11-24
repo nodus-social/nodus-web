@@ -53,9 +53,11 @@ pub(crate) fn editor() -> ProfileEditor {
         pick_picture: Callback::new(|(kind, done): (ProfileImage, Callback<Account>)| {
             pick_picture(kind, done);
         }),
-        edit_banner: Callback::new(|_region: BannerRegionKind| {
-            // The style editor already owns placement for every region. A deep link is the
-            // cheap honest route: it opens that editor rather than growing a second one here.
+        edit_banner: Callback::new(|region: BannerRegionKind| {
+            // The style editor already owns placement for every region. The region travels
+            // ahead of the route so the editor opens on the banner the button named,
+            // instead of at the top of the page where that banner is not.
+            crate::state::bridge::style::focus_region(region);
             crate::router::navigate_href(nodus_web::shared::router::STYLE_EDITOR_PATH);
         }),
         busy: Signal::derive(move || busy().get()),

@@ -97,6 +97,16 @@ impl BannerRegionKind {
         }
     }
 
+    /// The name this region is called when it is the editor's drop target.
+    #[must_use]
+    pub const fn target_label(self) -> &'static str {
+        match self {
+            Self::Top => "top banner",
+            Self::Left => "left side banner",
+            Self::Right => "right side banner",
+        }
+    }
+
     /// Fine-grained `nodus-backend` metadata key for this region.
     #[must_use]
     pub const fn metadata_key(self) -> &'static str {
@@ -1453,6 +1463,10 @@ pub struct StyleEditor {
     /// the instance mints one, and only the browser can ask; the shell holds the door open
     /// rather than the address.
     library_placer: RwSignal<Option<Callback<(LibraryPicture, PictureTarget)>>>,
+    /// A region a page asked the editor to open on, taken once when it does.
+    focus: RwSignal<Option<BannerRegionKind>>,
+    /// Where a click in the collection tray places a picture for this editing session.
+    target: RwSignal<Option<BannerRegionKind>>,
 }
 
 /// One picture in the account's own collection, ready to be dragged onto the page.
@@ -1532,6 +1546,8 @@ impl StyleEditor {
             active,
             dragging: RwSignal::new(None),
             library_placer: RwSignal::new(None),
+            focus: RwSignal::new(None),
+            target: RwSignal::new(None),
         }
     }
 
@@ -1554,6 +1570,36 @@ impl StyleEditor {
     #[must_use]
     pub const fn draft(self) -> RwSignal<SessionStyle> {
         self.draft
+    }
+
+    /// Ask the editor to land on `kind` the next time it opens.
+    ///
+    /// One shot on purpose: a click on "Add a left side banner" is a request about the
+    /// visit it starts, not a preference that would redirect every later visit.
+    pub fn focus_region(self, kind: BannerRegionKind) {
+        self.focus.set(Some(kind));
+    }
+
+    /// Take the region a page asked for, clearing it.
+    pub fn take_focus_region(self) -> Option<BannerRegionKind> {
+        self.focus.get_untracked().inspect(|_| self.focus.set(None))
+    }
+
+    /// Make `kind` the region this editing session's tray clicks fill.
+    pub fn set_target_region(self, kind: Option<BannerRegionKind>) {
+        self.target.set(kind);
+    }
+
+    /// The region the tray fills, tracked so a banner repaints its target mark.
+    #[must_use]
+    pub fn target_region(self) -> Option<BannerRegionKind> {
+        self.target.get()
+    }
+
+    /// The region the tray fills, without subscribing the caller.
+    #[must_use]
+    pub fn target_region_now(self) -> Option<BannerRegionKind> {
+        self.target.get_untracked()
     }
 
     /// Show or hide a region, keeping its pictures.
@@ -1834,12 +1880,17 @@ impl StyleEditor {
         self.library_placer.set(Some(place));
     }
 
-    /// Put a collection picture in the top banner, the same place a click in the tray
-    /// promises. The keyboard door onto the same edit a drag makes.
+    /// Put a collection picture in the tray's target region, the same place a click in the
+    /// tray promises. The keyboard door onto the same edit a drag makes.
+    ///
+    /// The target is the region a profile's "Add a ... banner" button named, so a click
+    /// fills the banner the reader asked about; the top banner is only the fallback for a
+    /// session that entered the editor another way.
     pub fn place_library(self, picture: LibraryPicture) -> bool {
         match self.library_placer.get_untracked() {
             Some(place) => {
-                place.run((picture, PictureTarget::Region(BannerRegionKind::Top)));
+                let target = self.target_region_now().unwrap_or(BannerRegionKind::Top);
+                place.run((picture, PictureTarget::Region(target)));
                 true
             }
             None => false,
@@ -2766,5 +2817,68 @@ mod tests {
         assert!(editor.take_drag().is_some(), "the drag really started");
         editor.drag_end();
         assert!(editor.take_drag().is_none());
+    }
+}
+
+#[cfg(test)]
+mod target_region_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn a_profile_focus_is_taken_once() {
+        let editor = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        assert!(editor.take_focus_region().is_none());
+        editor.focus_region(BannerRegionKind::Left);
+        assert_eq!(editor.take_focus_region(), Some(BannerRegionKind::Left));
+        assert!(
+            editor.take_focus_region().is_none(),
+            "the next visit to the editor is ordinary"
+        );
+    }
+
+    #[test]
+    fn the_tray_places_into_the_region_the_profile_asked_for() {
+        let placed = Arc::new(Mutex::new(None));
+        let editor = StyleEditor::new(RwSignal::new(SessionStyle::default()), RwSignal::new(true));
+        let record = Arc::clone(&placed);
+        editor.set_library_placer(Callback::new(move |(_, target)| {
+            *record.lock().expect("the test records one placement") = Some(target);
+        }));
+        let picture = || LibraryPicture {
+            id: String::from("file-1"),
+            name: String::from("a.png"),
+            thumbnail: String::from("blob:test"),
+        };
+
+        assert!(editor.place_library(picture()));
+        assert_eq!(
+            *placed.lock().expect("the test records one placement"),
+            Some(PictureTarget::Region(BannerRegionKind::Top)),
+            "an editor opened the ordinary way still fills the top banner"
+        );
+
+        editor.set_target_region(Some(BannerRegionKind::Left));
+        assert!(editor.place_library(picture()));
+        assert_eq!(
+            *placed.lock().expect("the test records one placement"),
+            Some(PictureTarget::Region(BannerRegionKind::Left))
+        );
+
+        editor.set_target_region(None);
+        assert!(editor.place_library(picture()));
+        assert_eq!(
+            *placed.lock().expect("the test records one placement"),
+            Some(PictureTarget::Region(BannerRegionKind::Top)),
+            "the target lasts only as long as the visit it was set for"
+        );
+    }
+
+    #[test]
+    fn a_target_region_names_itself_for_a_description() {
+        assert_eq!(BannerRegionKind::Left.target_label(), "left side banner");
+        assert_eq!(BannerRegionKind::Right.target_label(), "right side banner");
+        assert_eq!(BannerRegionKind::Top.target_label(), "top banner");
     }
 }

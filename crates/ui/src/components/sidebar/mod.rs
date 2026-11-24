@@ -12,8 +12,8 @@
 use leptos::prelude::*;
 
 use crate::session_style::{
-    LibraryPicture, ModuleKind, ModuleRail, NavLayout, NavPlacement, PlacedModule, StyleEditor,
-    UploadRequest,
+    BannerRegionKind, LibraryPicture, ModuleKind, ModuleRail, NavLayout, NavPlacement,
+    PlacedModule, StyleEditor, UploadRequest,
 };
 
 /// One line inside a card: a tag, a person, a post, a notification.
@@ -626,6 +626,10 @@ fn RailButton(
 /// place or a rail slot resolves it into a permanent address. The upload target at the end
 /// keeps the old door open, and now also takes a file dropped straight onto it.
 #[component]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one tray: the promise, its rows and the upload door share one list"
+)]
 pub fn MediaTray(
     /// The account's own pictures, already thumbnailed by the browser.
     #[prop(into)]
@@ -644,6 +648,13 @@ pub fn MediaTray(
     on_upload_click: Option<Callback<()>>,
 ) -> impl IntoView {
     let editing = Signal::derive(move || editor.is_some_and(StyleEditor::is_active));
+    // The banner a click promises to fill: the one the profile named on the way in, or the
+    // top banner for an editor opened any other way.
+    let click_region = move || {
+        editor
+            .and_then(StyleEditor::target_region)
+            .map_or("the top banner", BannerRegionKind::target_label)
+    };
     view! {
         <section
             class="flex flex-col gap-2"
@@ -664,7 +675,9 @@ pub fn MediaTray(
             <header class="flex flex-col gap-1">
                 <h1 class="text-lg font-semibold">"Your pictures"</h1>
                 <p class="text-sm opacity-70">
-                    "Drag a picture onto a banner or a picture slot. A click puts it in the top banner, for when a drag is not how you work. Drop a placed picture back here to take it off the page."
+                    "Drag a picture onto a banner or a picture slot. A click puts it in "
+                    {click_region}
+                    ", for when a drag is not how you work. Drop a placed picture back here to take it off the page."
                 </p>
             </header>
             <ul class="flex flex-wrap items-stretch gap-2" data-media-tray-items="">
@@ -675,7 +688,7 @@ pub fn MediaTray(
                         let dragged = picture.clone();
                         let clicked = picture.clone();
                         let name = picture.name.clone();
-                        let title = format!("Place {} in the top banner", picture.name);
+                        let title_name = picture.name.clone();
                         view! {
                             <li
                                 class="size-24 overflow-hidden rounded-box border border-base-300 bg-base-200"
@@ -699,7 +712,7 @@ pub fn MediaTray(
                                 <button
                                     type="button"
                                     class="block size-full"
-                                    title=title
+                                    title=move || format!("Place {title_name} in {}", click_region())
                                     disabled=move || !editing.get()
                                     on:click=move |_| {
                                         if let Some(edit) = editor {

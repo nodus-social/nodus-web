@@ -11,7 +11,8 @@ use nodus_client_sdk::instance_api::Instance;
 use nodus_mastodon::BrowserInstance;
 use nodus_mastodon::rest::Transport as _;
 use nodus_ui::session_style::{
-    ImageSlot, LibraryPicture, PictureTarget, STYLE_KEYS, SessionStyle, StyleEditor, UploadRequest,
+    BannerRegionKind, ImageSlot, LibraryPicture, PictureTarget, STYLE_KEYS, SessionStyle,
+    StyleEditor, UploadRequest,
 };
 use nodus_web::shared::account_state::{
     AccountCache, AccountKey, STYLE_NOT_ON_SITE, StyleSyncStep, style_sync_step,
@@ -81,6 +82,15 @@ pub fn editor() -> StyleEditor {
     EDITOR.with_borrow_mut(|slot| *slot.get_or_insert_with(|| StyleEditor::new(draft(), editing())))
 }
 
+/// Ask the editor to open on `kind`, for a profile's "Add a left side banner" button.
+///
+/// The region travels in memory rather than in the editor's address: the route stays the
+/// one the editor already parses, and a visit from Settings is simply a visit that asked
+/// for nothing, so that visit keeps opening on the ordinary page.
+pub fn focus_region(kind: BannerRegionKind) {
+    editor().focus_region(kind);
+}
+
 /// The one line of feedback the editor toolbar shows (a picture that would not upload, for
 /// instance). The editor has no room for a message elsewhere: it is the whole page.
 pub fn notice() -> RwSignal<Option<String>> {
@@ -102,6 +112,9 @@ pub fn begin_edit() {
     PICK_EPOCH.set(PICK_EPOCH.get() + 1);
     draft().set(active_style_signal().get_untracked());
     notice().set(None);
+    // A profile's "Add a left side banner" asked for that region. Taking the request here
+    // is what makes it last exactly one visit: the next way into the editor has none.
+    editor().set_target_region(editor().take_focus_region());
     editing().set(true);
     reload_library();
 }
@@ -487,6 +500,7 @@ fn upload_pictures_into(target: PictureTarget, files: Vec<web_sys::File>, epoch:
 pub fn cancel_edit() {
     PICK_EPOCH.set(PICK_EPOCH.get() + 1);
     draft().set(active_style_signal().get_untracked());
+    editor().set_target_region(None);
     editing().set(false);
 }
 
@@ -502,6 +516,7 @@ pub async fn save_edit() -> Result<SessionStyle, String> {
         return Err(problem);
     }
     let saved = save_style(draft().get_untracked()).await?;
+    editor().set_target_region(None);
     editing().set(false);
     Ok(saved)
 }

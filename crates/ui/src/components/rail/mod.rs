@@ -374,6 +374,22 @@ pub fn SessionBanner(
         }
     });
     let side_empty = Memo::new(move |_| slots.get().is_empty());
+    let target = Memo::new(move |_| {
+        editor.is_some_and(|edit| edit.is_active() && edit.target_region() == Some(kind))
+    });
+    let host = NodeRef::<leptos::html::Div>::new();
+
+    // A profile's "Add a left side banner" opens the editor on the page, not on a form:
+    // the page is already painted, so the banner has to bring itself into view instead of
+    // the route landing at the top of the document.
+    #[cfg(target_arch = "wasm32")]
+    Effect::new(move |_| {
+        if target.get() {
+            if let Some(element) = host.get() {
+                element.scroll_into_view();
+            }
+        }
+    });
 
     // Everything in this node tree is painted once and then shown or hidden with a class.
     // Swapping subtrees with `Show` disposes the owners behind the handlers that are still
@@ -381,7 +397,26 @@ pub fn SessionBanner(
     // access a reactive value that has already been disposed" — so the empty target, the
     // controls and the strip all exist and only their visibility changes.
     view! {
-        <div class=move || outer_class.get() data-session-banner=data_kind>
+        <div
+            class=move || {
+                let base = outer_class.get();
+                if target.get() {
+                    // A ring as well as the description below: the mark has to survive a
+                    // reader who cannot tell one banner from another by colour alone.
+                    base + " outline outline-2 -outline-offset-2 outline-primary"
+                } else {
+                    base
+                }
+            }
+            data-session-banner=data_kind
+            data-target-region=move || target.get().then_some(data_kind)
+            aria-description=move || {
+                target
+                    .get()
+                    .then(|| format!("{} is the drop target", kind.target_label()))
+            }
+            node_ref=host
+        >
             <div class=move || if hidden.get() { "hidden" } else { "contents" }>
                 // The side column has a banner's width now, so its verbs fit at every width
                 // the banner exists at; they still wait for a picture to manage, and the
