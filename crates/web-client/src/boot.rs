@@ -71,7 +71,8 @@ fn mount_app() {
         let seed = shell_seed(&document).unwrap_or_default();
         leptos::mount::hydrate_from(host, move || {
             crate::shell_root::ShellRoot(crate::shell_root::ShellRootProps { seed })
-        }).forget();
+        })
+        .forget();
         mark_hydrated();
         return;
     }

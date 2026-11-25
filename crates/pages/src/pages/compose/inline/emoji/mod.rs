@@ -9,7 +9,6 @@
 use leptos::prelude::*;
 use nodus_client_core::model::CustomEmoji;
 
-
 /// The `:shortcode` being typed at the end of `text`, with the byte index of its colon.
 ///
 /// Only the token at the very end counts: the composer inserts at the caret, which is the

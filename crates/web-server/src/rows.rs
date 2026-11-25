@@ -15,6 +15,22 @@ use nodus_web::shared::handles;
 /// than in the component: the emoji shortcodes are a read of the instance's emoji list, and
 /// `inner_html` already carries the HTML both paints show.
 pub fn status_card(status: &Status) -> String {
+    let (author_path, thread_path) = paths(status);
+    painted(status, &author_path, &thread_path)
+}
+
+/// The same card as a node, for a document the client adopts.
+///
+/// A paint that is hydrated must serve the tree the client's own card renderer builds, and
+/// the client builds a component: embedding the card's markup inside `inner_html` puts one
+/// element between the renderer's answer and the card the client looks for.
+pub fn status_card_view(status: &Status) -> AnyView {
+    let (author_path, thread_path) = paths(status);
+    card(status, &author_path, &thread_path).into_any()
+}
+
+/// Where a card's author and thread live, for the instance this post was read from.
+fn paths(status: &Status) -> (String, String) {
     let inner = status.reblog.as_deref().unwrap_or(status);
     // The account names its instance for a remote author; a local one is named by the
     // post's own url, which is on this instance.
@@ -23,10 +39,9 @@ pub fn status_card(status: &Status) -> String {
         .or_else(|| instance_host())
         .unwrap_or_default()
         .to_owned();
-    painted(
-        status,
-        &handles::profile_path_for(&inner.account.acct, Some(&host)),
-        &handles::status_path(Some(&host), &inner.id),
+    (
+        handles::profile_path_for(&inner.account.acct, Some(&host)),
+        handles::status_path(Some(&host), &inner.id),
     )
 }
 
@@ -57,6 +72,10 @@ fn instance_host() -> Option<&'static str> {
 }
 
 fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {
+    Owner::new().with(|| card(status, author_path, thread_path).to_html())
+}
+
+fn card(status: &Status, author_path: &str, thread_path: &str) -> impl IntoView {
     let mut painted = status.clone();
     // A boost renders the boosted post under the booster's name, exactly as the client
     // does: the line above the card comes from the wrapper and everything below it from
@@ -65,35 +84,31 @@ fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {
     nodus_ui::html::sanitize_status(&mut painted);
     let inner = painted.reblog.as_deref().map_or(&painted, |inner| inner);
     let age = nodus_ui::relative_age(&inner.created_at, now_millis());
-
-    Owner::new().with(|| {
-        nodus_ui::status_card::StatusCard(nodus_ui::status_card::StatusCardProps {
-            status: painted,
-            age,
-            author_path: author_path.to_owned(),
-            thread_path: thread_path.to_owned(),
-            on_navigate: Some(nodus_route::route::noop()),
-            on_open: Some(nodus_route::route::noop()),
-            on_boost: Some(nodus_route::route::noop()),
-            on_favourite: Some(nodus_route::route::noop()),
-            on_bookmark: Some(nodus_route::route::noop()),
-            on_reply: Some(nodus_route::route::noop()),
-            before_verbs: None,
-            after_verbs: None,
-            on_open_media: Some(nodus_route::route::noop()),
-            on_vote: Some(nodus_route::route::noop()),
-            interactive: true,
-            body: None,
-            extra: None,
-            // A reaction tally is a second read of the note by id, and the instance's answer
-            // to whether it serves reactions at all: neither is in the status this paint
-            // was handed, and a static row has nothing to press, so the row is absent.
-            reactions: None,
-            on_react: None,
-            on_unreact: None,
-            reactions_note: None,
-        })
-        .to_html()
+    nodus_ui::status_card::StatusCard(nodus_ui::status_card::StatusCardProps {
+        status: painted,
+        age,
+        author_path: author_path.to_owned(),
+        thread_path: thread_path.to_owned(),
+        on_navigate: Some(nodus_route::route::noop()),
+        on_open: Some(nodus_route::route::noop()),
+        on_boost: Some(nodus_route::route::noop()),
+        on_favourite: Some(nodus_route::route::noop()),
+        on_bookmark: Some(nodus_route::route::noop()),
+        on_reply: Some(nodus_route::route::noop()),
+        before_verbs: None,
+        after_verbs: None,
+        on_open_media: Some(nodus_route::route::noop()),
+        on_vote: Some(nodus_route::route::noop()),
+        interactive: true,
+        body: None,
+        extra: None,
+        // A reaction tally is a second read of the note by id, and the instance's answer
+        // to whether it serves reactions at all: neither is in the status this paint
+        // was handed, and a static row has nothing to press, so the row is absent.
+        reactions: None,
+        on_react: None,
+        on_unreact: None,
+        reactions_note: None,
     })
 }
 

@@ -1034,6 +1034,8 @@ mod tests {
                 discoverable: None,
                 indexable: None,
                 noindex: None,
+                also_known_as: Vec::new(),
+                moved_to: None,
             },
             favourites_count: 0,
             reblogs_count: 0,

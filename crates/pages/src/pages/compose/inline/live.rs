@@ -178,14 +178,14 @@ pub fn LiveComposer(
                 on_toggle_schedule=runtime.on_toggle_schedule()
                 on_thread=runtime.on_thread()
                 on_submit=runtime.on_submit()
-                language=language.with_value(|slot| slot.clone())
-                emoji_picker=emoji_picker.with_value(|slot| slot.clone())
-                schedule_panel=schedule.with_value(|slot| slot.clone())
+                language=language.with_value(std::clone::Clone::clone)
+                emoji_picker=emoji_picker.with_value(std::clone::Clone::clone)
+                schedule_panel=schedule.with_value(std::clone::Clone::clone)
             />
 
-            {poll.with_value(|slot| slot.clone()).map(|poll| poll())}
+            {poll.with_value(std::clone::Clone::clone).map(|poll| poll())}
 
-            {attachments.with_value(|slot| slot.clone()).map(|attachments| attachments())}
+            {attachments.with_value(std::clone::Clone::clone).map(|attachments| attachments())}
         }
         .into_any()
     });

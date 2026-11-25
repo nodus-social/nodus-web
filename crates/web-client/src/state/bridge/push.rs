@@ -137,7 +137,9 @@ pub fn decode_base64url(input: &str) -> Option<Vec<u8>> {
         3 => format!("{standard}="),
         _ => return None,
     };
-    base64::engine::general_purpose::STANDARD.decode(padded).ok()
+    base64::engine::general_purpose::STANDARD
+        .decode(padded)
+        .ok()
 }
 
 fn window() -> Option<web_sys::Window> {
@@ -200,7 +202,9 @@ fn keys(subscription: &PushSubscription) -> Result<(String, String), String> {
         let buffer = subscription
             .get_key(name)
             .map_err(|error| js_error(&error))?
-            .ok_or_else(|| String::from("the browser's subscription is missing an encryption key"))?;
+            .ok_or_else(|| {
+                String::from("the browser's subscription is missing an encryption key")
+            })?;
         Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(js_sys::Uint8Array::new(&buffer).to_vec()))
     };
@@ -290,7 +294,10 @@ pub async fn application_server_key() -> Result<Vec<u8>, String> {
 pub async fn state() -> Result<State, String> {
     let subscription = read().await?;
     let keyed = subscription.is_some() || instance_key().await.is_some();
-    Ok(State { keyed, subscription })
+    Ok(State {
+        keyed,
+        subscription,
+    })
 }
 
 /// Whether this client can subscribe at all, and the row the server holds if it has one.
@@ -314,7 +321,9 @@ pub async fn subscribe(alerts: Alerts) -> Result<(), String> {
     let registration = resolved(container()?.register(SCRIPT))
         .await?
         .dyn_into::<ServiceWorkerRegistration>()
-        .map_err(|_| String::from("the browser answered with something other than a registration"))?;
+        .map_err(|_| {
+            String::from("the browser answered with something other than a registration")
+        })?;
     let manager = registration
         .push_manager()
         .map_err(|error| js_error(&error))?;
@@ -383,23 +392,30 @@ pub async fn unsubscribe() -> Result<(), String> {
     let Ok(manager) = registration.push_manager() else {
         return Ok(());
     };
-    let promise = manager.get_subscription().map_err(|error| js_error(&error))?;
+    let promise = manager
+        .get_subscription()
+        .map_err(|error| js_error(&error))?;
     let held = resolved(promise).await?;
     if held.is_null() || held.is_undefined() {
         return Ok(());
     }
-    let subscription = held
-        .dyn_into::<PushSubscription>()
-        .map_err(|_| String::from("the browser answered with something other than a subscription"))?;
+    let subscription = held.dyn_into::<PushSubscription>().map_err(|_| {
+        String::from("the browser answered with something other than a subscription")
+    })?;
 
     // A DELETE with a body: the server removes the row it is told about, so the endpoint
     // travels as the same `subscription[endpoint]` field the other verbs take.
     transport
-        .send_empty(transport.delete_form(push_url()?, &[("subscription[endpoint]", subscription.endpoint())]))
+        .send_empty(transport.delete_form(
+            push_url()?,
+            &[("subscription[endpoint]", subscription.endpoint())],
+        ))
         .await
         .map_err(|error| refusal(&error))?;
 
-    let promise = subscription.unsubscribe().map_err(|error| js_error(&error))?;
+    let promise = subscription
+        .unsubscribe()
+        .map_err(|error| js_error(&error))?;
     resolved(promise).await.map(|_| ())
 }
 
@@ -421,7 +437,10 @@ mod tests {
     #[test]
     fn base64url_decodes_the_url_safe_alphabet() {
         assert_eq!(decode_base64url("SGVsbG8").as_deref(), Some(&b"Hello"[..]));
-        assert_eq!(decode_base64url("SGVsbG8h").as_deref(), Some(&b"Hello!"[..]));
+        assert_eq!(
+            decode_base64url("SGVsbG8h").as_deref(),
+            Some(&b"Hello!"[..])
+        );
         assert_eq!(decode_base64url("_-8").as_deref(), Some(&[255, 239][..]));
         assert_eq!(decode_base64url("SGVsbG8=").as_deref(), Some(&b"Hello"[..]));
     }

@@ -1016,6 +1016,8 @@ mod painting {
             discoverable: None,
             indexable: None,
             noindex: None,
+            also_known_as: Vec::new(),
+            moved_to: None,
         };
         let status = nodus_client_core::model::Status {
             id: "10".to_owned(),
@@ -1111,6 +1113,8 @@ mod painting {
             discoverable: None,
             indexable: None,
             noindex: None,
+            also_known_as: Vec::new(),
+            moved_to: None,
         }
     }
 
@@ -1546,6 +1550,8 @@ mod painting {
             discoverable: None,
             indexable: None,
             noindex: None,
+            also_known_as: Vec::new(),
+            moved_to: None,
         };
         let status = nodus_client_core::model::Status {
             id: "10".to_owned(),
@@ -1745,4 +1751,3 @@ mod painting {
         assert!(html.contains("Alice"), "{html}");
     }
 }
-

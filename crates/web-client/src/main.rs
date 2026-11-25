@@ -10,7 +10,6 @@
 // while computing the layout of the status body, so the limit is raised here.
 #![recursion_limit = "256"]
 
-
 // The route table lives in `nodus-web`, which both artifacts depend on. Re-exported here so
 // the screens keep naming it as `crate::shared::router::…` — the same path the server uses.
 pub(crate) use nodus_web::shared;
@@ -25,8 +24,8 @@ mod router;
 mod routes;
 mod screen;
 mod scroll;
-mod shell_root;
 mod shell;
+mod shell_root;
 mod state;
 mod theme;
 mod ui;

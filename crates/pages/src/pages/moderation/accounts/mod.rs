@@ -924,7 +924,8 @@ fn role_cell(
     let current = Signal::derive(move || {
         facts
             .get()
-            .get(&id.get_value()).map_or_else(|| "none".to_owned(), |row| row.role.clone())
+            .get(&id.get_value())
+            .map_or_else(|| "none".to_owned(), |row| row.role.clone())
     });
     view! {
         <span class="text-xs opacity-70" data-testid="account-role">

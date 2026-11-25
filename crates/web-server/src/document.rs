@@ -461,11 +461,7 @@ pub fn home_with_style(
         use leptos::prelude::*;
 
         let card: nodus_ui::components::card_renderer::CardRenderer =
-            std::sync::Arc::new(|status| {
-                leptos::html::div()
-                    .inner_html(status_card(&status))
-                    .into_any()
-            });
+            std::sync::Arc::new(|status| crate::rows::status_card_view(&status));
         let header: ChildrenFn = std::sync::Arc::new(move || {
             view! {
                 <nodus_pages::pages::compose::inline::StaticComposer
@@ -1100,6 +1096,8 @@ mod tests {
                 discoverable: None,
                 indexable: None,
                 noindex: None,
+                also_known_as: Vec::new(),
+                moved_to: None,
             },
             favourites_count: 0,
             reblogs_count: 0,
@@ -1178,6 +1176,8 @@ mod tests {
                 discoverable: None,
                 indexable: None,
                 noindex: None,
+                also_known_as: Vec::new(),
+                moved_to: None,
             },
             favourites_count: 0,
             reblogs_count: 0,
