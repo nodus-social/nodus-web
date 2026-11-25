@@ -307,22 +307,28 @@ fn editor_controls(editor: ProfileEditor) -> AnyView {
             >
                 "Change header image"
             </button>
-            <button
-                class="btn btn-ghost btn-xs"
-                type="button"
-                aria-label=move || banner_label("left", left_banner.get())
-                on:click=move |_| edit_banner.run(BannerRegionKind::Left)
-            >
-                {move || banner_label("left", left_banner.get())}
-            </button>
-            <button
-                class="btn btn-ghost btn-xs"
-                type="button"
-                aria-label=move || banner_label("right", right_banner.get())
-                on:click=move |_| edit_banner.run(BannerRegionKind::Right)
-            >
-                {move || banner_label("right", right_banner.get())}
-            </button>
+            // The side regions exist only from `xl` (the rail is `hidden xl:flex`, and the
+            // banners hang from it), so the two buttons that open them are offered only where
+            // there is something to look at. A button leading to an editor whose target cannot
+            // be drawn reports a place the reader cannot see.
+            <div class="hidden items-center gap-2 xl:flex">
+                <button
+                    class="btn btn-ghost btn-xs"
+                    type="button"
+                    aria-label=move || banner_label("left", left_banner.get())
+                    on:click=move |_| edit_banner.run(BannerRegionKind::Left)
+                >
+                    {move || banner_label("left", left_banner.get())}
+                </button>
+                <button
+                    class="btn btn-ghost btn-xs"
+                    type="button"
+                    aria-label=move || banner_label("right", right_banner.get())
+                    on:click=move |_| edit_banner.run(BannerRegionKind::Right)
+                >
+                    {move || banner_label("right", right_banner.get())}
+                </button>
+            </div>
         </div>
         {move || match message.get() {
             Some(Ok(sentence)) => {

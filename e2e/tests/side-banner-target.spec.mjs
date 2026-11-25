@@ -5,10 +5,24 @@
 //! banner instead of the top one, and the mark lasts exactly the visit it was asked for.
 //! The stubs below answer one drive file and the attach it needs, so the placement is
 //! observed through both the outgoing request and the slot the editor paints.
+//!
+//! The two side-banner buttons exist only from `xl` (1280 px), because the side regions
+//! themselves only exist there — a button that opens an editor whose target cannot be drawn
+//! reports a place the reader cannot look at. The narrow projects skip with that reason.
 
 import { expect, test } from '@playwright/test'
 
 import { ACCOUNT_ID, CORS, hydrated, signedIn, stubApi } from '../fixtures.mjs'
+
+/** The width from which the rail — and with it the side banners — is drawn. */
+const SIDE_REGION_MIN_WIDTH = 1280
+
+test.beforeEach(({ viewport }) => {
+  test.skip(
+    (viewport?.width ?? SIDE_REGION_MIN_WIDTH) < SIDE_REGION_MIN_WIDTH,
+    'the side banners exist only from the xl breakpoint, so there is no button to press',
+  )
+})
 
 /** A 1×1 PNG: enough for the tray's thumbnail to load. */
 const PIXEL = Buffer.from(
