@@ -4,6 +4,8 @@
 //! embeds: the markup is the client's markup, this module supplies only the data and the
 //! absent verbs.
 
+use std::sync::Arc;
+
 use leptos::prelude::*;
 use nodus_client_core::model::Status;
 use nodus_web::shared::handles;
@@ -24,9 +26,14 @@ pub fn status_card(status: &Status) -> String {
 /// A paint that is hydrated must serve the tree the client's own card renderer builds, and
 /// the client builds a component: embedding the card's markup inside `inner_html` puts one
 /// element between the renderer's answer and the card the client looks for.
-pub fn status_card_view(status: &Status) -> AnyView {
+///
+/// `viewer` is the signed-in account the document is painted for. A hydrated card carries
+/// the client's own controls — the author's menu and the share button — because the client
+/// mounts them and hydration walks into them; a card painted with no viewer is the plain
+/// row a document with no wasm to adopt it needs.
+pub fn status_card_view(status: &Status, viewer: Option<&str>) -> AnyView {
     let (author_path, thread_path) = paths(status);
-    card(status, &author_path, &thread_path).into_any()
+    card(status, &author_path, &thread_path, viewer).into_any()
 }
 
 /// Where a card's author and thread live, for the instance this post was read from.
@@ -72,10 +79,15 @@ fn instance_host() -> Option<&'static str> {
 }
 
 fn painted(status: &Status, author_path: &str, thread_path: &str) -> String {
-    Owner::new().with(|| card(status, author_path, thread_path).to_html())
+    Owner::new().with(|| card(status, author_path, thread_path, None).to_html())
 }
 
-fn card(status: &Status, author_path: &str, thread_path: &str) -> impl IntoView {
+fn card(
+    status: &Status,
+    author_path: &str,
+    thread_path: &str,
+    viewer: Option<&str>,
+) -> impl IntoView {
     let mut painted = status.clone();
     // A boost renders the boosted post under the booster's name, exactly as the client
     // does: the line above the card comes from the wrapper and everything below it from
@@ -84,6 +96,37 @@ fn card(status: &Status, author_path: &str, thread_path: &str) -> impl IntoView 
     nodus_ui::html::sanitize_status(&mut painted);
     let inner = painted.reblog.as_deref().map_or(&painted, |inner| inner);
     let age = nodus_ui::relative_age(&inner.created_at, now_millis());
+    // The client draws its menu only on the reader's own statuses, so the paint answers the
+    // same question with the same answer: the account id the session already carries.
+    let mine = viewer.is_some_and(|viewer| viewer == inner.account.id);
+    let menu_id = StoredValue::new(inner.id.clone());
+    // The client's first paint mounts these slots, and hydration walks into them: a card
+    // without them is a different tree at the same place, which is what the framework
+    // reports as an expected element that is not there.
+    let menu: ChildrenFn = Arc::new(move || {
+        view! {
+            <Show when=move || mine>
+                <nodus_ui::status_menu::StatusMenu
+                    id=menu_id.get_value()
+                    on_edit=Callback::new(|()| ())
+                    on_delete=Callback::new(|()| ())
+                />
+            </Show>
+        }
+        .into_any()
+    });
+    let share: ChildrenFn = Arc::new(|| {
+        view! {
+            <nodus_ui::status_share::ShareButton
+                copied=Signal::derive(|| false)
+                on_copy=Callback::new(|()| ())
+            />
+        }
+        .into_any()
+    });
+    let before_verbs = viewer.map(|_| menu);
+    let after_verbs = viewer.map(|_| share);
+
     nodus_ui::status_card::StatusCard(nodus_ui::status_card::StatusCardProps {
         status: painted,
         age,
@@ -95,8 +138,8 @@ fn card(status: &Status, author_path: &str, thread_path: &str) -> impl IntoView 
         on_favourite: Some(nodus_route::route::noop()),
         on_bookmark: Some(nodus_route::route::noop()),
         on_reply: Some(nodus_route::route::noop()),
-        before_verbs: None,
-        after_verbs: None,
+        before_verbs,
+        after_verbs,
         on_open_media: Some(nodus_route::route::noop()),
         on_vote: Some(nodus_route::route::noop()),
         interactive: true,

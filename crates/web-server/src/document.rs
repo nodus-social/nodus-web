@@ -460,8 +460,11 @@ pub fn home_with_style(
     let body = Owner::new().with(|| {
         use leptos::prelude::*;
 
+        let viewer = reader.account_id.clone();
         let card: nodus_ui::components::card_renderer::CardRenderer =
-            std::sync::Arc::new(|status| crate::rows::status_card_view(&status));
+            std::sync::Arc::new(move |status| {
+                crate::rows::status_card_view(&status, Some(&viewer))
+            });
         let header: ChildrenFn = std::sync::Arc::new(move || {
             view! {
                 <nodus_pages::pages::compose::inline::StaticComposer
@@ -1168,6 +1171,28 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("<p class=\"whitespace-pre-line"), "{html}");
+    }
+
+    /// A card in an adopted document must carry the controls the client mounts: the author's
+    /// menu on the viewer's own status, and the share button on every card. A card painted
+    /// with no viewer stays the plain row, so a document with no wasm to adopt it does not
+    /// gain a button that cannot work.
+    #[test]
+    fn a_hydrated_card_carries_the_client_controls() {
+        let status = status_by("ada@example.org", "Ada", "<p>one</p>");
+        let mine =
+            Owner::new().with(|| crate::rows::status_card_view(&status, Some("9")).to_html());
+        assert!(mine.contains("<details class=\"dropdown\">"), "{mine}");
+        assert!(mine.contains("aria-label=\"Copy link\""), "{mine}");
+
+        let theirs = Owner::new()
+            .with(|| crate::rows::status_card_view(&status, Some("someone-else")).to_html());
+        assert!(!theirs.contains("<details class=\"dropdown\">"), "{theirs}");
+        assert!(theirs.contains("aria-label=\"Copy link\""), "{theirs}");
+
+        let plain = crate::rows::status_card(&status);
+        assert!(!plain.contains("<details class=\"dropdown\">"), "{plain}");
+        assert!(!plain.contains("aria-label=\"Copy link\""), "{plain}");
     }
 
     fn status_by(acct: &str, display_name: &str, content: &str) -> Status {
