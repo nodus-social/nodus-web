@@ -1151,6 +1151,25 @@ mod tests {
         );
     }
 
+    /// A status body is block markup: the sanitiser hands back `<p>` paragraphs. Painted
+    /// inside a `<p>` the parser closes that paragraph at the first block child, hoists the
+    /// content beside the span, and a hydrating client that walks the body then looks for the
+    /// next branch marker next to the hoisted node and panics. The painted document must
+    /// therefore be the tree the client builds.
+    #[test]
+    fn a_painted_card_nests_its_body_outside_a_paragraph() {
+        let status = status_by("ada@example.org", "Ada", "<p>one</p><p>two</p>");
+        let html = crate::rows::status_card(&status);
+
+        assert!(
+            html.contains(
+                "class=\"whitespace-pre-line text-sm leading-relaxed\"><span><p>one</p><p>two</p>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("<p class=\"whitespace-pre-line"), "{html}");
+    }
+
     fn status_by(acct: &str, display_name: &str, content: &str) -> Status {
         Status {
             id: "1".to_owned(),

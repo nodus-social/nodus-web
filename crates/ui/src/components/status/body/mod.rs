@@ -213,16 +213,20 @@ pub fn StatusBody(
                     )}
                 </div>
                 <Show when=move || revealed.get()>
-                    <p class="mt-2 whitespace-pre-line text-sm leading-relaxed">
+                    // The body is block markup (`<p>` from the sanitiser), so it must not be
+                    // painted inside a `<p>`: the parser would close that paragraph at the
+                    // first block child, hoist the text out of the span, and a hydrated
+                    // client would then look for the next marker beside the hoisted node.
+                    <div class="mt-2 whitespace-pre-line text-sm leading-relaxed">
                         <span inner_html=move || body_html.with_value(|html| html())></span>
-                    </p>
+                    </div>
                 </Show>
             </div>
         </Show>
         <Show when=move || !warned>
-            <p class="whitespace-pre-line text-sm leading-relaxed">
+            <div class="whitespace-pre-line text-sm leading-relaxed">
                 <span inner_html=move || body_html.with_value(|html| html())></span>
-            </p>
+            </div>
             {translation_control(
                 can_translate,
                 translating,
